@@ -1,0 +1,19 @@
+# 构建与生成物
+dist/
+.output/
+.wxt/
+coverage/
+node_modules/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# 本机配置与临时产物
+.env
+screenshots/
+*.log
+.DS_Store

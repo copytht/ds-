@@ -1,0 +1,42 @@
+[project]
+name = "ds-mcp"
+version = "0.1.0"
+description = "MCP server for the ds- browser extension"
+readme = "README.md"
+authors = [{ name = "as", email = "as@given.su" }]
+requires-python = ">=3.13"
+dependencies = ["mcp>=2.2.0"]
+
+[project.scripts]
+ds-mcp = "dsb.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.2",
+    "ruff>=0.14",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+package = true
+
+# 扁平布局：包就在仓库根的 dsb/，src/ 留给浏览器扩展。
+# module-name 显式写死，否则 uv_build 会按 project 名推成 ds_mcp。
+[tool.uv.build-backend]
+module-root = ""
+module-name = "dsb"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

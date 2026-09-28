@@ -1,0 +1,15 @@
+# 构建与生成物
+dist/
+.output/
+.wxt/
+coverage/
+node_modules/
+.venv/
+
+# 锁文件
+pnpm-lock.yaml
+uv.lock
+
+# 技能库与本机配置
+.agents/
+.env
