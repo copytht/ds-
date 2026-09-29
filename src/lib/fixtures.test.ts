@@ -84,6 +84,12 @@ describe("回灌 fixture 自洽", () => {
       expect(lines.slice(1).join("\n")).toContain("status:");
     }
   });
+
+  it("正文里没有换行转义（解码方是 LLM，字面 \\n 它不会还原）", () => {
+    for (const { expectedMessage } of fixtureCases<ReplyCase>("reply.json")) {
+      expect(expectedMessage).not.toMatch(/\\n/);
+    }
+  });
 });
 
 describe("中继 fixture 自洽", () => {

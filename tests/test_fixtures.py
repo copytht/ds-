@@ -72,6 +72,12 @@ def test_reply_message_starts_with_the_anchor() -> None:
         assert "status:" in "\n".join(lines[1:]), case["name"]
 
 
+def test_reply_message_has_no_newline_escapes() -> None:
+    """解码方是网页上的 LLM、不是解析器，字面反斜杠 n 它不会还原（真机翻车过）。"""
+    for case in raw_cases("reply.json"):
+        assert "\\n" not in case["expectedMessage"], case["name"]
+
+
 def test_opencode_payloads_follow_the_schema() -> None:
     for case in raw_cases("opencode.json"):
         assert_reply_payload(case["expectedPayload"])

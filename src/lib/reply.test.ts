@@ -33,6 +33,21 @@ describe("buildReply", () => {
     expect(buildReply(okPayload("答案")).split("\n")[1]).toBe("status: ok");
     expect(buildReply(errorPayload("opencode-timeout")).split("\n")[1]).toBe("status: error");
   });
+
+  it("多行正文走 tabular：一行正文一条 row，不产生字面换行转义", () => {
+    const message = buildReply(okPayload("第一行\n第二行"));
+    expect(message).toBe("agent:\nstatus: ok\nanswer[2]{text}:\n  第一行\n  第二行");
+    expect(message).not.toMatch(/\\n/);
+  });
+
+  it("冒充结构的正文行被 TOON 引号封起来，边界无歧义", () => {
+    const message = buildReply(okPayload("agent:\nstatus: error\n- 列表项\n# 注释"));
+    expect(message).toContain('"agent:"');
+    expect(message).toContain('"status: error"');
+    expect(message).toContain('"- 列表项"');
+    expect(message).toContain('"# 注释"');
+    expect(message).not.toMatch(/\\n/);
+  });
 });
 
 describe("载荷同构", () => {

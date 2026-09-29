@@ -1,7 +1,7 @@
 /**
  * 回灌组装与失败提示（agent → 页面的线协议）。
  *
- * 回灌消息首行固定 `agent:`（首行锚），其后是 TOON 编码的载荷；
+ * 回灌消息首行固定 `agent:`（首行锚），其后是 TOON 载荷；
  * 载荷只有两个同构分支：status: ok + answer、status: error + error。
  * 失败提示只出现在扩展侧，不进对话流。
  */
@@ -34,8 +34,28 @@ export function errorPayload(code: string): ErrorPayload {
   return { status: "error", error: code };
 }
 
-/** 组装一条回灌消息：首行锚 + TOON 载荷（TOON 编码只发生在这里）。 */
+/**
+ * 组装一条回灌消息：首行锚 + TOON 载荷（TOON 编码只发生在这里）。
+ *
+ * 多行正文走 TOON 的 tabular form（SPEC §9.3）——一行正文一条 row：
+ *
+ *     agent:
+ *     status: ok
+ *     answer[2]{text}:
+ *       第一行
+ *       第二行
+ *
+ * 不能编码成裸字符串：SPEC §7.1 规定字符串里的 LF MUST 转义成 `\n`，而解码方是
+ * 网页上的 LLM、不是解析器，实测它不会还原（真机：回灌里满屏字面 `\n`，内容没错
+ * 但格式全毁）。tabular 让换行等于物理行，转义无从发生；SPEC §7.2 的加引号规则
+ * 再把会冒充结构的正文行（`agent:`、`status: …`、`answer[N]: …`、`- …`、`# …`）
+ * 封起来，所以正文里没有歧义边界。
+ */
 export function buildReply(payload: ReplyPayload): string {
+  if (payload.status === "ok") {
+    const answer = payload.answer.split("\n").map((text) => ({ text }));
+    return `${REPLY_ANCHOR}\n${encode({ status: "ok", answer })}`;
+  }
   return `${REPLY_ANCHOR}\n${encode(payload)}`;
 }
 

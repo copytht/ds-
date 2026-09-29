@@ -72,7 +72,8 @@ curl -X POST http://127.0.0.1:8787/ask \
 
 失败也是同一形状：`{"status": "error", "error": "opencode-not-running" | "opencode-timeout" |
 "unexpected-response"}`，扩展据此出**失败提示**（不进对话流）。中继只交结构化结果，
-TOON 编码在扩展侧，Python 侧不引任何 TOON 库。
+TOON 编码在扩展侧，多行正文走 tabular（SPEC §9.3，一行正文一条 row，换行不产生转义），
+Python 侧不引任何 TOON 库、只产 dict。
 
 ## 约定
 
