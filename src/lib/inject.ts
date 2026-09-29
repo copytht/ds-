@@ -1,0 +1,91 @@
+/**
+ * 协议说明注入：改写「即将发送」的那条请求体，把协议说明拼在每条用户消息开头
+ * （spec #9 的 user story 10/11：扩展改写你发出的消息来实现注入）。
+ *
+ * 判断全在这儿，接线（把 `fetch` / `XHR` 包一层）只负责把请求体原文交进来、
+ * 把返回值塞回去。返回 null 一律表示「原样放行」：不是能认的载荷，
+ * 或者这条载荷里没有需要拼的用户消息——拿不准就别改，页面照常发。
+ *
+ * 注意这里不是站点闸：站点范围由 manifest 权限钉死，总开关也不参与站点判定。
+ */
+
+import { prependInstructions, PROTOCOL_INSTRUCTIONS } from "./instructions";
+
+/** 只认「发消息」那条出站：chat 的 completion / completions / regenerate。 */
+const CHAT_SEND_PATH = /\/(?:api\/)?v\d+\/chat\/(?:completion|completions|regenerate)(?:[/?#]|$)/;
+
+/** 注入点跑在站点页面上，相对地址按站点自己算；跨域一律只认 deepseek 自己的域名。 */
+const SITE_ORIGIN = "https://chat.deepseek.com";
+
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url, SITE_ORIGIN).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 这条请求是不是「发消息」的出口：POST + chat 发送路径 + deepseek 自己的域名。
+ * 三个条件缺一不可，其余请求（建会话、取历史、头像上传……）一概不碰。
+ */
+export function isOutgoingChatRequest(method: string, url: string): boolean {
+  if (method.toUpperCase() !== "POST") return false;
+  if (!CHAT_SEND_PATH.test(url)) return false;
+  const hostname = hostnameOf(url);
+  if (hostname === null) return false;
+  return hostname === "deepseek.com" || hostname.endsWith(".deepseek.com");
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 拼一次：空消息没东西可发、也不该替用户凭空造一条，原样放行；
+ * 已经拼过的（历史里带回来的用户消息）不再拼第二遍。
+ */
+function prependOnce(text: string): string | null {
+  if (text.trim() === "") return null;
+  if (text.startsWith(PROTOCOL_INSTRUCTIONS)) return null;
+  return prependInstructions(text);
+}
+
+/**
+ * 改写一段即将发送的请求体。认得出的载荷有两条形状：
+ * `prompt`（站点原生的发消息接口只带这一条新消息）与 `messages`（整段历史一起带的形状）。
+ * 两条形状里 `role: "user"` 的内容都会带上协议说明，其余角色不动。
+ */
+export function rewriteOutgoingBody(bodyText: string): string | null {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(payload)) return null;
+
+  let changed = false;
+
+  if (typeof payload.prompt === "string") {
+    const next = prependOnce(payload.prompt);
+    if (next !== null) {
+      payload.prompt = next;
+      changed = true;
+    }
+  }
+
+  if (Array.isArray(payload.messages)) {
+    for (const entry of payload.messages) {
+      if (!isPlainObject(entry)) continue;
+      if (entry.role !== "user" || typeof entry.content !== "string") continue;
+      const next = prependOnce(entry.content);
+      if (next !== null) {
+        entry.content = next;
+        changed = true;
+      }
+    }
+  }
+
+  return changed ? JSON.stringify(payload) : null;
+}
