@@ -1,9 +1,9 @@
 # ds-
 
-浏览器扩展与配套 MCP 服务的双栈仓库：
+浏览器扩展与配套本机中继的双栈仓库：
 
 - **扩展**：pnpm + WXT + TypeScript，占仓库根目录
-- **MCP 服务**：uv + Python，包在根目录的 `dsb/`
+- **中继**：uv + Python，包在根目录的 `dsb/`
 
 ## 结构
 
@@ -11,7 +11,7 @@
 .
 ├── entrypoints/        # WXT 入口：background、content script
 ├── src/                # 扩展的纯逻辑层（TS，可单测）
-├── dsb/               # MCP 服务包（Python）
+├── dsb/               # 本机 HTTP 中继包（Python）
 ├── tests/              # Python 测试（pytest）
 ├── wxt.config.ts       # 扩展构建配置
 ├── package.json        # pnpm 清单
@@ -39,22 +39,36 @@ pnpm format             # prettier
 pnpm check              # 上面四项串起来，提交前跑这个
 ```
 
-## MCP 服务（uv）
+## 中继 dsb（uv）
 
 ```bash
 uv sync                 # 建 .venv 并按 uv.lock 装依赖
 uv run pytest           # 跑测试
 uv run ruff check .     # lint
-uv run ds-mcp           # 起 MCP 服务（stdio）
+uv run ds-mcp           # 起本机 HTTP 中继（脚本名沿用，名分见 ADR-0001）
 ```
 
-注册到 MCP 客户端（如 Claude Desktop / OpenCode）的命令：
+起之前本机要有 opencode 后台服务在跑，仓库根的 `.env`（不进版本库）写一行会话 id：
 
 ```bash
-uv --directory /绝对路径/ds- run ds-mcp
+OPENSESS_ID=<opencode 会话 id>
 ```
 
-新工具写在 `dsb/server.py`，用 `@mcp.tool()` 装饰即可。
+端口与口令每次启动时 `opencode service status` / `opencode service get password` **现读**
+（口令不落盘、不打印），默认监听 `127.0.0.1:8787`，可用 `.env` 里的 `DSB_PORT` 改。
+
+端点：
+
+```bash
+curl http://127.0.0.1:8787/health                     # {"status": "ok"}
+curl -X POST http://127.0.0.1:8787/ask \
+  -H 'content-type: application/json' \
+  -d '{"question": "repo 里 dsb 的入口在哪？"}'        # {"status": "ok", "answer": "..."}
+```
+
+失败也是同一形状：`{"status": "error", "error": "opencode-not-running" | "opencode-timeout" |
+"unexpected-response"}`，扩展据此出**失败提示**（不进对话流）。中继只交结构化结果，
+TOON 编码在扩展侧，Python 侧不引任何 TOON 库。
 
 ## 约定
 

@@ -1,11 +1,13 @@
 [project]
 name = "ds-mcp"
 version = "0.1.0"
-description = "MCP server for the ds- browser extension"
+description = "本机 HTTP 中继：把扩展的问题转给 opencode、把答复转回扩展（不是 MCP 服务）"
 readme = "README.md"
 authors = [{ name = "as", email = "as@given.su" }]
 requires-python = ">=3.13"
-dependencies = ["mcp>=2.2.0"]
+# 中继只用标准库（http.server + urllib）：opencode 的 HTTP API 由 dsb/client.py 直连，
+# 不引 MCP，也不引任何 TOON 库（编码归扩展）。
+dependencies = []
 
 [project.scripts]
 ds-mcp = "dsb.server:main"
