@@ -18,11 +18,11 @@ describe("parseAskFence · 边界", () => {
   });
 
   it("问题与围栏起始同一行也算有效围栏", () => {
-    expect(parseAskFence("```ask 合在一行的问题\n```")).toBe("合在一行的问题");
+    expect(parseAskFence("```say 合在一行的问题\n```")).toBe("合在一行的问题");
   });
 
-  it("```askfoo 不是围栏", () => {
-    expect(parseAskFence("```askfoo\n问题\n```")).toBeNull();
+  it("```sayfoo 不是围栏", () => {
+    expect(parseAskFence("```sayfoo\n问题\n```")).toBeNull();
   });
 
   it("``` ask 不是围栏", () => {
@@ -30,16 +30,16 @@ describe("parseAskFence · 边界", () => {
   });
 
   it("围栏里问空了返回 null", () => {
-    expect(parseAskFence("```ask   \n```")).toBeNull();
-    expect(parseAskFence("```ask\n   \n   \n```")).toBeNull();
+    expect(parseAskFence("```say   \n```")).toBeNull();
+    expect(parseAskFence("```say\n   \n   \n```")).toBeNull();
   });
 
   it("问题正文只裁掉首尾空白，内部换行保留", () => {
-    expect(parseAskFence("```ask\n  第一行\n第二行  \n```")).toBe("第一行\n第二行");
+    expect(parseAskFence("```say\n  第一行\n第二行  \n```")).toBe("第一行\n第二行");
   });
 
   it("只认第一块：后面再排也不追加", () => {
-    const text = "```ask\n第一个\n```\n```ask\n第二个\n```";
+    const text = "```say\n第一个\n```\n```say\n第二个\n```";
     expect(parseAskFence(text)).toBe("第一个");
   });
 });

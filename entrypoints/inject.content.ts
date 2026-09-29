@@ -14,7 +14,7 @@ type XhrTarget = { readonly method: string; readonly url: string };
  * 页面世界这一侧有两件事（总开关关着时一件都不做：不接管、不注入、不检测、不回灌）：
  *
  * 1. **协议说明注入**：把 `fetch` 与 `XMLHttpRequest` 包一层，在请求体离开页面之前改写它。
- * 2. **回灌链**：同一次包下来的**响应体**就是检测点（模型回答的唯一来源）→ 认出 ```ask 围栏 →
+ * 2. **回灌链**：同一次包下来的**响应体**就是检测点（模型回答的唯一来源）→ 认出 ```say 围栏 →
  *    问题交给隔离世界去打中继 → 结果进**唯一出站口**排队，出站窗口到点放行（ADR-0002）→
  *    回灌作为一条真实用户消息发进当前会话。
  *
@@ -91,14 +91,14 @@ export default defineContentScript({
       if (!enabled) return;
       const question = detectAskQuestion(raw);
       if (question === null) {
-        // 静默分支曾让「围栏在、但形状认不出」无法定位，这里只在真有 ask 字样时吭声。
-        if (raw.includes("```ask")) {
-          console.log(`[ds-] 响应里有 \`\`\`ask 字样却没认出围栏（${raw.length} 字）`);
+        // 静默分支曾让「围栏在、但形状认不出」无法定位，这里只在真有 say 字样时吭声。
+        if (raw.includes("```say")) {
+          console.log(`[ds-] 响应里有 \`\`\`say 字样却没认出围栏（${raw.length} 字）`);
         }
         return;
       }
       const id = nextMessageId("ask");
-      console.log(`[ds-] 认出 ask 围栏（${id}），问题交给中继`);
+      console.log(`[ds-] 认出 say 围栏（${id}），问题交给中继`);
       window.postMessage(questionMessage(id, question), "*");
     }
 

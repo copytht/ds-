@@ -8,7 +8,7 @@
         "body": [
           {
             "role": "user",
-            "parts": [{ "type": "text", "text": "```ask\nrepo 里 dsb 的入口在哪？\n```" }]
+            "parts": [{ "type": "text", "text": "```say\nrepo 里 dsb 的入口在哪？\n```" }]
           },
           {
             "role": "assistant",

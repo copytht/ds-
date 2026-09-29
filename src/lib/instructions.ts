@@ -6,7 +6,7 @@
 export const PROTOCOL_INSTRUCTIONS = `【ds 协议】需要写代码、查本机或需要第二双眼时，可以把问题交给本机的编码 agent。
 把问题排成一个围栏块，然后停止回答、等待回灌：
 
-\`\`\`ask <question>
+\`\`\`say <question>
 \`\`\`
 
 - <question> 换成问题正文，可以多行，用单独一行 \`\`\` 结束。

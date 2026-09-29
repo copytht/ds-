@@ -37,13 +37,13 @@ describe("extractAssistantAnswer", () => {
 
 describe("detectAskQuestion · 检测点", () => {
   it("流式回答里排了围栏就认出问题（多行问题也认）", () => {
-    const raw = sse(["先说结论。\n```ask ", "仓库里 dsb 的入口在哪？\n第二行补充\n```"]);
+    const raw = sse(["先说结论。\n```say ", "仓库里 dsb 的入口在哪？\n第二行补充\n```"]);
     expect(detectAskQuestion(raw)).toBe("仓库里 dsb 的入口在哪？\n第二行补充");
   });
 
   it("整块 JSON 回答里的围栏同样认得", () => {
     const raw = JSON.stringify({
-      choices: [{ message: { content: "```ask\n问题正文\n```" } }],
+      choices: [{ message: { content: "```say\n问题正文\n```" } }],
     });
     expect(detectAskQuestion(raw)).toBe("问题正文");
   });
@@ -53,28 +53,28 @@ describe("detectAskQuestion · 检测点", () => {
     expect(detectAskQuestion(raw)).toBeNull();
   });
 
-  it("非 ask 围栏不触发", () => {
+  it("非 say 围栏不触发", () => {
     const raw = sse(["```bash\nls -la\n```"]);
     expect(detectAskQuestion(raw)).toBeNull();
   });
 
-  it("`​```askfoo` 不是围栏起始行", () => {
-    const raw = sse(["```askfoo\n问题\n```"]);
+  it("`​```sayfoo` 不是围栏起始行", () => {
+    const raw = sse(["```sayfoo\n问题\n```"]);
     expect(detectAskQuestion(raw)).toBeNull();
   });
 
   it("一次排多块只认第一块", () => {
-    const raw = sse(["```ask\n第一块\n```\n中间\n```ask\n第二块\n```"]);
+    const raw = sse(["```say\n第一块\n```\n中间\n```say\n第二块\n```"]);
     expect(detectAskQuestion(raw)).toBe("第一块");
   });
 
   it("围栏没闭合按无效输入处理", () => {
-    const raw = sse(["```ask\n问题还没有收尾"]);
+    const raw = sse(["```say\n问题还没有收尾"]);
     expect(detectAskQuestion(raw)).toBeNull();
   });
 
   it("围栏里问空了不触发", () => {
-    const raw = sse(["```ask\n```"]);
+    const raw = sse(["```say\n```"]);
     expect(detectAskQuestion(raw)).toBeNull();
   });
 
@@ -84,7 +84,7 @@ describe("detectAskQuestion · 检测点", () => {
   });
 
   it("正文形状认不出时，兜底路径仍从转义原文里认出围栏", () => {
-    const raw = `data: ${JSON.stringify({ unknown_shape: "看这里\n```ask\n兜底问题\n```" })}\n`;
+    const raw = `data: ${JSON.stringify({ unknown_shape: "看这里\n```say\n兜底问题\n```" })}\n`;
     expect(extractAssistantAnswer(raw)).toBe("");
     expect(detectAskQuestion(raw)).toBe("兜底问题");
   });
@@ -96,7 +96,7 @@ describe("detectAskQuestion · 检测点", () => {
 
   it("兜底路径也认没闭合的围栏不算数", () => {
     const raw = `data: ${JSON.stringify({
-      unknown_shape: "看这里\n```ask\n问题没收尾\n```js\nconst a = 1;",
+      unknown_shape: "看这里\n```say\n问题没收尾\n```js\nconst a = 1;",
     })}\n`;
     expect(detectAskQuestion(raw)).toBeNull();
   });
@@ -106,7 +106,7 @@ describe("detectAskQuestion · 站点那条 OT 增量流", () => {
   /**
    * 真机抓的形状（2026-09-29，chat.deepseek.com/api/v0/chat/completion）：
    * 正文不在 `content` 键里，而是散在追加操作中；围栏被切成两个载荷下发
-   * （`{"v":"```"}` 紧跟 `{"v":"ask"}`）；思考片里还举了一个 ```ask 的例子。
+   * （`{"v":"```"}` 紧跟 `{"v":"say"}`）；思考片里还举了一个 ```say 的例子。
    */
   const REAL_OT_STREAM = [
     "event: ready",
@@ -118,11 +118,11 @@ describe("detectAskQuestion · 站点那条 OT 增量流", () => {
     'data: {"v":{"response":{"message_id":10,"parent_id":9,"role":"ASSISTANT","thinking_enabled":true,"status":"WIP","fragments":[{"id":2,"type":"THINK","content":"我们需要"}]}}}',
     "",
     'data: {"p":"response/fragments/-1/content","o":"APPEND","v":"先想清楚。协议要排围栏，例子是："}',
-    'data: {"v":"\\n\\n```ask\\n模型自己举的例子\\n```"}',
+    'data: {"v":"\\n\\n```say\\n模型自己举的例子\\n```"}',
     'data: {"p":"response/fragments/-1/elapsed_secs","o":"SET","v":1.214978037}',
     "",
     'data: {"p":"response/fragments","o":"APPEND","v":[{"id":3,"type":"RESPONSE","content":"```","references":[],"stage_id":1}]}',
-    'data: {"p":"response/fragments/-1/content","v":"ask"}',
+    'data: {"p":"response/fragments/-1/content","v":"say"}',
     'data: {"v":"\\n"}',
     'data: {"v":"CONTEXT.md 这个文件是干什么的？\\n"}',
     'data: {"v":"```"}',
@@ -136,7 +136,7 @@ describe("detectAskQuestion · 站点那条 OT 增量流", () => {
 
   it("正文只在 RESPONSE 片段里，思考片不计入", () => {
     expect(extractAssistantAnswer(REAL_OT_STREAM)).toBe(
-      "```ask\nCONTEXT.md 这个文件是干什么的？\n```",
+      "```say\nCONTEXT.md 这个文件是干什么的？\n```",
     );
   });
 
@@ -145,12 +145,12 @@ describe("detectAskQuestion · 站点那条 OT 增量流", () => {
   });
 
   it("思考片里举的围栏例子不算回答", () => {
-    // 把正文片换成一句没有围栏的话：思考片里的 ```ask 不能被捞出来当真。
+    // 把正文片换成一句没有围栏的话：思考片里的 ```say 不能被捞出来当真。
     const noFence = REAL_OT_STREAM.replace(
       'data: {"p":"response/fragments","o":"APPEND","v":[{"id":3,"type":"RESPONSE","content":"```","references":[],"stage_id":1}]}',
       'data: {"p":"response/fragments","o":"APPEND","v":[{"id":3,"type":"RESPONSE","content":"好的。","references":[],"stage_id":1}]}',
     )
-      .replace('data: {"p":"response/fragments/-1/content","v":"ask"}\n', "")
+      .replace('data: {"p":"response/fragments/-1/content","v":"say"}\n', "")
       .replace('data: {"v":"\\n"}\n', "")
       .replace('data: {"v":"CONTEXT.md 这个文件是干什么的？\\n"}\n', "")
       .replace('data: {"v":"```"}\n', "");

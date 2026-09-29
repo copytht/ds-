@@ -50,14 +50,14 @@ def test_case_names_are_unique_within_each_file() -> None:
 
 
 def test_fence_cases_are_coherent() -> None:
-    """抽出问题的输入里必须排着 ask 围栏；其余输入只能落空。"""
+    """抽出问题的输入里必须排着 say 围栏；其余输入只能落空。"""
     for case in raw_cases("fence.json"):
         assert isinstance(case["input"], str)
         question = case["expectedQuestion"]
         assert question is None or isinstance(question, str)
         if question is not None:
             assert question
-            assert "```ask" in case["input"], case["name"]
+            assert "```say" in case["input"], case["name"]
 
 
 def test_reply_payloads_follow_the_schema() -> None:
