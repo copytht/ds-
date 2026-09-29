@@ -42,7 +42,9 @@ export default defineContentScript({
     /** 判断逻辑在 src/lib/inject.ts，这里只认它那句「null 就原样放行」。 */
     const rewriteBody = (body: string, method: string, url: string): string | null => {
       if (!isOutgoingChatRequest(method, url)) return null;
-      return rewriteOutgoingBody(body);
+      const next = rewriteOutgoingBody(body);
+      if (next !== null) console.log("[ds-] 已把协议说明拼到这条消息开头");
+      return next;
     };
 
     /** 排下一次开窗：队列空着就不排。 */
@@ -88,7 +90,13 @@ export default defineContentScript({
     function detect(raw: string): void {
       if (!enabled) return;
       const question = detectAskQuestion(raw);
-      if (question === null) return;
+      if (question === null) {
+        // 静默分支曾让「围栏在、但形状认不出」无法定位，这里只在真有 ask 字样时吭声。
+        if (raw.includes("```ask")) {
+          console.log(`[ds-] 响应里有 \`\`\`ask 字样却没认出围栏（${raw.length} 字）`);
+        }
+        return;
+      }
       const id = nextMessageId("ask");
       console.log(`[ds-] 认出 ask 围栏（${id}），问题交给中继`);
       window.postMessage(questionMessage(id, question), "*");
@@ -97,7 +105,10 @@ export default defineContentScript({
     /** 读响应体；读不出来就这轮不检测，不猜。 */
     async function watchResponse(response: Response): Promise<void> {
       try {
-        detect(await response.text());
+        const raw = await response.text();
+        // 与「检测没跑」区分：跑没跑先有个数。
+        console.log(`[ds-] 读到出站响应（${raw.length} 字）`);
+        detect(raw);
       } catch (error) {
         console.log("[ds-] 响应读不出来，这轮不检测", error);
       }
@@ -130,6 +141,7 @@ export default defineContentScript({
 
         const bodyText = init !== undefined && typeof init.body === "string" ? init.body : null;
         const nextBody = outgoing && bodyText !== null ? rewriteOutgoingBody(bodyText) : null;
+        if (nextBody !== null) console.log("[ds-] 已把协议说明拼到这条消息开头");
         const requestInit =
           nextBody !== null && init !== undefined ? { ...init, body: nextBody } : init;
 

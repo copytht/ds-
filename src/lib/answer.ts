@@ -6,6 +6,12 @@
  *
  * 响应可能是流式（一行一个 `data:` 载荷）也可能是整块 JSON，两条形状都先还原成
  * 回答正文，再交给 `parseAskFence`；围栏怎么切只有一条路径，这里不自己再切一遍。
+ *
+ * 站点自己那条是 **OT 增量流**（真机抓到的形状，见 #14）：正文不在 `content`/`text`
+ * 键里，而是散在 `data: {"v":"…"}` 与 `{"p":"response/fragments/-1/content","v":"…"}` 的
+ * 追加操作里，`type: "THINK"` 的片段是思考过程。更麻烦的是围栏会被切进两个载荷
+ * （`{"v":"```"}` 紧跟 `{"v":"ask"}`），所以「回原文里找 ```ask 字样」这条路对它无效——
+ * 必须先把片段拼成正文，才谈得上认围栏。
  */
 
 import { parseAskFence } from "./fence";
@@ -54,12 +60,118 @@ function ssePayloads(raw: string): unknown[] {
   return payloads;
 }
 
+/* -------------------------------------------------------------------------- */
+/* 站点那条 OT 增量流：data: 载荷里的 p / o / v                                */
+/* -------------------------------------------------------------------------- */
+
+/** 回灌链只关心回答正文，思考过程与 reasoning 同一待遇（不当成回答）。 */
+const THINKING_FRAGMENT_TYPE = "THINK";
+
+/** 一片回答：`type` 是 THINK（思考）或 RESPONSE（正文），`content` 边写边长。 */
+type Fragment = { readonly type: string; content: string };
+
+/** 首包播种的形状：`{"v":{"response":{"fragments":[…]}}}`；不是它就返回 null。 */
+function seededFragments(payload: Record<string, unknown>): unknown[] | null {
+  const v = payload["v"];
+  if (!isPlainObject(v)) return null;
+  const response = v["response"];
+  if (!isPlainObject(response)) return null;
+  const fragments = response["fragments"];
+  return Array.isArray(fragments) ? fragments : null;
+}
+
+/** 这条载荷是不是站点的 OT 增量：带 `p` 操作路径的，或者上面那种播种包。 */
+function isOtPayload(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  if (typeof value["p"] === "string") return true;
+  return seededFragments(value) !== null;
+}
+
+function fragmentOf(entry: Record<string, unknown>): Fragment {
+  return {
+    type: typeof entry["type"] === "string" ? entry["type"] : "",
+    content: typeof entry["content"] === "string" ? entry["content"] : "",
+  };
+}
+
+/** `response/fragments/-1/content` → 追加到哪一片（`-1` 是当前那片）。 */
+function fragmentAt(fragments: Fragment[], path: string): Fragment | undefined {
+  const step = path.slice("response/fragments/".length, -"/content".length);
+  if (step === "-1") return fragments[fragments.length - 1];
+  const index = Number(step);
+  return Number.isInteger(index) ? fragments[index] : undefined;
+}
+
+/**
+ * 把 OT 增量流还原成回答正文：片段一路往后追加，`THINK` 片不计入；
+ * 状态、计时、token 这些非正文操作一概不碰。
+ */
+function reconstructAnswer(payloads: readonly unknown[]): string {
+  const fragments: Fragment[] = [];
+
+  const apply = (payload: unknown): void => {
+    if (!isPlainObject(payload)) return;
+    const p = payload["p"];
+    const v = payload["v"];
+
+    if (typeof p === "string") {
+      if (p === "response/fragments" && Array.isArray(v)) {
+        for (const entry of v) if (isPlainObject(entry)) fragments.push(fragmentOf(entry));
+        return;
+      }
+      if (p.endsWith("/content") && typeof v === "string") {
+        const target = fragmentAt(fragments, p);
+        if (target !== undefined) target.content += v;
+        return;
+      }
+      if (p === "response" && Array.isArray(v)) {
+        // 批处理包里还是同一批操作，递着走一遍。
+        for (const entry of v) apply(entry);
+        return;
+      }
+      return;
+    }
+
+    if (typeof v === "string") {
+      // 没带路径的裸追加：接在当前那片后面。
+      const last = fragments[fragments.length - 1];
+      if (last !== undefined) last.content += v;
+      return;
+    }
+
+    const seed = seededFragments(payload);
+    if (seed !== null) {
+      for (const entry of seed) if (isPlainObject(entry)) fragments.push(fragmentOf(entry));
+    }
+  };
+
+  for (const payload of payloads) apply(payload);
+
+  return fragments
+    .filter((fragment) => fragment.type !== THINKING_FRAGMENT_TYPE)
+    .map((fragment) => fragment.content)
+    .join("");
+}
+
+/**
+ * 这条原文是不是 OT 形状的响应；是就返回（可能空串的）回答正文，不是返回 null。
+ * 认得形状却没正文，也照样返回空串——不再去原文里捞，免得把 THINK 里的围栏例子当真。
+ */
+function otAnswer(raw: string): string | null {
+  const payloads = ssePayloads(raw);
+  if (!payloads.some(isOtPayload)) return null;
+  return reconstructAnswer(payloads);
+}
+
 /** 从响应原文还原模型的回答正文；认不出的响应返回空串（空串过不了围栏解析）。 */
 export function extractAssistantAnswer(raw: string): string {
   if (raw.trim() === "") return "";
 
   const payloads = ssePayloads(raw);
   if (payloads.length > 0) {
+    // 站点自家的 OT 增量流：正文只在片段里，别走下面那条按 `content` 键名猜的路
+    if (payloads.some(isOtPayload)) return reconstructAnswer(payloads);
+
     const parts: string[] = [];
     for (const payload of payloads) collectText(payload, null, parts);
     const joined = parts.join("");
@@ -115,6 +227,11 @@ function cutFencedBlock(block: string): string {
  * 一次排多块（只认第一块）、围栏没闭合，都返回 null。
  */
 export function detectAskQuestion(raw: string): string | null {
+  // OT 形状认得：只在拼好的正文里找围栏，认不出就是没排——不去原文里捞
+  // （思考过程里常常举一个 ```ask 的例子，捞了会把例子当真）。
+  const ot = otAnswer(raw);
+  if (ot !== null) return parseAskFence(ot);
+
   const direct = parseAskFence(extractAssistantAnswer(raw));
   if (direct !== null) return direct;
 

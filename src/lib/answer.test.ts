@@ -101,3 +101,72 @@ describe("detectAskQuestion · 检测点", () => {
     expect(detectAskQuestion(raw)).toBeNull();
   });
 });
+
+describe("detectAskQuestion · 站点那条 OT 增量流", () => {
+  /**
+   * 真机抓的形状（2026-09-29，chat.deepseek.com/api/v0/chat/completion）：
+   * 正文不在 `content` 键里，而是散在追加操作中；围栏被切成两个载荷下发
+   * （`{"v":"```"}` 紧跟 `{"v":"ask"}`）；思考片里还举了一个 ```ask 的例子。
+   */
+  const REAL_OT_STREAM = [
+    "event: ready",
+    'data: {"request_message_id":9,"response_message_id":10,"model_type":"default"}',
+    "",
+    "event: update_session",
+    'data: {"updated_at":1790663229.828996}',
+    "",
+    'data: {"v":{"response":{"message_id":10,"parent_id":9,"role":"ASSISTANT","thinking_enabled":true,"status":"WIP","fragments":[{"id":2,"type":"THINK","content":"我们需要"}]}}}',
+    "",
+    'data: {"p":"response/fragments/-1/content","o":"APPEND","v":"先想清楚。协议要排围栏，例子是："}',
+    'data: {"v":"\\n\\n```ask\\n模型自己举的例子\\n```"}',
+    'data: {"p":"response/fragments/-1/elapsed_secs","o":"SET","v":1.214978037}',
+    "",
+    'data: {"p":"response/fragments","o":"APPEND","v":[{"id":3,"type":"RESPONSE","content":"```","references":[],"stage_id":1}]}',
+    'data: {"p":"response/fragments/-1/content","v":"ask"}',
+    'data: {"v":"\\n"}',
+    'data: {"v":"CONTEXT.md 这个文件是干什么的？\\n"}',
+    'data: {"v":"```"}',
+    'data: {"p":"response","o":"BATCH","v":[{"p":"accumulated_token_usage","v":1075},{"p":"quasi_status","v":"FINISHED"}]}',
+    'data: {"p":"response/status","o":"SET","v":"FINISHED"}',
+    "",
+    "event: close",
+    'data: {"click_behavior":"none","auto_resume":false}',
+    "",
+  ].join("\n");
+
+  it("正文只在 RESPONSE 片段里，思考片不计入", () => {
+    expect(extractAssistantAnswer(REAL_OT_STREAM)).toBe(
+      "```ask\nCONTEXT.md 这个文件是干什么的？\n```",
+    );
+  });
+
+  it("围栏被切成两个载荷也认得出问题", () => {
+    expect(detectAskQuestion(REAL_OT_STREAM)).toBe("CONTEXT.md 这个文件是干什么的？");
+  });
+
+  it("思考片里举的围栏例子不算回答", () => {
+    // 把正文片换成一句没有围栏的话：思考片里的 ```ask 不能被捞出来当真。
+    const noFence = REAL_OT_STREAM.replace(
+      'data: {"p":"response/fragments","o":"APPEND","v":[{"id":3,"type":"RESPONSE","content":"```","references":[],"stage_id":1}]}',
+      'data: {"p":"response/fragments","o":"APPEND","v":[{"id":3,"type":"RESPONSE","content":"好的。","references":[],"stage_id":1}]}',
+    )
+      .replace('data: {"p":"response/fragments/-1/content","v":"ask"}\n', "")
+      .replace('data: {"v":"\\n"}\n', "")
+      .replace('data: {"v":"CONTEXT.md 这个文件是干什么的？\\n"}\n', "")
+      .replace('data: {"v":"```"}\n', "");
+    expect(extractAssistantAnswer(noFence)).toBe("好的。");
+    expect(detectAskQuestion(noFence)).toBeNull();
+  });
+
+  it("状态、计时、token 这些非正文操作不产生正文", () => {
+    const onlyOps = [
+      'data: {"v":{"response":{"fragments":[]}}}',
+      'data: {"p":"response/fragments/-1/elapsed_secs","o":"SET","v":1.2}',
+      'data: {"p":"response/status","o":"SET","v":"FINISHED"}',
+      'data: {"p":"response","o":"BATCH","v":[{"p":"accumulated_token_usage","v":10}]}',
+      "",
+    ].join("\n");
+    expect(extractAssistantAnswer(onlyOps)).toBe("");
+    expect(detectAskQuestion(onlyOps)).toBeNull();
+  });
+});

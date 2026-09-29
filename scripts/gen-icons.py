@@ -2,6 +2,7 @@
 
 静态图标只在 background 还没来得及 setIcon 时兜底显示；三态仍由 background 现画。
 """
+
 import struct
 import zlib
 from pathlib import Path
@@ -53,9 +54,7 @@ def render(size: int) -> bytes:
                     if 0 <= x < size and 0 <= y < size:
                         pixels[y][x] = (255, 255, 255, 255)
 
-    raw = b"".join(
-        b"\x00" + b"".join(struct.pack("4B", *px) for px in row) for row in pixels
-    )
+    raw = b"".join(b"\x00" + b"".join(struct.pack("4B", *px) for px in row) for row in pixels)
     return raw
 
 
