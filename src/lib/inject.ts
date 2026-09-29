@@ -10,6 +10,7 @@
  */
 
 import { prependInstructions, PROTOCOL_INSTRUCTIONS } from "./instructions";
+import { hasReplyAnchor } from "./reply";
 
 /** 只认「发消息」那条出站：chat 的 completion / completions / regenerate。 */
 const CHAT_SEND_PATH = /\/(?:api\/)?v\d+\/chat\/(?:completion|completions|regenerate)(?:[/?#]|$)/;
@@ -43,10 +44,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * 拼一次：空消息没东西可发、也不该替用户凭空造一条，原样放行；
+ * 回灌消息（首行就是 `agent:` 首行锚）原样放行，协议说明不能插到首行锚前面；
  * 已经拼过的（历史里带回来的用户消息）不再拼第二遍。
  */
 function prependOnce(text: string): string | null {
   if (text.trim() === "") return null;
+  if (hasReplyAnchor(text)) return null;
   if (text.startsWith(PROTOCOL_INSTRUCTIONS)) return null;
   return prependInstructions(text);
 }

@@ -5,6 +5,7 @@ import {
   buildReply,
   errorPayload,
   failureNotice,
+  hasReplyAnchor,
   isInjectableReply,
   isKnownFailureKind,
   okPayload,
@@ -55,6 +56,20 @@ describe("isInjectableReply · 失败不进对话流", () => {
   it("status: error 不进对话流", () => {
     expect(isInjectableReply(errorPayload("opencode-not-running"))).toBe(false);
     expect(isInjectableReply(errorPayload("relay-unreachable"))).toBe(false);
+  });
+});
+
+describe("hasReplyAnchor · 首行锚认领", () => {
+  it("首行是 agent: 就是回灌消息", () => {
+    expect(hasReplyAnchor(buildReply(okPayload("答复")))).toBe(true);
+    expect(hasReplyAnchor("agent:")).toBe(true);
+    expect(hasReplyAnchor("agent:\nstatus: ok\nanswer: x")).toBe(true);
+  });
+
+  it("第一行不是首行锚的不算", () => {
+    expect(hasReplyAnchor("开头一行\nagent:")).toBe(false);
+    expect(hasReplyAnchor("agent 你好")).toBe(false);
+    expect(hasReplyAnchor("")).toBe(false);
   });
 });
 

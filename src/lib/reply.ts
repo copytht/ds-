@@ -11,6 +11,14 @@ import { encode } from "@toon-format/toon";
 /** 回灌消息的首行锚。 */
 export const REPLY_ANCHOR = "agent:";
 
+/**
+ * 这段文本是不是一条回灌消息：第一行就是首行锚。
+ * 回灌要当真实用户消息发出去，协议说明不能插到它前面——首行锚必须留在第一行。
+ */
+export function hasReplyAnchor(text: string): boolean {
+  return text.split("\n")[0] === REPLY_ANCHOR;
+}
+
 /** 工具栏图标点击后给出的启动命令。 */
 export const RELAY_START_COMMAND = "uv run ds-mcp";
 

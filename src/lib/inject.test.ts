@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { isOutgoingChatRequest, rewriteOutgoingBody } from "./inject";
 import { prependInstructions, PROTOCOL_INSTRUCTIONS } from "./instructions";
+import { buildReply, okPayload, REPLY_ANCHOR } from "./reply";
 
 describe("isOutgoingChatRequest", () => {
   it("认得站点原生的发消息出口", () => {
@@ -116,5 +117,21 @@ describe("rewriteOutgoingBody", () => {
     expect(
       rewriteOutgoingBody(JSON.stringify({ messages: [{ role: "user", content: 42 }] })),
     ).toBeNull();
+  });
+
+  it("回灌消息（首行锚 agent:）不拼协议说明，首行锚留在第一行", () => {
+    const reply = buildReply(okPayload("答复正文"));
+
+    expect(reply.split("\n")[0]).toBe(REPLY_ANCHOR);
+    expect(rewriteOutgoingBody(JSON.stringify({ prompt: reply }))).toBeNull();
+    expect(
+      rewriteOutgoingBody(JSON.stringify({ messages: [{ role: "user", content: reply }] })),
+    ).toBeNull();
+  });
+
+  it("只是以 agent 开头的普通消息照样拼说明", () => {
+    const rewritten = rewriteOutgoingBody(JSON.stringify({ prompt: "agent 你好，帮我看看" }));
+    expect(rewritten).not.toBeNull();
+    expect(JSON.parse(rewritten ?? "")["prompt"]).toBe(prependInstructions("agent 你好，帮我看看"));
   });
 });
