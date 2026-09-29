@@ -13,8 +13,8 @@ export const RELAY_ORIGIN = "http://127.0.0.1:8787";
 export const RELAY_ASK_PATH = "/ask";
 export const RELAY_HEALTH_PATH = "/health";
 
-/** 扩展侧自己掐表的超时；比 dsb 默认的 120 秒宽一截，先到的一律按中继没响应算。 */
-export const RELAY_TIMEOUT_MS = 150_000;
+/** 扩展侧自己掐表的超时；比 dsb 默认的 140 秒宽一截，先到的一律按中继没响应算。 */
+export const RELAY_TIMEOUT_MS = 160_000;
 /** 探活（`GET /health`）只问在不在，快点回来。 */
 export const RELAY_HEALTH_TIMEOUT_MS = 5_000;
 
