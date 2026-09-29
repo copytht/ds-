@@ -1,0 +1,35 @@
+{
+  "description": "中继配置对拍：端口与口令现读、sessionID 读 .env（只做解析纯函数，不发任何请求）。",
+  "cases": [
+    {
+      "name": "service status 输出解析端口",
+      "kind": "port",
+      "input": "http://127.0.0.1:49374\n",
+      "expected": { "host": "127.0.0.1", "port": 49374 }
+    },
+    {
+      "name": "service status 输出带空行",
+      "kind": "port",
+      "input": "\nhttp://127.0.0.1:4096\n\n",
+      "expected": { "host": "127.0.0.1", "port": 4096 }
+    },
+    {
+      "name": "service get password 输出解析口令",
+      "kind": "password",
+      "input": "test-password-not-a-real-secret\n",
+      "expected": { "password": "test-password-not-a-real-secret" }
+    },
+    {
+      "name": ".env 读 sessionID",
+      "kind": "session-id",
+      "input": "# 本机配置，不进版本库\nOPENSESS_ID=ses_abc123\n",
+      "expected": { "session_id": "ses_abc123" }
+    },
+    {
+      "name": ".env 里没有 sessionID",
+      "kind": "session-id",
+      "input": "# 只有别的变量\nDSB_PORT=1234\n",
+      "expected": { "session_id": null }
+    }
+  ]
+}
