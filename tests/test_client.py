@@ -10,8 +10,10 @@ from collections.abc import Callable
 from typing import Any
 
 from dsb.client import (
+    CHILD_ROLE,
     OpencodeClient,
     ServiceUnavailable,
+    answer_prompt,
     fresh_messages,
     normalize_messages,
     outcome_from_exception,
@@ -30,6 +32,7 @@ PASSWORD = "test-password-not-a-real-secret"
 SERVICE = {"host": HOST, "port": PORT, "password": PASSWORD}
 BASELINE_MS = 1_000_000
 SESSION = "ses_fixture"
+CHILD = "ses_child_forked"
 
 
 class FakeResponse:
@@ -98,16 +101,30 @@ class FakeOpen:
         prompt_error: BaseException | None = None,
         wait_error: BaseException | None = None,
         message_error: BaseException | None = None,
+        fork: Any = None,
+        fork_error: BaseException | None = None,
+        delete_error: BaseException | None = None,
     ) -> None:
         self.messages = messages
         self.prompt = {"data": {"id": "inb_1"}} if prompt is None else prompt
         self.prompt_error = prompt_error
         self.wait_error = wait_error
         self.message_error = message_error
+        self.fork = {"data": {"id": CHILD}} if fork is None else fork
+        self.fork_error = fork_error
+        self.delete_error = delete_error
         self.calls: list[Call] = []
 
     def __call__(self, request: Any, timeout: float | None = None) -> FakeResponse:
         self.calls.append(Call(request, timeout))
+        if request.full_url.endswith("/fork"):
+            if self.fork_error is not None:
+                raise self.fork_error
+            return FakeResponse(self.fork)
+        if request.method == "DELETE":
+            if self.delete_error is not None:
+                raise self.delete_error
+            return FakeResponse()
         if request.full_url.endswith("/prompt"):
             if self.prompt_error is not None:
                 raise self.prompt_error
@@ -149,12 +166,65 @@ def test_ask_returns_success_and_skips_the_previous_answer() -> None:
         "answer": "入口在 dsb/server.py。",
     }
     methods = [call.method for call in open_url.calls]
-    assert methods == ["POST", "POST", "GET"]  # prompt → wait → message
-    expected = json.dumps({"text": "repo 里 dsb 的入口在哪？"}, ensure_ascii=False).encode()
-    assert open_url.calls[0].data == expected
-    assert open_url.calls[0].url.endswith(f"/api/session/{SESSION}/prompt")
-    assert open_url.calls[1].url.endswith(f"/api/experimental/session/{SESSION}/wait")
-    assert "/message?" in open_url.calls[2].url
+    assert methods == ["POST", "POST", "POST", "GET", "DELETE"]
+    # fork → prompt → wait → message → 删子会话
+    assert open_url.calls[0].url.endswith(f"/api/session/{SESSION}/fork")
+    assert open_url.calls[1].url.endswith(f"/api/session/{CHILD}/prompt")
+    assert open_url.calls[2].url.endswith(f"/api/experimental/session/{CHILD}/wait")
+    assert "/message?" in open_url.calls[3].url
+    assert open_url.calls[4].url.endswith(f"/api/session/{CHILD}")
+
+
+def test_ask_goes_to_a_forked_child_never_to_the_main_conversation() -> None:
+    """主 agent 是页面上的模型；本机这条主对话只当上下文来源，问题绝不发给它。"""
+    open_url = FakeOpen(messages=live_messages("答复"))
+    make_client(open_url).ask("问题")
+
+    for call in open_url.calls:
+        if "/message" in call.url:
+            continue
+        assert f"/api/session/{SESSION}/" not in call.url or call.url.endswith("/fork")
+    # 主会话只被 fork 读过一次（投影历史），没有被 prompt
+    assert not any(c.url.endswith(f"/api/session/{SESSION}/prompt") for c in open_url.calls)
+    assert not any(f"/api/session/{SESSION}/wait" in c.url for c in open_url.calls)
+
+
+def test_child_is_disposed_even_when_the_answer_fails() -> None:
+    """答复失败也必须删子会话，否则会话列表里堆一排 fork #N。"""
+    open_url = FakeOpen(messages=live_messages(None), message_error=TimeoutError("boom"))
+    outcome = make_client(open_url).ask("问题")
+
+    assert outcome["kind"] == "timeout"
+    assert open_url.calls[-1].method == "DELETE"
+    assert open_url.calls[-1].url.endswith(f"/api/session/{CHILD}")
+
+
+def test_failing_to_dispose_the_child_does_not_change_the_outcome() -> None:
+    """收尾失败只该被吞掉：答复已经拿到了，不能改判结果。"""
+    open_url = FakeOpen(messages=live_messages("答复"), delete_error=OSError("删不掉"))
+    outcome = make_client(open_url).ask("问题")
+
+    assert outcome["kind"] == "success"
+    assert payload_from_outcome(outcome) == {"status": "ok", "answer": "答复"}
+
+
+def test_fork_failure_is_an_unexpected_response() -> None:
+    """fork 拿不到子会话 id → 非预期响应，不该静默把问题塞回主对话。"""
+    open_url = FakeOpen(fork={"data": {"note": "没有 id"}})
+    outcome = make_client(open_url).ask("问题")
+
+    assert payload_from_outcome(outcome) == {
+        "status": "error",
+        "error": ERROR_UNEXPECTED,
+    }
+    assert not any(c.url.endswith("/prompt") for c in open_url.calls)
+
+
+def test_fork_connection_loss_is_not_running() -> None:
+    open_url = FakeOpen(fork_error=urllib.error.URLError(ConnectionRefusedError("没起")))
+    outcome = make_client(open_url).ask("问题")
+    assert outcome == {"kind": "not-running"}
+    assert payload_from_outcome(outcome) == {"status": "error", "error": ERROR_NOT_RUNNING}
 
 
 def test_ask_sends_the_password_only_in_the_authorization_header() -> None:
@@ -231,7 +301,24 @@ def test_deadline_exhausted_maps_to_opencode_timeout() -> None:
         "status": "error",
         "error": ERROR_TIMEOUT,
     }
-    assert [call.method for call in open_url.calls] == ["POST", "POST", "GET"]
+    assert [call.method for call in open_url.calls] == [
+        "POST",
+        "POST",
+        "POST",
+        "GET",
+        "DELETE",
+    ]
+
+
+def test_child_prompt_carries_the_role_frame() -> None:
+    """fork 出来的子会话知道自己在分叉，角色框是为了让它只答问题本身。"""
+    open_url = FakeOpen(messages=live_messages("答复"))
+    make_client(open_url).ask("超时怎么修？")
+
+    sent = json.loads(open_url.calls[1].data.decode("utf-8"))
+    assert "超时怎么修？" in sent["text"]
+    assert sent["text"].startswith(CHILD_ROLE)
+    assert sent["text"] == answer_prompt("超时怎么修？")
 
 
 def test_busy_parent_conversation_does_not_eat_the_answer_budget() -> None:
