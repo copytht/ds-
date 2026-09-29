@@ -26,10 +26,15 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from dsb.config import parse_password, parse_service_endpoint
-from dsb.opencode import extract_answer
+from dsb.opencode import extract_answer, has_assistant
 
 AUTH_USERNAME = "opencode"
 SERVICE_BIN = "opencode"
+# 两段等待，两个预算（真机 #14：主对话在忙时，一个 140s 的共享预算被排队吃掉，
+# 答复 212s 才出来，页面只等到了 opencode-timeout）。
+# 排队看人：主对话在跑活时问题只能排队等着，这个时长不可控，给得宽。
+DEFAULT_QUEUE_TIMEOUT = 600.0
+# 答复看系统：一旦 assistant 消息出现，剩下这段就是它把答复写完的时间。
 DEFAULT_ASK_TIMEOUT = 140.0
 DEFAULT_POLL_INTERVAL = 0.5
 DEFAULT_HTTP_TIMEOUT = 10.0
@@ -138,6 +143,7 @@ class OpencodeClient:
         *,
         service_reader: Callable[[], Mapping[str, Any]] = read_service,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
+        queue_timeout: float = DEFAULT_QUEUE_TIMEOUT,
         ask_timeout: float = DEFAULT_ASK_TIMEOUT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         http_timeout: float = DEFAULT_HTTP_TIMEOUT,
@@ -148,6 +154,7 @@ class OpencodeClient:
         self._session_id = session_id
         self._service_reader = service_reader
         self._urlopen = urlopen
+        self._queue_timeout = queue_timeout
         self._ask_timeout = ask_timeout
         self._poll_interval = poll_interval
         self._http_timeout = http_timeout
@@ -192,10 +199,17 @@ class OpencodeClient:
         return self._cached
 
     def _await_answer(self, service: Mapping[str, Any], baseline_ms: int) -> Mapping[str, Any]:
-        """等到会话空闲、且 baseline 之后确实有带正文的答复为止。"""
-        deadline = self._now() + self._ask_timeout
+        """等到会话空闲、且 baseline 之后确实有带正文的答复为止。
+
+        两段预算：还没见到 assistant 消息时算「排队」——主对话在跑活，问题只能在
+        inbox 里排着，这段时长看人、不可控，给得宽；一旦见到 assistant 消息就换成
+        「答复」预算重新计时。主对话在忙多久，都不吃掉答复该有的时间。
+        """
+        queue_deadline = self._now() + self._queue_timeout
+        answer_deadline: float | None = None
         session = f"/api/session/{self._session_id}"
         while True:
+            deadline = answer_deadline if answer_deadline is not None else queue_deadline
             remaining = deadline - self._now()
             if remaining <= 0:
                 return {"kind": "timeout"}
@@ -215,6 +229,9 @@ class OpencodeClient:
                 return {"kind": "unexpected"}
             if extract_answer(fresh) is not None:
                 return {"kind": "success", "body": fresh}
+            # 答复开写了就换预算：正文可能还空着，但已经在写了。
+            if answer_deadline is None and has_assistant(fresh):
+                answer_deadline = self._now() + self._ask_timeout
             self._sleep(min(self._poll_interval, max(deadline - self._now(), 0.0)))
 
     def _call(

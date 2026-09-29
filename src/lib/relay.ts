@@ -13,8 +13,12 @@ export const RELAY_ORIGIN = "http://127.0.0.1:8787";
 export const RELAY_ASK_PATH = "/ask";
 export const RELAY_HEALTH_PATH = "/health";
 
-/** 扩展侧自己掐表的超时；比 dsb 默认的 140 秒宽一截，先到的一律按中继没响应算。 */
-export const RELAY_TIMEOUT_MS = 160_000;
+/**
+ * 扩展侧自己掐表的超时，必须宽过 dsb 的**总和**（排队 600s + 答复 140s = 740s），
+ * 先到的永远应该是中继——它能把超时折成 `opencode-timeout` 这个有意义的错误码，
+ * 扩展这边只能报一句「中继没响应」。留 20s 余量。
+ */
+export const RELAY_TIMEOUT_MS = 760_000;
 /** 探活（`GET /health`）只问在不在，快点回来。 */
 export const RELAY_HEALTH_TIMEOUT_MS = 5_000;
 

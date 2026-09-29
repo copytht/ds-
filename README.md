@@ -57,6 +57,10 @@ OPENSESS_ID=<opencode 会话 id>
 端口与口令每次启动时 `opencode service status` / `opencode service get password` **现读**
 （口令不落盘、不打印），默认监听 `127.0.0.1:8787`，可用 `.env` 里的 `DSB_PORT` 改。
 
+问一轮分两段等，各有各的预算：先是等目标会话空出来（它在跑活时问题只能在 inbox 里
+排队，默认 `DSB_QUEUE_TIMEOUT=600`），见到答复开写之后再给 `DSB_ASK_TIMEOUT=140` 写完。
+分开算是因为排队时长看人、不受控，混在一个预算里会把答复的时间吃掉（真机 #14）。
+
 端点：
 
 ```bash

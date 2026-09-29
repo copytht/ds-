@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from dsb.client import DEFAULT_ASK_TIMEOUT
+from dsb.client import DEFAULT_ASK_TIMEOUT, DEFAULT_QUEUE_TIMEOUT
 from dsb.opencode import ERROR_NOT_RUNNING, ERROR_TIMEOUT, ERROR_UNEXPECTED
 from dsb.server import (
     DEFAULT_PORT,
@@ -19,6 +19,7 @@ from dsb.server import (
     parse_question,
     resolve_ask_timeout,
     resolve_port,
+    resolve_queue_timeout,
     route,
 )
 
@@ -204,3 +205,17 @@ def test_resolve_ask_timeout_prefers_the_process_environment(
     assert resolve_ask_timeout("") == DEFAULT_ASK_TIMEOUT
     assert resolve_ask_timeout("DSB_ASK_TIMEOUT=不是秒数") == DEFAULT_ASK_TIMEOUT
     assert resolve_ask_timeout("DSB_ASK_TIMEOUT=-1") == DEFAULT_ASK_TIMEOUT
+
+
+def test_resolve_queue_timeout_reads_its_own_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DSB_QUEUE_TIMEOUT", "900")
+    assert resolve_queue_timeout("") == 900.0
+    monkeypatch.delenv("DSB_QUEUE_TIMEOUT")
+    assert resolve_queue_timeout("DSB_QUEUE_TIMEOUT=800") == 800.0
+    assert resolve_queue_timeout("") == DEFAULT_QUEUE_TIMEOUT
+    assert resolve_queue_timeout("DSB_QUEUE_TIMEOUT=不是秒数") == DEFAULT_QUEUE_TIMEOUT
+    # 排队与答复各读各的键，别互相串
+    assert resolve_queue_timeout("DSB_ASK_TIMEOUT=45.5") == DEFAULT_QUEUE_TIMEOUT
+    assert resolve_ask_timeout("DSB_QUEUE_TIMEOUT=800") == DEFAULT_ASK_TIMEOUT

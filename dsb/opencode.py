@@ -55,6 +55,18 @@ def _text_parts(message: Mapping[str, Any]) -> list[str]:
     return texts
 
 
+def has_assistant(body: Any) -> bool:
+    """消息列表里有没有 assistant 消息（哪怕正文还空着）。
+
+    与 :func:`extract_answer` 的区别是它只认「答复已经开写」这件事：正文空着
+    也算数。中继靠它把「等主对话空出来」和「等答复写完」两段等待分开算预算
+    （见 :meth:`dsb.client.OpencodeClient._await_answer`）。
+    """
+    if not isinstance(body, list):
+        return False
+    return any(isinstance(m, Mapping) and m.get("role") == "assistant" for m in body)
+
+
 def extract_answer(body: Any) -> str | None:
     """从消息响应体里取最后一轮 assistant 的文本；取不到返回 None。"""
     if isinstance(body, list):

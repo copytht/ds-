@@ -222,6 +222,7 @@ def test_deadline_exhausted_maps_to_opencode_timeout() -> None:
 
     client = make_client(
         open_url,
+        queue_timeout=300.0,
         ask_timeout=120.0,
         now=lambda: clock["now"],
         sleep=jump_after_sleep,
@@ -231,6 +232,76 @@ def test_deadline_exhausted_maps_to_opencode_timeout() -> None:
         "error": ERROR_TIMEOUT,
     }
     assert [call.method for call in open_url.calls] == ["POST", "POST", "GET"]
+
+
+def test_busy_parent_conversation_does_not_eat_the_answer_budget() -> None:
+    """主对话在忙时问题只能排队；排多久都不该吃掉答复该有的时间（真机 #14 的回归）。
+
+    排队 500s 远超 ask_timeout=140 —— 改之前这里会直接判 timeout。
+    """
+    open_url = FakeOpen(messages=live_messages(None))  # 起初只有排队中的问题
+    clock = {"now": 0.0}
+    polls = {"n": 0}
+
+    def sleep(_seconds: float) -> None:
+        polls["n"] += 1
+        if polls["n"] == 1:
+            clock["now"] = 500.0  # 主对话忙了 500s，答复这才开写、正文还空着
+            open_url.messages = live_messages("")
+        else:
+            clock["now"] = 520.0  # 答复又写了 20s
+            open_url.messages = live_messages("答复正文")
+
+    client = make_client(
+        open_url,
+        queue_timeout=600.0,
+        ask_timeout=140.0,
+        now=lambda: clock["now"],
+        sleep=sleep,
+    )
+    assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "答复正文"}
+
+
+def test_queue_budget_exhausted_maps_to_opencode_timeout() -> None:
+    """排到预算用完还没见 assistant 消息（主对话一直不空）→ 超时。"""
+    open_url = FakeOpen(messages=live_messages(None))
+    clock = {"now": 0.0}
+
+    def jump_after_sleep(_seconds: float) -> None:
+        clock["now"] = 10_000.0
+
+    client = make_client(
+        open_url,
+        queue_timeout=600.0,
+        ask_timeout=140.0,
+        now=lambda: clock["now"],
+        sleep=jump_after_sleep,
+    )
+    assert payload_from_outcome(client.ask("问题")) == {
+        "status": "error",
+        "error": ERROR_TIMEOUT,
+    }
+
+
+def test_answer_budget_starts_when_the_answer_starts() -> None:
+    """答复一开写就换预算：正文一直空着，只给 ask_timeout 那 140s（不是 600s）。"""
+    open_url = FakeOpen(messages=live_messages(""))  # assistant 消息在，正文始终空着
+    clock = {"now": 0.0}
+
+    def jump_after_sleep(_seconds: float) -> None:
+        clock["now"] += 200.0  # 每圈都跳过答复预算
+
+    client = make_client(
+        open_url,
+        queue_timeout=600.0,
+        ask_timeout=140.0,
+        now=lambda: clock["now"],
+        sleep=jump_after_sleep,
+    )
+    assert payload_from_outcome(client.ask("问题")) == {
+        "status": "error",
+        "error": ERROR_TIMEOUT,
+    }
 
 
 def test_http_error_from_opencode_is_unexpected_response() -> None:

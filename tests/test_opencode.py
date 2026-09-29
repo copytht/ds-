@@ -13,6 +13,7 @@ from dsb.opencode import (
     ERROR_UNEXPECTED,
     error_payload,
     extract_answer,
+    has_assistant,
     ok_payload,
     payload_from_outcome,
 )
@@ -70,6 +71,19 @@ def test_missing_assistant_text_is_none() -> None:
     assert extract_answer([{"role": "user", "parts": [{"type": "text", "text": "只有问"}]}]) is None
     assert extract_answer({"note": "不认识的形状"}) is None
     assert extract_answer("不是消息列表") is None
+
+
+def test_has_assistant_counts_an_empty_answer_as_started() -> None:
+    """正文空着也算「开写了」——中继靠它把排队预算换成答复预算。"""
+    assert has_assistant([{"role": "assistant", "parts": []}]) is True
+    assert (
+        has_assistant([{"role": "user", "parts": []}, {"role": "assistant", "parts": []}]) is True
+    )
+    only_user = [{"role": "user", "parts": [{"type": "text", "text": "还在排队"}]}]
+    assert has_assistant(only_user) is False
+    assert has_assistant([]) is False
+    assert has_assistant({"note": "不认识的形状"}) is False
+    assert has_assistant("不是消息列表") is False
 
 
 def test_success_without_answerable_text_is_an_error() -> None:

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from dsb.client import DEFAULT_ASK_TIMEOUT, OpencodeClient
+from dsb.client import DEFAULT_ASK_TIMEOUT, DEFAULT_QUEUE_TIMEOUT, OpencodeClient
 from dsb.config import parse_session_id
 from dsb.opencode import ERROR_UNEXPECTED, error_payload, payload_from_outcome
 
@@ -31,6 +31,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 PORT_ENV_KEY = "DSB_PORT"
 ASK_TIMEOUT_ENV_KEY = "DSB_ASK_TIMEOUT"
+QUEUE_TIMEOUT_ENV_KEY = "DSB_QUEUE_TIMEOUT"
 MAX_BODY_BYTES = 64 * 1024
 
 AskFn = Callable[[str], Mapping[str, Any]]
@@ -163,22 +164,29 @@ def resolve_port(env_text: str) -> int:
     return port
 
 
-def resolve_ask_timeout(env_text: str) -> float:
-    """等答复的超时秒数：进程环境变量优先，其次 `.env` 里的 DSB_ASK_TIMEOUT。"""
-    raw = os.environ.get(ASK_TIMEOUT_ENV_KEY) or parse_session_id(env_text, ASK_TIMEOUT_ENV_KEY)
+def resolve_seconds(env_text: str, key: str, default: float) -> float:
+    """一段等待的秒数：进程环境变量优先，其次 `.env` 里的同名键，最后默认值。"""
+    raw = os.environ.get(key) or parse_session_id(env_text, key)
     if raw is None:
-        return DEFAULT_ASK_TIMEOUT
+        return default
     try:
         seconds = float(raw)
     except ValueError:
         seconds = 0.0
     if seconds <= 0:
-        print(
-            f"[dsb] {ASK_TIMEOUT_ENV_KEY}={raw!r} 不是正秒数，改用默认 {DEFAULT_ASK_TIMEOUT}",
-            file=sys.stderr,
-        )
-        return DEFAULT_ASK_TIMEOUT
+        print(f"[dsb] {key}={raw!r} 不是正秒数，改用默认 {default}", file=sys.stderr)
+        return default
     return seconds
+
+
+def resolve_ask_timeout(env_text: str) -> float:
+    """等答复的超时秒数：进程环境变量优先，其次 `.env` 里的 DSB_ASK_TIMEOUT。"""
+    return resolve_seconds(env_text, ASK_TIMEOUT_ENV_KEY, DEFAULT_ASK_TIMEOUT)
+
+
+def resolve_queue_timeout(env_text: str) -> float:
+    """等主对话空出来的秒数：进程环境变量优先，其次 `.env` 里的 DSB_QUEUE_TIMEOUT。"""
+    return resolve_seconds(env_text, QUEUE_TIMEOUT_ENV_KEY, DEFAULT_QUEUE_TIMEOUT)
 
 
 def main() -> None:
@@ -186,7 +194,11 @@ def main() -> None:
     env_text = read_env_text()
     session_id = parse_session_id(env_text)
     port = resolve_port(env_text)
-    client = OpencodeClient(session_id, ask_timeout=resolve_ask_timeout(env_text))
+    client = OpencodeClient(
+        session_id,
+        queue_timeout=resolve_queue_timeout(env_text),
+        ask_timeout=resolve_ask_timeout(env_text),
+    )
     warm = client.warm_up()  # 启动现读：端口与口令只进内存
     print(
         f"[dsb] 中继已启动：http://{DEFAULT_HOST}:{port}（{ASK_PATH} / {HEALTH_PATH}）",
