@@ -1,18 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ASK_PHASES,
   FAILURE_RELAY_UNREACHABLE,
   FAILURE_UNEXPECTED_RESPONSE,
   parseRelayResponse,
+  parseStatusResponse,
   relayAskBody,
   relayAskUrl,
   relayHealthUrl,
+  relayStatusUrl,
 } from "./relay";
 
 describe("端点与请求体", () => {
-  it("打的是本机中继的 /ask 与 /health", () => {
+  it("打的是本机中继的 /ask、/health 与 /status", () => {
     expect(relayAskUrl()).toBe("http://127.0.0.1:8787/ask");
     expect(relayHealthUrl()).toBe("http://127.0.0.1:8787/health");
+    expect(relayStatusUrl()).toBe("http://127.0.0.1:8787/status");
   });
 
   it("请求体只有 question 一条", () => {
@@ -71,5 +75,64 @@ describe("parseRelayResponse · 响应 → 载荷", () => {
 
   it("网络层失败（没起 / 超时 / 被拦）也有一个在册的载荷可用", () => {
     expect(FAILURE_RELAY_UNREACHABLE).toBe("relay-unreachable");
+  });
+});
+
+describe("parseStatusResponse · 等待期的现场快照", () => {
+  function snapshot(body: unknown, status = 200) {
+    return parseStatusResponse(status, JSON.stringify(body));
+  }
+
+  it("中继答得体面但没有问句在途 → 可信、现场为空", () => {
+    expect(snapshot({ status: "ok", ask: null })).toEqual({ reachable: true, ask: null });
+  });
+
+  it("有问句在途 → 阶段、字数、剩余预算原样带出", () => {
+    expect(
+      snapshot({ status: "ok", ask: { phase: "writing", written: 128, remaining: 107.5 } }),
+    ).toEqual({ reachable: true, ask: { phase: "writing", written: 128, remaining: 107.5 } });
+  });
+
+  it("remaining 为 null 合法（还没定下用哪一段），缺着就同罪", () => {
+    expect(
+      snapshot({ status: "ok", ask: { phase: "queued", written: 0, remaining: null } }),
+    ).toEqual({
+      reachable: true,
+      ask: { phase: "queued", written: 0, remaining: null },
+    });
+    expect(snapshot({ status: "ok", ask: { phase: "running", written: 0 } })).toEqual({
+      reachable: false,
+      ask: null,
+    });
+  });
+
+  it("四个阶段都认", () => {
+    for (const phase of ASK_PHASES) {
+      expect(snapshot({ status: "ok", ask: { phase, written: 0, remaining: 1 } }).ask?.phase).toBe(
+        phase,
+      );
+    }
+  });
+
+  it("认不得的一律当「这条不可信」——快照是拿去上屏的，不猜", () => {
+    const offline = { reachable: false, ask: null };
+    expect(parseStatusResponse(500, JSON.stringify({ status: "ok", ask: null }))).toEqual(offline);
+    expect(parseStatusResponse(200, "不是 JSON")).toEqual(offline);
+    expect(parseStatusResponse(200, "[]")).toEqual(offline);
+    expect(parseStatusResponse(200, JSON.stringify({ status: "wat", ask: null }))).toEqual(offline);
+    expect(snapshot({ status: "ok" })).toEqual(offline); // 字段缺着跟字段坏了同罪
+    for (const ask of [
+      "不是对象",
+      { phase: "跑步", written: 0, remaining: 1 }, // 没在册的阶段
+      { phase: "queued", written: -1, remaining: 1 },
+      { phase: "queued", written: "128", remaining: 1 },
+      { phase: "queued", written: 0, remaining: "快好了" },
+      { phase: "queued" }, // 缺 written
+      true,
+    ]) {
+      expect(snapshot({ status: "ok", ask })).toEqual(offline);
+    }
+    // 唯独 ask: null 不在此列——那是「中继在、只是没问句在途」。
+    expect(snapshot({ status: "ok", ask: null })).toEqual({ reachable: true, ask: null });
   });
 });

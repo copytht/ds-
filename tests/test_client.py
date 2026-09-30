@@ -5,12 +5,16 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
+import threading
+import time
 import urllib.error
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
 from dsb.client import (
     CHILD_ROLE,
+    CHILD_TITLE,
     OpencodeClient,
     ServiceUnavailable,
     answer_prompt,
@@ -19,6 +23,7 @@ from dsb.client import (
     outcome_from_exception,
     read_service,
 )
+from dsb.events import DRAIN_FIRST_WAIT_SECONDS, DRAIN_QUIET_SECONDS
 from dsb.opencode import (
     ERROR_NOT_RUNNING,
     ERROR_TIMEOUT,
@@ -32,7 +37,10 @@ PASSWORD = "test-password-not-a-real-secret"
 SERVICE = {"host": HOST, "port": PORT, "password": PASSWORD}
 BASELINE_MS = 1_000_000
 SESSION = "ses_fixture"
-CHILD = "ses_child_forked"
+CHILD = "ses_child_spawned"
+#: 替身心跳的间隔：要比 `DRAIN_QUIET_SECONDS` 慢（否则 drain 永远收不拢），
+#: 又要比 `DRAIN_FIRST_WAIT_SECONDS` 快（否则 drain 等不到它）。
+BEAT_PERIOD_SECONDS = 0.1
 
 
 class FakeResponse:
@@ -83,11 +91,86 @@ class Call:
     """一次出站请求的现场记录。"""
 
     def __init__(self, request: Any, timeout: float | None) -> None:
-        self.method: str = request.method
+        # get_method() 而不是 .method：没显式传 method 的 Request 上没有那个属性。
+        self.method: str = request.get_method()
         self.url: str = request.full_url
         self.timeout = timeout
         self.data: bytes | None = request.data
         self.authorization: str | None = request.get_header("Authorization")
+
+
+class FakeSocket:
+    """``/api/event`` 那条连接的 socket 替身：握手后要把读改成无限等。
+
+    老写法把读超时留着，真机上超时一次就把 ``http.client`` 的缓冲读废了
+    （``cannot read from timed out object``），于是第一圈安静就把流判死。
+    所以这里记下 ``settimeout(None)`` 到底有没有被调用。
+    """
+
+    def __init__(self) -> None:
+        self.timeout: float | None = 0.5  # 握手超时的默认值，等着被改掉
+        self.shutdown_how: int | None = None
+
+    def settimeout(self, value: float | None) -> None:
+        self.timeout = value
+
+    def shutdown(self, how: int) -> None:
+        self.shutdown_how = how
+
+
+class FakeEvents:
+    """``/api/event`` 的替身：交出预设的行，交完就每轮给一拍心跳再安静下去。
+
+    默认 ``beats=True`` 模拟「连着、只是这一阵没事件」——真机上 opencode 每 15s
+    吐一拍心跳，所以安静不等于死；``beats=False`` 才是「心跳也停了」，用来验停摆判死。
+    ``dies=True`` 模拟对面收摊（EOF），用来验「断流当场判死」。
+
+    ``fp.raw._sock`` 是照着 ``http.client`` 长的：认不出 socket 的话
+    ``_open_events`` 会当场放弃这条流，等待退化成阻塞 wait——替身不长这样，
+    生产那条路就等于一条都没测到。
+    """
+
+    def __init__(
+        self, lines: list[bytes] | None = None, *, dies: bool = False, beats: bool = True
+    ) -> None:
+        self.lines = list(lines or [])
+        self.dies = dies
+        self.beats = beats
+        self._stalled = threading.Event()
+        self.closed = False
+        self.socket = FakeSocket()
+        self.fp = SimpleNamespace(raw=SimpleNamespace(_sock=self.socket))
+
+    def readline(self) -> bytes:
+        if self.lines:
+            return self.lines.pop(0)
+        if self.dies:
+            return b""  # EOF：opencode 没了
+        if not self.beats:
+            self._stalled.wait()  # 心跳也停了：堵在读上不放行，等它被判停摆
+            return b""
+        # 真机上心跳 15s 一拍；这里压到 0.1s 一拍——`_last_byte` 记的是**注入的**
+        # 假时钟，跳远之后必须真有一拍到手，否则「模型 500s 才开工」会被误判成停摆。
+        time.sleep(BEAT_PERIOD_SECONDS)
+        return b": heartbeat\n"
+
+    def close(self) -> None:
+        self.closed = True
+        self._stalled.set()  # 收摊要能把堵在读上的线程叫醒
+
+
+def sse(*payloads: dict[str, Any]) -> list[bytes]:
+    """事件 dict 列表 → SSE 的原始行（每条一个 ``data:`` 加一个空行）。"""
+    lines: list[bytes] = []
+    for payload in payloads:
+        lines.append(f"data: {json.dumps(payload, ensure_ascii=False)}\n".encode())
+        lines.append(b"\n")
+    return lines
+
+
+def child_event(kind: str, **data: Any) -> dict[str, Any]:
+    """一个属于本子会话的事件（sessionID 用 fixture 里 spawn 出来的那个）。"""
+    return {"id": f"evt_{kind}", "type": kind, "data": {"sessionID": CHILD, **data}}
 
 
 class FakeOpen:
@@ -101,26 +184,49 @@ class FakeOpen:
         prompt_error: BaseException | None = None,
         wait_error: BaseException | None = None,
         message_error: BaseException | None = None,
-        fork: Any = None,
-        fork_error: BaseException | None = None,
+        parent: Any = None,
+        spawn: Any = None,
+        spawn_error: BaseException | None = None,
         delete_error: BaseException | None = None,
+        events: FakeEvents | None = None,
+        events_error: BaseException | None = None,
+        active_error: BaseException | None = None,
     ) -> None:
         self.messages = messages
         self.prompt = {"data": {"id": "inb_1"}} if prompt is None else prompt
         self.prompt_error = prompt_error
         self.wait_error = wait_error
         self.message_error = message_error
-        self.fork = {"data": {"id": CHILD}} if fork is None else fork
-        self.fork_error = fork_error
+        # 事件流默认「活着但安静」：这就是生产的主路径（挂得上、一时半会没事件）。
+        # 挂不上要显式给 events_error，等待会退化成阻塞 wait。
+        self.events = FakeEvents() if events is None else events
+        self.events_error = events_error
+        self.active_error = active_error
+        # 父会话身上借来的设置（agent / model / 目录），spawn 全靠它组装请求体
+        self.parent = (
+            {
+                "data": {
+                    "agent": "build",
+                    "model": {"providerID": "opencode", "id": "mimo-v2.6-flash-free"},
+                    "location": {"directory": "/repo"},
+                }
+            }
+            if parent is None
+            else parent
+        )
+        self.spawn = {"data": {"id": CHILD}} if spawn is None else spawn
+        self.spawn_error = spawn_error
         self.delete_error = delete_error
         self.calls: list[Call] = []
 
     def __call__(self, request: Any, timeout: float | None = None) -> FakeResponse:
         self.calls.append(Call(request, timeout))
-        if request.full_url.endswith("/fork"):
-            if self.fork_error is not None:
-                raise self.fork_error
-            return FakeResponse(self.fork)
+        if request.method == "GET" and request.full_url.endswith(f"/api/session/{SESSION}"):
+            return FakeResponse(self.parent)
+        if request.method == "POST" and request.full_url.endswith("/api/session"):
+            if self.spawn_error is not None:
+                raise self.spawn_error
+            return FakeResponse(self.spawn)
         if request.method == "DELETE":
             if self.delete_error is not None:
                 raise self.delete_error
@@ -139,6 +245,14 @@ class FakeOpen:
             if self.message_error is not None:
                 raise self.message_error
             return FakeResponse(self.messages)
+        if request.full_url.endswith("/api/event"):
+            if self.events_error is not None:
+                raise self.events_error
+            return self.events
+        if request.full_url.endswith("/api/session/active"):
+            if self.active_error is not None:
+                raise self.active_error
+            return FakeResponse({"data": {"ses_running": {"type": "running"}}})
         raise AssertionError(f"没料到的请求：{request.full_url}")
 
 
@@ -166,31 +280,74 @@ def test_ask_returns_success_and_skips_the_previous_answer() -> None:
         "answer": "入口在 dsb/server.py。",
     }
     methods = [call.method for call in open_url.calls]
-    assert methods == ["POST", "POST", "POST", "GET", "DELETE"]
-    # fork → prompt → wait → message → 删子会话
-    assert open_url.calls[0].url.endswith(f"/api/session/{SESSION}/fork")
-    assert open_url.calls[1].url.endswith(f"/api/session/{CHILD}/prompt")
-    assert open_url.calls[2].url.endswith(f"/api/experimental/session/{CHILD}/wait")
-    assert "/message?" in open_url.calls[3].url
-    assert open_url.calls[4].url.endswith(f"/api/session/{CHILD}")
+    assert methods == ["GET", "POST", "GET", "POST", "GET", "DELETE"]
+    # 读父会话设置 → spawn 空子会话 → 挂事件流 → prompt → message → 删子会话
+    # （事件流抢在 prompt 之前，晚一步就吃不到 execution.started）
+    assert open_url.calls[0].method == "GET"
+    assert open_url.calls[0].url.endswith(f"/api/session/{SESSION}")
+    assert open_url.calls[1].method == "POST"
+    assert open_url.calls[1].url.endswith("/api/session")
+    assert open_url.calls[2].url.endswith("/api/event")
+    assert open_url.calls[3].url.endswith(f"/api/session/{CHILD}/prompt")
+    assert "/message?" in open_url.calls[4].url
+    assert open_url.calls[5].url.endswith(f"/api/session/{CHILD}")
 
 
-def test_ask_goes_to_a_forked_child_never_to_the_main_conversation() -> None:
-    """主 agent 是页面上的模型；本机这条主对话只当上下文来源，问题绝不发给它。"""
+def test_spawned_child_inherits_settings_but_never_history() -> None:
+    """子会话只借 agent / model / 工作目录（dsh 的 spawn），绝不复制主对话历史。
+
+    委派链上的父级是网页那边的模型，历史在它那边；本机主对话是另一个 agent，
+    走 fork 就等于把无关上下文塞给子 agent。这里把「不走 /fork」钉成回归。
+    """
     open_url = FakeOpen(messages=live_messages("答复"))
     make_client(open_url).ask("问题")
 
-    for call in open_url.calls:
-        if "/message" in call.url:
-            continue
-        assert f"/api/session/{SESSION}/" not in call.url or call.url.endswith("/fork")
-    # 主会话只被 fork 读过一次（投影历史），没有被 prompt
+    assert not any(call.url.endswith("/fork") for call in open_url.calls)
+    created = json.loads(open_url.calls[1].data.decode("utf-8"))
+    assert created == {
+        "title": CHILD_TITLE,
+        "agent": "build",
+        "model": {"providerID": "opencode", "id": "mimo-v2.6-flash-free"},
+        "location": {"directory": "/repo"},
+    }
+
+
+def test_spawn_without_an_id_is_an_unexpected_response() -> None:
+    """spawn 拿不到子会话 id → 非预期响应，不该静默把问题塞回主对话。"""
+    open_url = FakeOpen(spawn={"data": {"note": "没有 id"}})
+    outcome = make_client(open_url).ask("问题")
+
+    assert payload_from_outcome(outcome) == {
+        "status": "error",
+        "error": ERROR_UNEXPECTED,
+    }
+    assert not any(c.url.endswith("/prompt") for c in open_url.calls)
+
+
+def test_spawn_connection_loss_is_not_running() -> None:
+    open_url = FakeOpen(spawn_error=urllib.error.URLError(ConnectionRefusedError("没起")))
+    outcome = make_client(open_url).ask("问题")
+    assert outcome == {"kind": "not-running"}
+    assert payload_from_outcome(outcome) == {"status": "error", "error": ERROR_NOT_RUNNING}
+
+
+def test_ask_never_prompts_the_main_conversation() -> None:
+    """主 agent 是页面上的模型；本机这条主对话绝不被 prompt、也不阻塞。
+
+    它在这条链上只有一处被 GET：读 agent/model/目录这三项设置，没有任何对话内容
+    被读走，也没有任何等待落在它身上（子会话是新起的，跟它无关）。
+    """
+    open_url = FakeOpen(messages=live_messages("答复"))
+    make_client(open_url).ask("问题")
+
+    reads = [c for c in open_url.calls if c.url.endswith(f"/api/session/{SESSION}")]
+    assert [c.method for c in reads] == ["GET"]
     assert not any(c.url.endswith(f"/api/session/{SESSION}/prompt") for c in open_url.calls)
     assert not any(f"/api/session/{SESSION}/wait" in c.url for c in open_url.calls)
 
 
 def test_child_is_disposed_even_when_the_answer_fails() -> None:
-    """答复失败也必须删子会话，否则会话列表里堆一排 fork #N。"""
+    """答复失败也必须删子会话，否则会话列表里堆一排「dsb 子会话」。"""
     open_url = FakeOpen(messages=live_messages(None), message_error=TimeoutError("boom"))
     outcome = make_client(open_url).ask("问题")
 
@@ -206,25 +363,6 @@ def test_failing_to_dispose_the_child_does_not_change_the_outcome() -> None:
 
     assert outcome["kind"] == "success"
     assert payload_from_outcome(outcome) == {"status": "ok", "answer": "答复"}
-
-
-def test_fork_failure_is_an_unexpected_response() -> None:
-    """fork 拿不到子会话 id → 非预期响应，不该静默把问题塞回主对话。"""
-    open_url = FakeOpen(fork={"data": {"note": "没有 id"}})
-    outcome = make_client(open_url).ask("问题")
-
-    assert payload_from_outcome(outcome) == {
-        "status": "error",
-        "error": ERROR_UNEXPECTED,
-    }
-    assert not any(c.url.endswith("/prompt") for c in open_url.calls)
-
-
-def test_fork_connection_loss_is_not_running() -> None:
-    open_url = FakeOpen(fork_error=urllib.error.URLError(ConnectionRefusedError("没起")))
-    outcome = make_client(open_url).ask("问题")
-    assert outcome == {"kind": "not-running"}
-    assert payload_from_outcome(outcome) == {"status": "error", "error": ERROR_NOT_RUNNING}
 
 
 def test_ask_sends_the_password_only_in_the_authorization_header() -> None:
@@ -277,10 +415,12 @@ def test_connection_refused_is_not_running_and_forces_a_reread() -> None:
 
 
 def test_wait_timeout_maps_to_opencode_timeout() -> None:
-    open_url = FakeOpen(wait_error=TimeoutError("timed out"))
+    """事件流挂不上时退回阻塞 wait（老路），它等超时照旧折成 opencode-timeout。"""
+    open_url = FakeOpen(wait_error=TimeoutError("timed out"), events_error=OSError("挂不上"))
     outcome = make_client(open_url).ask("问题")
     assert outcome == {"kind": "timeout"}
     assert payload_from_outcome(outcome) == {"status": "error", "error": ERROR_TIMEOUT}
+    assert any(c.url.endswith("/wait") for c in open_url.calls)  # 退化路确实走了 wait
 
 
 def test_deadline_exhausted_maps_to_opencode_timeout() -> None:
@@ -292,8 +432,8 @@ def test_deadline_exhausted_maps_to_opencode_timeout() -> None:
 
     client = make_client(
         open_url,
-        queue_timeout=300.0,
-        ask_timeout=120.0,
+        start_timeout=300.0,
+        answer_timeout=120.0,
         now=lambda: clock["now"],
         sleep=jump_after_sleep,
     )
@@ -302,8 +442,9 @@ def test_deadline_exhausted_maps_to_opencode_timeout() -> None:
         "error": ERROR_TIMEOUT,
     }
     assert [call.method for call in open_url.calls] == [
+        "GET",
         "POST",
-        "POST",
+        "GET",
         "POST",
         "GET",
         "DELETE",
@@ -311,29 +452,29 @@ def test_deadline_exhausted_maps_to_opencode_timeout() -> None:
 
 
 def test_child_prompt_carries_the_role_frame() -> None:
-    """fork 出来的子会话知道自己在分叉，角色框是为了让它只答问题本身。"""
+    """子会话空着出生，角色框把「没有此前的对话」讲清楚，让它只答问题本身。"""
     open_url = FakeOpen(messages=live_messages("答复"))
     make_client(open_url).ask("超时怎么修？")
 
-    sent = json.loads(open_url.calls[1].data.decode("utf-8"))
+    sent = json.loads(open_url.calls[3].data.decode("utf-8"))  # 0父 1spawn 2事件流 3prompt
     assert "超时怎么修？" in sent["text"]
     assert sent["text"].startswith(CHILD_ROLE)
     assert sent["text"] == answer_prompt("超时怎么修？")
 
 
-def test_busy_parent_conversation_does_not_eat_the_answer_budget() -> None:
-    """主对话在忙时问题只能排队；排多久都不该吃掉答复该有的时间（真机 #14 的回归）。
+def test_slow_start_does_not_eat_the_answer_budget() -> None:
+    """模型迟迟不开工也不该挤占答复该有的时间（真机 #14 的回归）。
 
-    排队 500s 远超 ask_timeout=140 —— 改之前这里会直接判 timeout。
+    开工等到 500s，远超 answer_timeout=140 —— 合在一个预算里的话这里会直接判 timeout。
     """
-    open_url = FakeOpen(messages=live_messages(None))  # 起初只有排队中的问题
+    open_url = FakeOpen(messages=live_messages(None))  # 起初只有还没开工的子会话
     clock = {"now": 0.0}
     polls = {"n": 0}
 
     def sleep(_seconds: float) -> None:
         polls["n"] += 1
         if polls["n"] == 1:
-            clock["now"] = 500.0  # 主对话忙了 500s，答复这才开写、正文还空着
+            clock["now"] = 500.0  # 模型 500s 才开工，正文还空着
             open_url.messages = live_messages("")
         else:
             clock["now"] = 520.0  # 答复又写了 20s
@@ -341,16 +482,16 @@ def test_busy_parent_conversation_does_not_eat_the_answer_budget() -> None:
 
     client = make_client(
         open_url,
-        queue_timeout=600.0,
-        ask_timeout=140.0,
+        start_timeout=600.0,
+        answer_timeout=140.0,
         now=lambda: clock["now"],
         sleep=sleep,
     )
     assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "答复正文"}
 
 
-def test_queue_budget_exhausted_maps_to_opencode_timeout() -> None:
-    """排到预算用完还没见 assistant 消息（主对话一直不空）→ 超时。"""
+def test_start_budget_exhausted_maps_to_opencode_timeout() -> None:
+    """开工预算用完还没见 assistant 消息（模型一直不吐字）→ 超时。"""
     open_url = FakeOpen(messages=live_messages(None))
     clock = {"now": 0.0}
 
@@ -359,8 +500,8 @@ def test_queue_budget_exhausted_maps_to_opencode_timeout() -> None:
 
     client = make_client(
         open_url,
-        queue_timeout=600.0,
-        ask_timeout=140.0,
+        start_timeout=600.0,
+        answer_timeout=140.0,
         now=lambda: clock["now"],
         sleep=jump_after_sleep,
     )
@@ -371,7 +512,7 @@ def test_queue_budget_exhausted_maps_to_opencode_timeout() -> None:
 
 
 def test_answer_budget_starts_when_the_answer_starts() -> None:
-    """答复一开写就换预算：正文一直空着，只给 ask_timeout 那 140s（不是 600s）。"""
+    """答复一开写就换预算：正文一直空着，只给 answer_timeout 那 140s（不是 600s）。"""
     open_url = FakeOpen(messages=live_messages(""))  # assistant 消息在，正文始终空着
     clock = {"now": 0.0}
 
@@ -380,8 +521,8 @@ def test_answer_budget_starts_when_the_answer_starts() -> None:
 
     client = make_client(
         open_url,
-        queue_timeout=600.0,
-        ask_timeout=140.0,
+        start_timeout=600.0,
+        answer_timeout=140.0,
         now=lambda: clock["now"],
         sleep=jump_after_sleep,
     )
@@ -497,3 +638,153 @@ def test_fresh_messages_filters_by_baseline_and_sorts_ascending() -> None:
     assert fresh is not None
     assert [message["role"] for message in fresh] == ["user", "assistant"]
     assert fresh_messages(body, BASELINE_MS + 10_000) == []
+
+
+# ---------------------------------------------------------------- 事件流（持续监控）
+
+
+def test_event_stream_reads_are_switched_to_blocking() -> None:
+    """握手的超时不能带进读里。
+
+    真机上就是这里出的事：读超时抛一次，``http.client`` 的缓冲读就永久废了
+    （``cannot read from timed out object``），于是第一圈安静之后的第二圈 ``drain``
+    当场 ``dead``，问句秒回 ``opencode-not-running``。
+    """
+    open_url = FakeOpen(messages=live_messages("答复"))
+    make_client(open_url).ask("问题")
+    assert open_url.events.socket.timeout is None  # 连上之后读是无限等的
+
+
+def test_beat_period_sits_between_the_two_drain_waits() -> None:
+    """替身的心跳必须夹在 `drain` 的两个等待之间，不然两头都验不到。
+
+    比安静窗慢，`drain` 才收得拢；比首个事件的等待快，`drain` 才等得到——
+    等不到就没有字节，注入的假时钟一跳远就会被误判成心跳停摆。
+    """
+    assert DRAIN_QUIET_SECONDS < BEAT_PERIOD_SECONDS < DRAIN_FIRST_WAIT_SECONDS
+
+
+def test_stream_death_is_reported_as_not_running() -> None:
+    """opencode 一断流，等待当场收场——不陪它等到预算用完。
+
+    老办法只能靠 `wait` 那个长挂的连接被对端收走才发觉；事件流是 TCP 一断立刻知道。
+    """
+    open_url = FakeOpen(messages=live_messages(None), events=FakeEvents(dies=True))
+    outcome = make_client(open_url).ask("问题")
+
+    assert outcome == {"kind": "not-running"}
+    assert payload_from_outcome(outcome) == {"status": "error", "error": ERROR_NOT_RUNNING}
+    assert open_url.calls[-1].url.endswith(f"/api/session/{CHILD}")  # 子会话照删不误
+    assert not any(c.url.endswith("/wait") for c in open_url.calls)  # 走的是事件流这条路
+
+
+def test_stalled_heartbeat_is_reported_as_not_running() -> None:
+    """心跳停摆 30s ＝ 进程还在但卡住了：比等满预算早得多判出来。"""
+    open_url = FakeOpen(messages=live_messages(None), events=FakeEvents(beats=False))
+    clock = {"now": 0.0}
+
+    def sleep(_seconds: float) -> None:
+        clock["now"] = 40.0  # 一圈就越过停摆线（标称心跳 15s，漏两拍算数）
+
+    client = make_client(open_url, now=lambda: clock["now"], sleep=sleep)
+    assert payload_from_outcome(client.ask("问题")) == {
+        "status": "error",
+        "error": ERROR_NOT_RUNNING,
+    }
+    assert not any(c.url.endswith("/wait") for c in open_url.calls)
+
+
+def test_progress_snapshot_reports_phase_and_written_while_waiting() -> None:
+    """等待期间的现场能被 `/status` 读到：阶段往前走、字数往上加。
+
+    这就是「等着的时候什么都不知道」的解药——中继知道的，页面侧也能知道。
+    """
+    open_url = FakeOpen(
+        messages=live_messages(None),
+        events=FakeEvents(
+            lines=sse(
+                child_event("session.execution.started"),
+                child_event("session.text.started"),
+                child_event("session.text.delta", delta="入口在"),
+                child_event("session.text.delta", delta=" dsb。"),
+            )
+        ),
+    )
+    # sleep 里要读还造不出来的 client（构造时才收 sleep），先留个位置。
+    client_slot: list[OpencodeClient] = []
+    snapshots: list[Any] = []
+    rounds = {"n": 0}
+
+    def sleep(_seconds: float) -> None:
+        rounds["n"] += 1
+        snapshots.append(client_slot[0].status()["ask"])  # 这一圈的现场
+        if rounds["n"] == 1:
+            open_url.messages = live_messages("答复正文")
+
+    client = make_client(open_url, start_timeout=600.0, answer_timeout=140.0, sleep=sleep)
+    client_slot.append(client)
+
+    assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "答复正文"}
+    assert snapshots[0] == {"phase": "writing", "written": 8, "remaining": 600.0}
+    # 收摊之后不能留个幽灵问句
+    assert client.status() == {"status": "ok", "ask": None}
+
+
+def test_events_from_other_sessions_never_move_our_progress() -> None:
+    """事件流上什么会话都有，只认自己 spawn 的那一个。"""
+    open_url = FakeOpen(
+        messages=live_messages(None),
+        events=FakeEvents(
+            lines=sse(
+                {
+                    "id": "evt_x",
+                    "type": "session.execution.started",
+                    "data": {"sessionID": "ses_别人家"},
+                }
+            )
+        ),
+    )
+    # sleep 里要读还造不出来的 client（构造时才收 sleep），先留个位置。
+    client_slot: list[OpencodeClient] = []
+    snapshots: list[Any] = []
+
+    def sleep(_seconds: float) -> None:
+        snapshots.append(client_slot[0].status()["ask"])
+        open_url.messages = live_messages("答复")
+
+    client = make_client(open_url, start_timeout=600.0, sleep=sleep)
+    client_slot.append(client)
+
+    assert client.ask("问题")["kind"] == "success"
+    # 别人家开工了，我们的阶段还停在排队
+    assert snapshots[0]["phase"] == "queued"
+    assert snapshots[0]["written"] == 0
+
+
+def test_status_is_idle_outside_an_ask() -> None:
+    client = make_client(FakeOpen(messages=live_messages("答复")))
+    assert client.status() == {"status": "ok", "ask": None}
+    client.ask("问题")
+    assert client.status() == {"status": "ok", "ask": None}
+
+
+def test_probe_reports_opencode_liveness() -> None:
+    """`/health` 里那个 `opencode` 字段：活的回 up，连不上回 down。"""
+    assert make_client(FakeOpen()).probe() == "up"
+
+    reads: list[int] = []
+
+    def reader() -> dict[str, Any]:
+        reads.append(1)
+        return SERVICE
+
+    failing = FakeOpen(active_error=urllib.error.URLError(ConnectionRefusedError("没起")))
+    client = make_client(failing, service_reader=reader)
+    assert client.probe() == "down"
+    assert client.probe() == "down"
+    assert len(reads) == 2  # 探活失败把口令缓存丢掉，每次都现读端口
+
+    def boom() -> dict[str, Any]:
+        raise ServiceUnavailable("服务没起")
+
+    assert OpencodeClient(SESSION, service_reader=boom, urlopen=FakeOpen()).probe() == "down"

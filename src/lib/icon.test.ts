@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { ICON_COLORS, ICON_SIZE, ICON_STATES, iconTitle, renderIcon } from "./icon";
+import {
+  ICON_COLORS,
+  ICON_SIZE,
+  ICON_STATES,
+  afterHealthProbe,
+  badgeText,
+  describeAsk,
+  iconTitle,
+  renderIcon,
+} from "./icon";
+import { ASK_PHASES, type AskStatus } from "./relay";
 import { failureNotice, RELAY_START_COMMAND } from "./reply";
 
 function pixelAt(pixels: Uint8ClampedArray, x: number, y: number, size = ICON_SIZE) {
@@ -104,5 +114,111 @@ describe("iconTitle · 悬停文案", () => {
   it("每个状态都有自己的文案", () => {
     const rendered = ICON_STATES.map((state) => iconTitle(state));
     expect(new Set(rendered).size).toBe(rendered.length);
+  });
+});
+
+describe("afterHealthProbe · 周期探活 → 状态位", () => {
+  it("总开关关着：探到什么一律原样，不上屏", () => {
+    expect(afterHealthProbe("off", true)).toEqual({ state: "off", notice: null });
+    expect(afterHealthProbe("off", false)).toEqual({ state: "off", notice: null });
+  });
+
+  it("可达就翻回绿、清掉原因", () => {
+    expect(afterHealthProbe("on-unreachable", true)).toEqual({
+      state: "on-reachable",
+      notice: null,
+    });
+  });
+
+  it("不可达就翻红，挂上原因与启动命令", () => {
+    const next = afterHealthProbe("on-reachable", false);
+    expect(next.state).toBe("on-unreachable");
+    expect(next.notice).toEqual(failureNotice("relay-unreachable"));
+    expect(next.notice?.command).toBe(RELAY_START_COMMAND);
+  });
+
+  it("同一种探测结果给同一个 notice 引用——background 靠引用判断「没变就别重画」", () => {
+    const first = afterHealthProbe("on-reachable", false);
+    const second = afterHealthProbe("on-reachable", false);
+    expect(first.notice).toBe(second.notice);
+  });
+});
+
+/** 一份现场，参数就是「走到哪一步、写了多少、还剩多少」。 */
+function ask(phase: AskStatus["phase"], written = 0, remaining: number | null = null): AskStatus {
+  return { phase, written, remaining };
+}
+
+describe("badgeText · 角标", () => {
+  it("关与不可达是硬状态，压过一切——像素画不出来时它要独自把三态撑住", () => {
+    expect(badgeText("off")).toBe("关");
+    expect(badgeText("off", ask("writing", 999, 1))).toBe("关");
+    expect(badgeText("on-unreachable")).toBe("!");
+    expect(badgeText("on-unreachable", ask("queued", 0, 1))).toBe("!");
+  });
+
+  it("开着且可达、没有问句在途：不占角标", () => {
+    expect(badgeText("on-reachable")).toBe("");
+    expect(badgeText("on-reachable", null)).toBe("");
+  });
+
+  it("有问句在途就报一个字：等 / 想 / 写 / 完了不占", () => {
+    expect(ASK_PHASES.map((phase) => badgeText("on-reachable", ask(phase, 1, 1)))).toEqual([
+      "等",
+      "想",
+      "写",
+      "",
+    ]);
+  });
+});
+
+describe("describeAsk · 等待现场的一句话", () => {
+  it("阶段各有说法", () => {
+    expect(describeAsk(ask("queued"))).toContain("等模型开工");
+    expect(describeAsk(ask("running"))).toContain("在想");
+    expect(describeAsk(ask("writing"))).toContain("正在写答复");
+    expect(describeAsk(ask("done"))).toContain("写完");
+  });
+
+  it("只有在写的时候才报字数——没开写就报 0 字是噪音", () => {
+    expect(describeAsk(ask("queued", 5))).not.toContain("字");
+    expect(describeAsk(ask("running", 5))).not.toContain("字");
+    expect(describeAsk(ask("writing", 128))).toContain("已写 128 字");
+  });
+
+  it("剩余预算只在为正时才报：缺着、耗尽、为负都不提", () => {
+    expect(describeAsk(ask("writing", 1, 107.5))).toContain("还剩 108 秒");
+    for (const remaining of [null, 0, -3]) {
+      expect(describeAsk(ask("writing", 1, remaining))).not.toContain("还剩");
+    }
+  });
+});
+
+describe("iconTitle · 等待现场进悬停", () => {
+  it("开着且可达时把现场摆出来", () => {
+    const title = iconTitle("on-reachable", null, ask("writing", 128, 52));
+    expect(title).toContain("中继可达");
+    expect(title).toContain("正在写答复");
+    expect(title).toContain("已写 128 字");
+    expect(title).toContain("还剩 52 秒");
+    expect(title).toContain("点击切换总开关");
+  });
+
+  it("没问句在途就还是原来那一句", () => {
+    expect(iconTitle("on-reachable", null, null)).toBe(iconTitle("on-reachable"));
+    expect(iconTitle("on-reachable", null, ask("writing"))).not.toBe(iconTitle("on-reachable"));
+  });
+
+  it("不可达时手里那份进度已经作废，不上屏", () => {
+    const title = iconTitle("on-unreachable", null, ask("writing", 128, 52));
+    expect(title).not.toContain("已写 128 字");
+    expect(title).toContain("启动命令");
+    expect(title).toContain(RELAY_START_COMMAND);
+  });
+
+  it("关着的时候进度更不相干", () => {
+    const title = iconTitle("off", null, ask("writing", 128, 52));
+    expect(title).not.toContain("128");
+    expect(title).toContain("总开关已关");
   });
 });

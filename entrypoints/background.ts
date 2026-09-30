@@ -2,17 +2,31 @@ import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 
 import { askResponseMessage, parseAskRequest } from "../src/lib/channel";
-import { iconTitle, ICON_COLORS, ICON_SIZE, renderIcon, type IconState } from "../src/lib/icon";
+import {
+  afterHealthProbe,
+  badgeText,
+  iconTitle,
+  ICON_COLORS,
+  ICON_SIZE,
+  renderIcon,
+  type IconState,
+} from "../src/lib/icon";
 import { nextMessageId } from "../src/lib/id";
 import {
   FAILURE_RELAY_UNREACHABLE,
   FAILURE_UNEXPECTED_RESPONSE,
   parseRelayResponse,
+  parseStatusResponse,
   relayAskBody,
   relayAskUrl,
   relayHealthUrl,
+  relayStatusUrl,
   RELAY_HEALTH_TIMEOUT_MS,
+  RELAY_STATUS_POLL_INTERVAL_MS,
+  RELAY_STATUS_TIMEOUT_MS,
   RELAY_TIMEOUT_MS,
+  type AskStatus,
+  type StatusSnapshot,
 } from "../src/lib/relay";
 import {
   errorPayload,
@@ -27,25 +41,33 @@ import { readToggle, TOGGLE_STORAGE_KEY } from "../src/lib/toggle";
  *
  * 1. 打中继（`POST /ask`）——网络层的失败也折成同构载荷，解析只有一条路径；
  * 2. 工具栏图标即状态位：关 / 开且中继可达 / 开但中继不可达，悬停给原因与启动命令；
- * 3. 点击图标切换总开关（总开关本身还是只存在 `storage.local`，默认关）。
+ * 3. 点击图标切换总开关（总开关本身还是只存在 `storage.local`，默认关）；
+ * 4. 问句在途时轮询 `GET /status`，把等待现场（阶段 / 字数 / 剩余预算）摆上角标与悬停，
+ *    中继答不上来当场翻红——进度只走图标，**不进对话流**。
  *
  * 不建 options 页、不建 popup、不建面板（spec #9 Out of Scope）。
  */
 export default defineBackground(() => {
+  /** 周期探活的闹钟名与周期：30s 是 alarms 的下限，再密浏览器也不认。 */
+  const HEALTH_ALARM_NAME = "relay-health";
+  const HEALTH_ALARM_PERIOD_MINUTES = 0.5;
+
   /** 图标三态。 */
   let state: IconState = "off";
   /** 不可达时的原因与启动命令，进悬停文案。 */
   let notice: FailureNotice | null = null;
+  /** 问句在途时的现场（阶段/字数/剩余预算），由 `/status` 轮询喂；空档恒为 null。 */
+  let askProgress: AskStatus | null = null;
 
-  function badgeText(value: IconState): string {
-    if (value === "off") return "关";
-    if (value === "on-reachable") return "";
-    return "!";
-  }
-
-  /** 上图标：先拼悬停文案，再画像素；像素画不出来就退回角标，三态至少还分得开。 */
+  /**
+   * 上图标：先拼悬停文案，再画像素；像素画不出来就退回角标，三态至少还分得开。
+   *
+   * 角标每次上屏都写一遍——它不再只是「画不出来时的兜底」：开着且可达时还背着
+   * 等待现场（等 / 想 / 写），这是「等着的时候什么都不知道」那个缺口的出口。
+   */
   async function paintIcon(): Promise<void> {
-    await browser.action.setTitle({ title: iconTitle(state, notice) });
+    await browser.action.setTitle({ title: iconTitle(state, notice, askProgress) });
+    await browser.action.setBadgeText({ text: badgeText(state, askProgress) });
     try {
       await browser.action.setIcon({
         imageData: new ImageData(renderIcon(state), ICON_SIZE, ICON_SIZE),
@@ -53,7 +75,6 @@ export default defineBackground(() => {
     } catch (error) {
       const [red, green, blue] = ICON_COLORS[state];
       console.log("[ds-] 图标像素画不出来，退回角标", error);
-      await browser.action.setBadgeText({ text: badgeText(state) });
       await browser.action.setBadgeBackgroundColor({ color: `rgb(${red}, ${green}, ${blue})` });
     }
   }
@@ -94,6 +115,104 @@ export default defineBackground(() => {
     }
   }
 
+  /** 问一次现场：读不到体面的答案一律当「这条不可信」，不猜。 */
+  async function readStatus(): Promise<StatusSnapshot> {
+    try {
+      const response = await fetchWithTimeout(relayStatusUrl(), RELAY_STATUS_TIMEOUT_MS);
+      return parseStatusResponse(response.status, await response.text());
+    } catch {
+      return { reachable: false, ask: null };
+    }
+  }
+
+  /**
+   * 现场快照 → 图标。不可达就翻红挂原因；达就先把状态拨回可达，再把等待现场摆上去。
+   *
+   * 每回都重画是故意的：现场的价值就在「每 3s 变一次」（字数在涨、预算在走），
+   * 去重反而把它省没了；真正贵的那条 30s 探活另有 `healthProbe` 自己的去重。
+   */
+  function applyStatus(snapshot: StatusSnapshot): void {
+    if (state === "off") return;
+    if (!snapshot.reachable) {
+      state = "on-unreachable";
+      notice = failureNotice(FAILURE_RELAY_UNREACHABLE);
+      askProgress = null; // 手里那份进度已经作废，留着只会误导
+      console.log("[ds-] 等待期问现场没答上来，图标翻红");
+      void paintIcon();
+      return;
+    }
+    if (state === "on-unreachable") {
+      state = "on-reachable";
+      notice = null;
+    }
+    askProgress = snapshot.ask;
+    void paintIcon();
+  }
+
+  /**
+   * 等待期的现场轮询：每 3s 打一次 `GET /status`，把中继看到的阶段 / 字数 / 剩余预算
+   * 摆到角标与悬停上。
+   *
+   * 「中继死了要多快发现」不需要另外立一条静默判死的规矩——每次轮询自带 5s 超时，
+   * 问不到当场就红（最坏 8s），比攒到 30s 快得多。用 setTimeout 串成链，避免
+   * 上一趟还没回来下一趟又压上去。
+   */
+  function startStatusPolling(): () => void {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function tick(): Promise<void> {
+      if (stopped) return;
+      const snapshot = await readStatus();
+      if (stopped) return;
+      applyStatus(snapshot);
+      if (stopped) return;
+      timer = setTimeout(() => void tick(), RELAY_STATUS_POLL_INTERVAL_MS);
+    }
+
+    void tick();
+    return () => {
+      stopped = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }
+
+  /**
+   * 周期探活的排班：开着才排、关了就撤——总开关关着时扩展不该每 30s 白被叫醒一次。
+   * 这条只管「中继还在不在」；问句在途时的存活另有 keepAliveWhileAsking 兜着。
+   */
+  async function syncHealthAlarm(enabled: boolean): Promise<void> {
+    if (enabled) {
+      await browser.alarms.create(HEALTH_ALARM_NAME, {
+        periodInMinutes: HEALTH_ALARM_PERIOD_MINUTES,
+      });
+      return;
+    }
+    await browser.alarms.clear(HEALTH_ALARM_NAME);
+  }
+
+  /**
+   * 到点探一次：中继死了图标当场翻脸，不必等下一次问句失败才暴露。
+   * 状态没变就不重画——每 30s 一次，重画是白做的功。
+   */
+  async function healthProbe(): Promise<void> {
+    const reachable = await pingRelay();
+    const next = afterHealthProbe(state, reachable);
+    const flipped = next.state !== state || next.notice !== notice;
+    console.log(
+      `[ds-] 周期探活：中继${reachable ? "可达" : "不可达"}，图标${flipped ? `翻到 ${next.state}` : "不动"}`,
+    );
+    if (!flipped) return;
+    state = next.state;
+    notice = next.notice;
+    await paintIcon();
+  }
+
+  browser.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== HEALTH_ALARM_NAME) return;
+    void healthProbe();
+  });
+
   /**
    * MV3 的 service worker 闲置 30 秒就会被收走，而中继这一趟可能更久；
    * 答复在途时点一下扩展 API 把它按住，不改任何业务行为。
@@ -105,9 +224,15 @@ export default defineBackground(() => {
     return () => clearInterval(timer);
   }
 
-  /** 打中继：网络层的失败（没起、被拦、超时）也折成同构载荷。 */
+  /**
+   * 打中继：网络层的失败（没起、被拦、超时）也折成同构载荷。
+   *
+   * 在途期间另开一条 `/status` 轮询，让等待期不再是黑箱；收摊时无论成败都先把
+   * 现场清掉，再由调用方上屏，免得答案都回来了角标还挂着个「写」。
+   */
   async function askRelay(question: string): Promise<ReplyPayload> {
     const releaseKeepAlive = keepAliveWhileAsking();
+    const stopStatusPolling = startStatusPolling();
     try {
       const response = await fetchWithTimeout(relayAskUrl(), RELAY_TIMEOUT_MS, {
         method: "POST",
@@ -122,6 +247,8 @@ export default defineBackground(() => {
     } catch {
       return errorPayload(FAILURE_RELAY_UNREACHABLE);
     } finally {
+      stopStatusPolling();
+      askProgress = null;
       releaseKeepAlive();
     }
   }
@@ -129,9 +256,12 @@ export default defineBackground(() => {
   /** 总开关变了就跟图标：关了即「关」，开了先按可达摆、再探一次中继。 */
   async function syncFromStorage(): Promise<void> {
     const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
-    if (!readToggle(stored[TOGGLE_STORAGE_KEY])) {
+    const enabled = readToggle(stored[TOGGLE_STORAGE_KEY]);
+    await syncHealthAlarm(enabled); // 排班先跟着开关走，图标再跟着探测结果走
+    if (!enabled) {
       state = "off";
       notice = null;
+      askProgress = null; // 关了就不该再揣着上一次等待的现场
       await paintIcon();
       return;
     }

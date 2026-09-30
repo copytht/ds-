@@ -1,8 +1,11 @@
 """`uv run ds-mcp` 起的本机 HTTP 中继（ADR-0001：中继，不是 MCP 服务）。
 
-端点（扩展侧只打这两条）：
+端点（扩展侧只打这三条）：
 
-- ``GET  /health`` → ``{"status": "ok"}``：中继在不在；
+- ``GET  /health`` → ``{"status": "ok", "opencode": "up" | "down"}``：中继在不在、
+  opencode 在不在（两件事出事时长得一样，分开了才知道该重启哪个）；
+- ``GET  /status`` → ``{"status": "ok", "ask": null | {"phase", "written", "remaining"}}``
+  ：现在有没有问句在途，在途的话走到哪一步——等待期的现场，只读；
 - ``POST /ask``    body ``{"question": "..."}`` → ``{"status": "ok", "answer": ...}``
   或 ``{"status": "error", "error": ...}``（错误码只在 #10 fixture 的册子上）。
 
@@ -21,20 +24,23 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from dsb.client import DEFAULT_ASK_TIMEOUT, DEFAULT_QUEUE_TIMEOUT, OpencodeClient
+from dsb.client import DEFAULT_ANSWER_TIMEOUT, DEFAULT_START_TIMEOUT, OpencodeClient
 from dsb.config import parse_session_id
 from dsb.opencode import ERROR_UNEXPECTED, error_payload, payload_from_outcome
 
 HEALTH_PATH = "/health"
+STATUS_PATH = "/status"
 ASK_PATH = "/ask"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 PORT_ENV_KEY = "DSB_PORT"
-ASK_TIMEOUT_ENV_KEY = "DSB_ASK_TIMEOUT"
-QUEUE_TIMEOUT_ENV_KEY = "DSB_QUEUE_TIMEOUT"
+ANSWER_TIMEOUT_ENV_KEY = "DSB_ANSWER_TIMEOUT"
+START_TIMEOUT_ENV_KEY = "DSB_START_TIMEOUT"
 MAX_BODY_BYTES = 64 * 1024
 
 AskFn = Callable[[str], Mapping[str, Any]]
+ProbeFn = Callable[[], str]
+StatusFn = Callable[[], Mapping[str, Any]]
 Payload = dict[str, Any]
 
 
@@ -52,11 +58,37 @@ def parse_question(body: bytes) -> str | None:
     return question
 
 
-def route(method: str, path: str, body: bytes, ask: AskFn) -> tuple[int, Payload]:
-    """一次请求 → (HTTP 状态码, 载荷)；纯接缝，不碰 socket。"""
+def health_payload(opencode: str | None) -> Payload:
+    """``/health`` 的载荷：中继恒在（能答就是活的），顺带报 opencode 的死活。
+
+    ``probe`` 没接上时就不带 ``opencode`` 字段——不知道就别瞎报一个出去。
+    """
+    payload: Payload = {"status": "ok"}
+    if opencode is not None:
+        payload["opencode"] = opencode
+    return payload
+
+
+def route(
+    method: str,
+    path: str,
+    body: bytes,
+    ask: AskFn,
+    probe: ProbeFn | None = None,
+    status: StatusFn | None = None,
+) -> tuple[int, Payload]:
+    """一次请求 → (HTTP 状态码, 载荷)；纯接缝，不碰 socket。
+
+    ``probe`` 与 ``status`` 是可选的旁路：接上就多报一项，没接上回最素的载荷，
+    好让「路由怎么分发」能被单独断言，不必先架起一整套 opencode 替身。
+    """
     path = urlsplit(path).path
     if method == "GET" and path == HEALTH_PATH:
-        return 200, {"status": "ok"}
+        return 200, health_payload(probe() if probe is not None else None)
+    if method == "GET" and path == STATUS_PATH:
+        if status is None:
+            return 200, {"status": "ok", "ask": None}
+        return 200, dict(status())
     if method == "POST" and path == ASK_PATH:
         question = parse_question(body)
         if question is None:
@@ -71,7 +103,9 @@ def route(method: str, path: str, body: bytes, ask: AskFn) -> tuple[int, Payload
     return 405, error_payload(ERROR_UNEXPECTED)
 
 
-def make_handler(ask: AskFn) -> type[BaseHTTPRequestHandler]:
+def make_handler(
+    ask: AskFn, probe: ProbeFn | None = None, status: StatusFn | None = None
+) -> type[BaseHTTPRequestHandler]:
     """造请求处理类（每次请求一个实例；socket 细节只在这层）。"""
 
     class RelayHandler(BaseHTTPRequestHandler):
@@ -94,8 +128,8 @@ def make_handler(ask: AskFn) -> type[BaseHTTPRequestHandler]:
             self._respond("DELETE")
 
         def _respond(self, method: str) -> None:
-            status, payload = route(method, self.path, self._body(), ask)
-            self._send(status, payload)
+            status_code, payload = route(method, self.path, self._body(), ask, probe, status)
+            self._send(status_code, payload)
 
         def _body(self) -> bytes:
             length = int(self.headers.get("Content-Length") or 0)
@@ -127,10 +161,14 @@ def make_handler(ask: AskFn) -> type[BaseHTTPRequestHandler]:
 
 
 def make_server(
-    ask: AskFn, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT
+    ask: AskFn,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    probe: ProbeFn | None = None,
+    status: StatusFn | None = None,
 ) -> ThreadingHTTPServer:
     """起中继的 HTTP 服务（测试用 port=0 拿随机端口）。"""
-    server = ThreadingHTTPServer((host, port), make_handler(ask))
+    server = ThreadingHTTPServer((host, port), make_handler(ask, probe, status))
     server.daemon_threads = True
     return server
 
@@ -179,14 +217,14 @@ def resolve_seconds(env_text: str, key: str, default: float) -> float:
     return seconds
 
 
-def resolve_ask_timeout(env_text: str) -> float:
-    """等答复的超时秒数：进程环境变量优先，其次 `.env` 里的 DSB_ASK_TIMEOUT。"""
-    return resolve_seconds(env_text, ASK_TIMEOUT_ENV_KEY, DEFAULT_ASK_TIMEOUT)
+def resolve_answer_timeout(env_text: str) -> float:
+    """答复写完的超时秒数：进程环境变量优先，其次 `.env` 里的 DSB_ANSWER_TIMEOUT。"""
+    return resolve_seconds(env_text, ANSWER_TIMEOUT_ENV_KEY, DEFAULT_ANSWER_TIMEOUT)
 
 
-def resolve_queue_timeout(env_text: str) -> float:
-    """等主对话空出来的秒数：进程环境变量优先，其次 `.env` 里的 DSB_QUEUE_TIMEOUT。"""
-    return resolve_seconds(env_text, QUEUE_TIMEOUT_ENV_KEY, DEFAULT_QUEUE_TIMEOUT)
+def resolve_start_timeout(env_text: str) -> float:
+    """模型开工的超时秒数：进程环境变量优先，其次 `.env` 里的 DSB_START_TIMEOUT。"""
+    return resolve_seconds(env_text, START_TIMEOUT_ENV_KEY, DEFAULT_START_TIMEOUT)
 
 
 def main() -> None:
@@ -196,12 +234,13 @@ def main() -> None:
     port = resolve_port(env_text)
     client = OpencodeClient(
         session_id,
-        queue_timeout=resolve_queue_timeout(env_text),
-        ask_timeout=resolve_ask_timeout(env_text),
+        start_timeout=resolve_start_timeout(env_text),
+        answer_timeout=resolve_answer_timeout(env_text),
     )
     warm = client.warm_up()  # 启动现读：端口与口令只进内存
     print(
-        f"[dsb] 中继已启动：http://{DEFAULT_HOST}:{port}（{ASK_PATH} / {HEALTH_PATH}）",
+        f"[dsb] 中继已启动：http://{DEFAULT_HOST}:{port}"
+        f"（{ASK_PATH} / {STATUS_PATH} / {HEALTH_PATH}）",
         flush=True,
     )
     if session_id is None:
@@ -214,7 +253,7 @@ def main() -> None:
             "[dsb] opencode 后台服务现读失败，按请求重试（没起就回 opencode-not-running）。",
             file=sys.stderr,
         )
-    with make_server(client.ask, port=port) as server:
+    with make_server(client.ask, port=port, probe=client.probe, status=client.status) as server:
         try:
             server.serve_forever()
         except KeyboardInterrupt:

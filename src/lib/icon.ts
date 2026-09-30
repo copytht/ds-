@@ -6,7 +6,8 @@
  * background 只负责把结果交给 `browser.action`，并把点击接到总开关上。
  */
 
-import { RELAY_START_COMMAND, type FailureNotice } from "./reply";
+import { FAILURE_RELAY_UNREACHABLE, type AskPhase, type AskStatus } from "./relay";
+import { failureNotice, RELAY_START_COMMAND, type FailureNotice } from "./reply";
 
 export type IconState = "off" | "on-reachable" | "on-unreachable";
 
@@ -31,10 +32,55 @@ const GLYPHS: Readonly<Record<IconState, readonly string[]>> = {
 
 const CLICK_HINT = "点击切换总开关。";
 
+/** 等待期各阶段的一句话：角标只取头一个字，悬停说全。 */
+function phaseText(phase: AskPhase): string {
+  if (phase === "queued") return "子会话已送出，等模型开工";
+  if (phase === "running") return "模型在想";
+  if (phase === "writing") return "正在写答复";
+  return "答复已写完";
+}
+
+/**
+ * 等待现场的一句话：走到哪一步、写了多少字、这一段还剩多少预算。
+ *
+ * 只出现在悬停里（进度不上对话流），所以怎么措辞都归这儿管；
+ * 剩余预算是负数或缺着就干脆不提——报一个错的数比不报更糟。
+ */
+export function describeAsk(progress: AskStatus): string {
+  const bits = [phaseText(progress.phase)];
+  if (progress.phase === "writing" && progress.written > 0) {
+    bits.push(`已写 ${progress.written} 字`);
+  }
+  const remaining = progress.remaining;
+  if (remaining !== null && remaining > 0) bits.push(`还剩 ${Math.ceil(remaining)} 秒`);
+  return bits.join("，");
+}
+
+/**
+ * 角标文字。
+ *
+ * 关与不可达是**硬状态**，压过一切：像素图标万一画不出来，角标要独自把三态撑住，
+ * 所以前两个分支绝不能被等待中的阶段盖掉。开着且可达时，才轮到等待现场的头一个字。
+ */
+export function badgeText(state: IconState, progress?: AskStatus | null): string {
+  if (state === "off") return "关";
+  if (state === "on-unreachable") return "!";
+  if (!progress) return "";
+  return { queued: "等", running: "想", writing: "写", done: "" }[progress.phase];
+}
+
 /** 悬停文案：关与可达各自一句话，不可达必须带上原因与启动命令。 */
-export function iconTitle(state: IconState, notice?: FailureNotice | null): string {
+export function iconTitle(
+  state: IconState,
+  notice?: FailureNotice | null,
+  progress?: AskStatus | null,
+): string {
   if (state === "off") return `ds-：总开关已关，扩展没有接管页面。${CLICK_HINT}`;
-  if (state === "on-reachable") return `ds-：总开关已开，中继可达。${CLICK_HINT}`;
+  // 等待现场只在「开着且可达」时才有意义：不可达时手里那份进度已经作废了。
+  const waiting = state === "on-reachable" && progress ? `${describeAsk(progress)}。` : "";
+  if (state === "on-reachable") {
+    return `ds-：总开关已开，中继可达。${waiting}${CLICK_HINT}`;
+  }
   const shown =
     notice ??
     ({
@@ -43,6 +89,23 @@ export function iconTitle(state: IconState, notice?: FailureNotice | null): stri
       command: RELAY_START_COMMAND,
     } satisfies FailureNotice);
   return `ds-：${shown.title} ${shown.reason} 启动命令：${shown.command}。${CLICK_HINT}`;
+}
+
+/**
+ * 一次周期探活（`GET /health`）之后的状态位：总开关关着就原样不动，
+ * 可达就把原因清掉，不可达才挂上原因与启动命令。
+ *
+ * 探测结果 → 状态的映射放这儿，是为了让「图标该不该翻脸」可被单测断言；
+ * background 只管上屏。可达时清空原因、不可达时给出**同一个** notice 对象
+ * （`failureNotice` 对在册错误码返回常量），调用方拿引用比较就知道有没有变化。
+ */
+export function afterHealthProbe(
+  state: IconState,
+  reachable: boolean,
+): { state: IconState; notice: FailureNotice | null } {
+  if (state === "off") return { state: "off", notice: null };
+  if (reachable) return { state: "on-reachable", notice: null };
+  return { state: "on-unreachable", notice: failureNotice(FAILURE_RELAY_UNREACHABLE) };
 }
 
 function isInsideRoundedRect(x: number, y: number, size: number, radius: number): boolean {

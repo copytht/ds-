@@ -3,23 +3,25 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from dsb.client import DEFAULT_ASK_TIMEOUT, DEFAULT_QUEUE_TIMEOUT
+from dsb.client import DEFAULT_ANSWER_TIMEOUT, DEFAULT_START_TIMEOUT
 from dsb.opencode import ERROR_NOT_RUNNING, ERROR_TIMEOUT, ERROR_UNEXPECTED
 from dsb.server import (
     DEFAULT_PORT,
     make_server,
     parse_question,
-    resolve_ask_timeout,
+    resolve_answer_timeout,
     resolve_port,
-    resolve_queue_timeout,
+    resolve_start_timeout,
     route,
 )
 
@@ -56,8 +58,8 @@ def serve() -> Iterator[Callable[..., str]]:
     """随机端口起中继；每个替身 ask 一个端口，收摊时一起关。"""
     running: list[tuple[Any, threading.Thread]] = []
 
-    def factory(ask: Any) -> str:
-        server = make_server(ask, host=HOST, port=0)
+    def factory(ask: Any, probe: Any = None, status: Any = None) -> str:
+        server = make_server(ask, host=HOST, port=0, probe=probe, status=status)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         running.append((server, thread))
@@ -97,6 +99,25 @@ def post_ask(base: str, question: str = "问题") -> tuple[int, dict]:
 def test_health_endpoint_answers_ok(relay: tuple[str, StubAsk]) -> None:
     base, _ask = relay
     assert request(f"{base}/health") == (200, {"status": "ok"})
+
+
+@pytest.mark.parametrize("opencode", ["up", "down"])
+def test_health_also_reports_opencode_liveness(serve: Callable[..., str], opencode: str) -> None:
+    """中继活着不代表 opencode 活着——两件事出事时长得一模一样，分开了才好排查。"""
+    base = serve(StubAsk(), probe=lambda: opencode)
+    assert request(f"{base}/health") == (200, {"status": "ok", "opencode": opencode})
+
+
+def test_status_says_idle_when_nothing_is_in_flight(relay: tuple[str, StubAsk]) -> None:
+    base, _ask = relay
+    assert request(f"{base}/status") == (200, {"status": "ok", "ask": None})
+
+
+def test_status_relays_the_in_flight_ask(serve: Callable[..., str]) -> None:
+    """等待期的现场原样转述：阶段、已写字数、还剩多少预算。"""
+    snapshot = {"phase": "writing", "written": 128, "remaining": 107.5}
+    base = serve(StubAsk(), status=lambda: {"status": "ok", "ask": snapshot})
+    assert request(f"{base}/status") == (200, {"status": "ok", "ask": snapshot})
 
 
 def test_one_round_trip_returns_ok_payload(relay: tuple[str, StubAsk]) -> None:
@@ -166,11 +187,17 @@ def test_preflight_allows_the_extension_origin(relay: tuple[str, StubAsk]) -> No
 def test_route_is_pure_and_covers_every_path() -> None:
     ask = StubAsk()
     assert route("GET", "/health", b"", ask) == (200, {"status": "ok"})
+    assert route("GET", "/health", b"", ask, probe=lambda: "up") == (
+        200,
+        {"status": "ok", "opencode": "up"},
+    )
+    assert route("GET", "/status?x=1", b"", ask) == (200, {"status": "ok", "ask": None})
     assert route("POST", "/ask?x=1", json.dumps({"question": "问"}).encode(), ask) == (
         200,
         {"status": "ok", "answer": "入口在 dsb/server.py。"},
     )
     assert route("GET", "/ask", b"", ask)[0] == 404
+    assert route("GET", "/nope", b"", ask)[0] == 404
     assert route("PUT", "/health", b"", ask)[0] == 405
     assert ask.questions == ["问"]
 
@@ -195,27 +222,46 @@ def test_resolve_port_prefers_the_process_environment(
     assert resolve_port("DSB_PORT=70000") == DEFAULT_PORT
 
 
-def test_resolve_ask_timeout_prefers_the_process_environment(
+def test_resolve_answer_timeout_prefers_the_process_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("DSB_ASK_TIMEOUT", "30")
-    assert resolve_ask_timeout("") == 30.0
-    monkeypatch.delenv("DSB_ASK_TIMEOUT")
-    assert resolve_ask_timeout("DSB_ASK_TIMEOUT=45.5") == 45.5
-    assert resolve_ask_timeout("") == DEFAULT_ASK_TIMEOUT
-    assert resolve_ask_timeout("DSB_ASK_TIMEOUT=不是秒数") == DEFAULT_ASK_TIMEOUT
-    assert resolve_ask_timeout("DSB_ASK_TIMEOUT=-1") == DEFAULT_ASK_TIMEOUT
+    monkeypatch.setenv("DSB_ANSWER_TIMEOUT", "30")
+    assert resolve_answer_timeout("") == 30.0
+    monkeypatch.delenv("DSB_ANSWER_TIMEOUT")
+    assert resolve_answer_timeout("DSB_ANSWER_TIMEOUT=45.5") == 45.5
+    assert resolve_answer_timeout("") == DEFAULT_ANSWER_TIMEOUT
+    assert resolve_answer_timeout("DSB_ANSWER_TIMEOUT=不是秒数") == DEFAULT_ANSWER_TIMEOUT
+    assert resolve_answer_timeout("DSB_ANSWER_TIMEOUT=-1") == DEFAULT_ANSWER_TIMEOUT
 
 
-def test_resolve_queue_timeout_reads_its_own_key(
+def test_resolve_start_timeout_reads_its_own_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("DSB_QUEUE_TIMEOUT", "900")
-    assert resolve_queue_timeout("") == 900.0
-    monkeypatch.delenv("DSB_QUEUE_TIMEOUT")
-    assert resolve_queue_timeout("DSB_QUEUE_TIMEOUT=800") == 800.0
-    assert resolve_queue_timeout("") == DEFAULT_QUEUE_TIMEOUT
-    assert resolve_queue_timeout("DSB_QUEUE_TIMEOUT=不是秒数") == DEFAULT_QUEUE_TIMEOUT
-    # 排队与答复各读各的键，别互相串
-    assert resolve_queue_timeout("DSB_ASK_TIMEOUT=45.5") == DEFAULT_QUEUE_TIMEOUT
-    assert resolve_ask_timeout("DSB_QUEUE_TIMEOUT=800") == DEFAULT_ASK_TIMEOUT
+    monkeypatch.setenv("DSB_START_TIMEOUT", "900")
+    assert resolve_start_timeout("") == 900.0
+    monkeypatch.delenv("DSB_START_TIMEOUT")
+    assert resolve_start_timeout("DSB_START_TIMEOUT=800") == 800.0
+    assert resolve_start_timeout("") == DEFAULT_START_TIMEOUT
+    assert resolve_start_timeout("DSB_START_TIMEOUT=不是秒数") == DEFAULT_START_TIMEOUT
+    # 开工与写完各读各的键，别互相串
+    assert resolve_start_timeout("DSB_ANSWER_TIMEOUT=45.5") == DEFAULT_START_TIMEOUT
+    assert resolve_answer_timeout("DSB_START_TIMEOUT=800") == DEFAULT_ANSWER_TIMEOUT
+
+
+def test_the_extension_timeout_outlives_the_relay_worst_case() -> None:
+    """扩展侧的兜底超时必须宽过中继「开工 + 写完」的最坏时长。
+
+    这两个数分处 TS 与 Python，没有共同的运行时事实来源，只能靠这条断言对齐：先到的
+    必须是中继——它能把超时折成 `opencode-timeout` 这个有信息量的码；扩展一旦先 abort，
+    报出来的只有没信息量的「中继不可达」，还会白扔一次正在跑的调用。
+    """
+    source = (Path(__file__).resolve().parents[1] / "src" / "lib" / "relay.ts").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"export const RELAY_TIMEOUT_MS = ([\d_]+)", source)
+    assert match is not None, "src/lib/relay.ts 里找不到 RELAY_TIMEOUT_MS"
+    extension_ms = int(match.group(1).replace("_", ""))
+
+    worst_case_ms = int((DEFAULT_START_TIMEOUT + DEFAULT_ANSWER_TIMEOUT) * 1000)
+    # 留 120s 给中继自己的 HTTP 往返（读设置 / spawn / prompt / message / delete）
+    assert extension_ms - worst_case_ms >= 120_000

@@ -74,12 +74,12 @@ def test_missing_assistant_text_is_none() -> None:
 
 
 def test_has_assistant_counts_an_empty_answer_as_started() -> None:
-    """正文空着也算「开写了」——中继靠它把排队预算换成答复预算。"""
+    """正文空着也算「开写了」——中继靠它把开工预算换成写完预算。"""
     assert has_assistant([{"role": "assistant", "parts": []}]) is True
     assert (
         has_assistant([{"role": "user", "parts": []}, {"role": "assistant", "parts": []}]) is True
     )
-    only_user = [{"role": "user", "parts": [{"type": "text", "text": "还在排队"}]}]
+    only_user = [{"role": "user", "parts": [{"type": "text", "text": "还没开工"}]}]
     assert has_assistant(only_user) is False
     assert has_assistant([]) is False
     assert has_assistant({"note": "不认识的形状"}) is False
