@@ -55,6 +55,7 @@ from dsb.events import (
     make_reads_block,
     session_id_of,
 )
+from dsb.log import log_event
 from dsb.opencode import extract_answer, has_assistant
 
 AUTH_USERNAME = "opencode"
@@ -469,6 +470,7 @@ class OpencodeClient:
             if not value
         ]
         if missing:
+            log_event("spawn-missing", missing="/".join(missing))
             raise ServiceUnavailable(f"父会话缺 {'/'.join(missing)}，子会话起不来")
         body: dict[str, Any] = {
             "title": CHILD_TITLE,

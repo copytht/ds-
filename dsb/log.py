@@ -53,6 +53,7 @@ def log_event(
     error: str | None = None,
     exc: BaseException | None = None,
     answer_chars: int | None = None,
+    missing: str | None = None,
 ) -> None:
     """一条事件，形如 ``[2026-09-30 14:49:36] ask-fail error=opencode-timeout took_ms=360123``。
 
@@ -72,4 +73,6 @@ def log_event(
         bits.append(f"took_ms={round(took_ms)}")
     if answer_chars is not None:
         bits.append(f"answer_chars={answer_chars}")
+    if missing is not None:
+        bits.append(f"missing={missing}")
     _logger().info(" ".join(bits))

@@ -566,9 +566,14 @@ def test_a_vanished_child_is_respawned() -> None:
     assert len(spawns) == 2  # 复用前的探活报 404 → 当场重起
 
 
-def test_a_parent_without_the_three_settings_fails_loudly() -> None:
-    """缺 agent/model/location 当场报错：不再每问干等 120s，也不再静默写错工作目录。"""
+def test_a_parent_without_the_three_settings_fails_loudly(caplog: Any) -> None:
+    """缺 agent/model/location 当场报错：不再每问干等 120s，也不再静默写错工作目录。
+
+    报错之外还要**落一行痕**：页面只拿得到 ``unexpected-response``，日志里得看得出缺的
+    是那样，否则事后还得自己去 GET 父会话。
+    """
     for missing in ("agent", "model", "location"):
+        caplog.clear()
         settings: dict[str, Any] = {
             "agent": "build",
             "model": {"providerID": "opencode", "id": "mimo-v2.6-flash-free"},
@@ -577,10 +582,13 @@ def test_a_parent_without_the_three_settings_fails_loudly() -> None:
         settings.pop(missing)
         open_url = FakeOpen(parent={"data": settings}, messages=live_messages("答复"))
 
-        assert payload_from_outcome(make_client(open_url).ask("问题")) == {
-            "status": "error",
-            "error": ERROR_UNEXPECTED,
-        }
+        with caplog.at_level("INFO", logger="dsb"):
+            assert payload_from_outcome(make_client(open_url).ask("问题")) == {
+                "status": "error",
+                "error": ERROR_UNEXPECTED,
+            }
+        got = [r.getMessage() for r in caplog.records if "spawn-missing" in r.getMessage()]
+        assert got == [f"spawn-missing missing={missing}"]
         assert not any(c.url.endswith("/prompt") for c in open_url.calls)
         assert not any(
             c.method == "POST" and c.url.endswith("/api/session") for c in open_url.calls

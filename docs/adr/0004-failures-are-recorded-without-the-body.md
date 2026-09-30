@@ -25,7 +25,7 @@ service worker 一重启，连挂在内存里的原因也蒸发了，中继日�
 - **同一次故障只记一笔**：最前面那条还没恢复时，不管这次是哪个环节哪个原因都视为同一段红着
   的时间在延续——否则探活每 30s、轮询每 3s 各失败一次，几秒就能把 20 条配额刷满，真正要看的
   前因后果全被冲掉。留下的是故障**开始**的时刻。
-- 事件名固定：中继 `ask-ok` / `ask-fail` / `ask-broke` / `probe-broke` / `bad-request` /
-  `slow`；扩展按环节分 `health` / `status` / `ask`。探活与现场轮询超过 1s 才记 `slow`
+- 事件名固定：中继 `ask-ok` / `ask-fail` / `ask-broke` / `spawn-missing` / `probe-broke` /
+  `bad-request` / `slow`；扩展按环节分 `health` / `status` / `ask`。探活与现场轮询超过 1s 才记 `slow`
   （它们各有 5s 预算，慢了就是翻红的前兆）。
 - 悬停在**当前红着**时不摆历史——第一句就是原因，重复一遍只是噪音；绿着才回看。

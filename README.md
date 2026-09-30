@@ -130,10 +130,12 @@ Python 侧不引任何 TOON 库、只产 dict。
 [2026-09-30 15:13:38] bad-request path=/nope http=404 took_ms=0
 ```
 
-事件名固定：`ask-ok` / `ask-fail error=…` / `ask-broke exc=…` / `probe-broke` / `status-broke` /
-`bad-request` / `slow path=/health took_ms=…`。探活与现场轮询**超过 1s** 才记 `slow`——它们各有
-5s 预算，慢了就是图标翻红的前兆。**问题正文与答复正文进不来**：字段是具名参数而不是自由 dict，
-调用点写不出 `question=`；异常只留类型名、不带消息。访问日志照旧整个关掉（ADR-0004）。
+事件名固定：`ask-ok` / `ask-fail error=…` / `ask-broke exc=…` / `spawn-missing missing=…` /
+`probe-broke` / `status-broke` / `bad-request` / `slow path=/health took_ms=…`。探活与现场轮询
+**超过 1s** 才记 `slow`——它们各有 5s 预算，慢了就是图标翻红的前兆。`spawn-missing` 记缺了父会话
+哪样设置（`agent`/`model`/`location`），页面只拿得到 `unexpected-response`，缺哪样得靠它。**问题正文
+与答复正文进不来**：字段是具名参数而不是自由 dict，调用点写不出 `question=`；异常只留类型名、不带消息。
+访问日志照旧整个关掉（ADR-0004）。
 
 ## 约定
 
