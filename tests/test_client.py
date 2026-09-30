@@ -78,7 +78,7 @@ def live_messages(answer: str | None, *, old_answer: str = "上一轮的旧答�
         data.append(
             {
                 "type": "assistant",
-                "time": {"created": BASELINE_MS + 2},
+                "time": {"created": BASELINE_MS + 2, "completed": BASELINE_MS + 3},
                 "content": [
                     {"type": "reasoning", "text": "想一想"},
                     {"type": "text", "text": answer},
@@ -86,6 +86,25 @@ def live_messages(answer: str | None, *, old_answer: str = "上一轮的旧答�
             }
         )
     return {"data": data, "cursor": {"previous": None, "next": None}}
+
+
+def mid_turn_messages(text: str) -> dict[str, Any]:
+    """「写了字但这一轮没定稿」的消息体：assistant 有正文，却缺 ``time.completed``。
+
+    真机上 opencode 一轮里正文分几段，前几段是「让我读一下文件」这类过场话——只认最后那条
+    带 ``completed`` 的，才不会被中途一句骗到、把剩下的活丢下没人看。
+    """
+    return {
+        "data": [
+            {"type": "user", "time": {"created": BASELINE_MS + 1}, "text": "问题正文"},
+            {
+                "type": "assistant",
+                "time": {"created": BASELINE_MS + 2},
+                "content": [{"type": "text", "text": text}],
+            },
+        ],
+        "cursor": {"previous": None, "next": None},
+    }
 
 
 def working_messages(reasoning: str) -> dict[str, Any]:
@@ -721,6 +740,21 @@ def test_an_answer_that_never_fills_in_still_times_out() -> None:
         "status": "error",
         "error": ERROR_TIMEOUT,
     }
+
+
+def test_mid_turn_text_is_not_taken_as_the_answer() -> None:
+    """中途那句（没带 ``completed``）不算答完——接着等，直到定稿那条才交出去。"""
+    open_url = FakeOpen(messages=mid_turn_messages("让我读一下文件"))
+    polls = {"n": 0}
+
+    def sleep(_seconds: float) -> None:
+        polls["n"] += 1
+        if polls["n"] == 1:
+            open_url.messages = live_messages("真正的答复")  # 这一圈才定稿
+
+    client = make_client(open_url, sleep=sleep)
+    assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "真正的答复"}
+    assert polls["n"] == 1  # 中途那句没能让它提前收工
 
 
 def test_http_error_from_opencode_is_unexpected_response() -> None:

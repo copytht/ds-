@@ -14,6 +14,8 @@ __pycache__/
 
 # 本机配置与临时产物
 .env
+.dsb-token
+.archify/
 screenshots/
 *.log
 .DS_Store

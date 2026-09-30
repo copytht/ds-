@@ -9,6 +9,13 @@
 - ``POST /ask``    body ``{"question": "..."}`` → ``{"status": "ok", "answer": ...}``
   或 ``{"status": "error", "error": ...}``（错误码只在 #10 fixture 的册子上）。
 
+动作服务（ADR-0007，实现在 :mod:`dsb.actions`）另加三条：
+
+- ``POST /action``      写端点，验 Bearer token，阻塞到扩展回传
+  （``{"ok", "action", "result"|"error"}``）；
+- ``GET  /actions``     动作流（SSE），扩展订它收动作；这条不走 :func:`route`，要写流；
+- ``POST /action/result`` 扩展回传结果，不验 token（读侧靠不下发 CORS 头兜）。
+
 成功与失败同构、都回 200（只有请求本身不合线协议才回 4xx），解析只有一条路径；
 编码（TOON）不在这边，Python 侧不引任何 TOON 库。
 
@@ -29,6 +36,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from dsb.actions import (
+    ACTION_PATH,
+    ACTION_RESULT_PATH,
+    ACTIONS_PATH,
+    ActionServer,
+    ensure_token,
+    resolve_enabled,
+)
+from dsb.asks import AskSessions
 from dsb.client import DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_TIMEOUT, OpencodeClient
 from dsb.config import parse_session_id
 from dsb.log import SLOW_MS, log_event, setup_logging
@@ -44,21 +60,33 @@ IDLE_TIMEOUT_ENV_KEY = "DSB_IDLE_TIMEOUT"
 MAX_TIMEOUT_ENV_KEY = "DSB_MAX_TIMEOUT"
 MAX_BODY_BYTES = 64 * 1024
 
-AskFn = Callable[[str], Mapping[str, Any]]
+AskFn = Callable[[str, str | None], Mapping[str, Any]]
 ProbeFn = Callable[[], str]
 StatusFn = Callable[[], Mapping[str, Any]]
 Payload = dict[str, Any]
+#: 动作请求 → (状态码, 载荷)：鉴权与失败码都在 dsb.actions 那头，这边只当接缝递进去。
+ActionFn = Callable[[bytes, str | None], tuple[int, Payload]]
+#: 扩展回传 → (状态码, 载荷)。
+ActionResultFn = Callable[[bytes], tuple[int, Payload]]
+#: 不下发 CORS 头的端点（ADR-0007 读侧）：网页的跨源读必须撞死，扩展与本机进程天然放行。
+NO_CORS_PATHS = frozenset({ACTIONS_PATH, ACTION_RESULT_PATH})
 
 #: 哪条路炸了就叫哪个名字：探活炸了和问句炸了，排查方向完全两样。
 BROKE_EVENT: dict[str, str] = {
     "/ask": "ask-broke",
     "/health": "probe-broke",
     "/status": "status-broke",
+    "/action": "action-broke",
+    "/action/result": "action-result-broke",
 }
 
 
-def parse_question(body: bytes) -> str | None:
-    """请求体 → 问题正文；不合 ``{"question": "..."}`` 的一律 None。"""
+def parse_ask_request(body: bytes) -> tuple[str, str | None] | None:
+    """请求体 → ``(问题, id)``；``id`` 可选（扩展短轮询带它，curl 不带）。
+
+    不合 ``{"question": "...", "id"?: "..."}`` 的一律 None。带 id 是为了让一趟长问句能被
+    拆成几趟短轮询（长 fetch 会被浏览器收走，见 :mod:`dsb.asks`）。
+    """
     try:
         data = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -68,7 +96,16 @@ def parse_question(body: bytes) -> str | None:
     question = data.get("question")
     if not isinstance(question, str) or not question.strip():
         return None
-    return question
+    session_id = data.get("id")
+    if session_id is not None and (not isinstance(session_id, str) or not session_id.strip()):
+        return None
+    return question, session_id
+
+
+def parse_question(body: bytes) -> str | None:
+    """请求体 → 问题正文；只看问题那一条（老接缝，校验与测试用）。"""
+    parsed = parse_ask_request(body)
+    return None if parsed is None else parsed[0]
 
 
 def health_payload(opencode: str | None) -> Payload:
@@ -89,11 +126,16 @@ def route(
     ask: AskFn,
     probe: ProbeFn | None = None,
     status: StatusFn | None = None,
+    action: ActionFn | None = None,
+    action_result: ActionResultFn | None = None,
+    authorization: str | None = None,
 ) -> tuple[int, Payload]:
     """一次请求 → (HTTP 状态码, 载荷)；纯接缝，不碰 socket。
 
     ``probe`` 与 ``status`` 是可选的旁路：接上就多报一项，没接上回最素的载荷，
     好让「路由怎么分发」能被单独断言，不必先架起一整套 opencode 替身。
+    ``action`` / ``action_result`` 同理，是动作服务的两条旁路（``GET /actions`` 不在这儿：
+    它要写 SSE 流，由 RelayHandler 单独接，见 :meth:`RelayHandler._stream_actions`）。
     """
     path = urlsplit(path).path
     if method == "GET" and path == HEALTH_PATH:
@@ -103,21 +145,36 @@ def route(
             return 200, {"status": "ok", "ask": None}
         return 200, dict(status())
     if method == "POST" and path == ASK_PATH:
-        question = parse_question(body)
-        if question is None:
+        parsed = parse_ask_request(body)
+        if parsed is None:
             # 请求本身不合线协议：错误码只在册的三个，这里落非预期响应兜底。
             return 400, error_payload(ERROR_UNEXPECTED)
+        question, session_id = parsed
         # 不在这儿接异常：route 是纯接缝，谁出岔子谁留痕——接住就等于把现场销毁了。
-        return 200, payload_from_outcome(ask(question))
+        return 200, payload_from_outcome(ask(question, session_id))
+    if method == "POST" and path == ACTION_PATH:
+        if action is None:
+            return 404, error_payload(ERROR_UNEXPECTED)
+        return action(body, authorization)
+    if method == "POST" and path == ACTION_RESULT_PATH:
+        if action_result is None:
+            return 404, error_payload(ERROR_UNEXPECTED)
+        return action_result(body)
     if method in {"GET", "POST"}:
         return 404, error_payload(ERROR_UNEXPECTED)
     return 405, error_payload(ERROR_UNEXPECTED)
 
 
 def make_handler(
-    ask: AskFn, probe: ProbeFn | None = None, status: StatusFn | None = None
+    ask: AskFn,
+    probe: ProbeFn | None = None,
+    status: StatusFn | None = None,
+    actions: ActionServer | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """造请求处理类（每次请求一个实例；socket 细节只在这层）。"""
+
+    action: ActionFn | None = actions.submit if actions is not None else None
+    action_result: ActionResultFn | None = actions.record_result if actions is not None else None
 
     class RelayHandler(BaseHTTPRequestHandler):
         server_version = "dsb"
@@ -140,9 +197,26 @@ def make_handler(
 
         def _respond(self, method: str) -> None:
             path = urlsplit(self.path).path
+            if method == "GET" and path == ACTIONS_PATH:
+                # 动作流不走 route：它得按行往 socket 上写，塞进 (状态码, 载荷) 就假了。
+                if actions is None:
+                    self._send(404, error_payload(ERROR_UNEXPECTED))
+                    return
+                self._stream_actions(actions)
+                return
             started = time.monotonic()
             try:
-                status_code, payload = route(method, self.path, self._body(), ask, probe, status)
+                status_code, payload = route(
+                    method,
+                    self.path,
+                    self._body(),
+                    ask,
+                    probe,
+                    status,
+                    action=action,
+                    action_result=action_result,
+                    authorization=self.headers.get("Authorization"),
+                )
             except Exception as exc:  # route 该兜的都兜了：漏到这儿的是探活 / 别的旁路
                 took_ms = (time.monotonic() - started) * 1000
                 # 接住而不是放着断连：裸断连对扩展来说长得像「中继死了」，日志里却一个字没有。
@@ -155,7 +229,30 @@ def make_handler(
                 self._send(500, error_payload(ERROR_UNEXPECTED))
                 return
             self._record(path, status_code, payload, (time.monotonic() - started) * 1000)
-            self._send(status_code, payload)
+            self._send(status_code, payload, cors=path not in NO_CORS_PATHS)
+
+        def _stream_actions(self, actions: ActionServer) -> None:
+            """``GET /actions``：SSE 下发（ADR-0007）。
+
+            ``ThreadingHTTPServer`` 没有流式响应这一说，自己写头、自己按行刷；
+            **不下发 CORS 头**——网页的 EventSource 是简单请求、不预检，拿不到头就读不走。
+            扩展断开是常态（标签页关了 / MV3 收摊），收摊就好，不算故障。
+            """
+            subscriber = actions.subscribe(self.connection)
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.end_headers()
+                for chunk in actions.frames(subscriber):
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+            except OSError:
+                pass  # 对端把连接收走了：动作流本来就是条挂着的连接
+            finally:
+                actions.unsubscribe(subscriber)
+                self.close_connection = True
 
         def _record(self, path: str, status: int, payload: Payload | None, took_ms: float) -> None:
             """只记**失败与慢**：成功且快的探活每 30s 一条，只会把日志淹掉。"""
@@ -163,6 +260,8 @@ def make_handler(
                 log_event("bad-request", path=path, http=status, took_ms=took_ms)
                 return
             if path == ASK_PATH:
+                if isinstance(payload, Mapping) and payload.get("status") == "pending":
+                    return  # 一趟没等到（长问句的正常中间态）：不是失败，不记
                 error = payload.get("error") if isinstance(payload, Mapping) else None
                 if isinstance(payload, Mapping) and payload.get("status") == "error":
                     log_event(
@@ -191,16 +290,17 @@ def make_handler(
                 return b""
             return self.rfile.read(length)
 
-        def _send(self, status: int, payload: Payload | None) -> None:
+        def _send(self, status: int, payload: Payload | None, *, cors: bool = True) -> None:
             data = (
                 b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
             )
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "content-type")
+            if cors:
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "content-type")
             self.end_headers()
             if data:
                 self.wfile.write(data)
@@ -217,9 +317,10 @@ def make_server(
     port: int = DEFAULT_PORT,
     probe: ProbeFn | None = None,
     status: StatusFn | None = None,
+    actions: ActionServer | None = None,
 ) -> ThreadingHTTPServer:
     """起中继的 HTTP 服务（测试用 port=0 拿随机端口）。"""
-    server = ThreadingHTTPServer((host, port), make_handler(ask, probe, status))
+    server = ThreadingHTTPServer((host, port), make_handler(ask, probe, status, actions))
     server.daemon_threads = True
     return server
 
@@ -298,10 +399,13 @@ def main() -> None:
         idle_timeout=resolve_idle_timeout(env_text),
         max_timeout=resolve_max_timeout(env_text),
     )
+    ask = AskSessions(client.ask)  # 长问句拆成几趟短轮询，别让浏览器把后台线程连同答复一起收走
     warm = client.warm_up()  # 启动现读：端口与口令只进内存
+    # 动作服务：token 启动现生成/复用（0600，固定路径），开关现读（DSB_ACTIONS_ENABLED）。
+    actions = ActionServer(ensure_token(), enabled=resolve_enabled(env_text))
     print(
         f"[dsb] 中继已启动：http://{DEFAULT_HOST}:{port}"
-        f"（{ASK_PATH} / {STATUS_PATH} / {HEALTH_PATH}）",
+        f"（{ASK_PATH} / {STATUS_PATH} / {HEALTH_PATH} / {ACTION_PATH} / {ACTIONS_PATH}）",
         flush=True,
     )
     if session_id is None:
@@ -314,7 +418,9 @@ def main() -> None:
             "[dsb] opencode 后台服务现读失败，按请求重试（没起就回 opencode-not-running）。",
             file=sys.stderr,
         )
-    with make_server(client.ask, port=port, probe=client.probe, status=client.status) as server:
+    with make_server(
+        ask.ask, port=port, probe=client.probe, status=client.status, actions=actions
+    ) as server:
         try:
             server.serve_forever()
         except KeyboardInterrupt:

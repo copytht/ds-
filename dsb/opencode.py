@@ -29,7 +29,16 @@ class ErrorPayload(TypedDict):
     error: str
 
 
+class PendingPayload(TypedDict):
+    """一次短轮询还没等到结果时的载荷：扩展拿它知道「中继还在干，接着问」。"""
+
+    status: Literal["pending"]
+    id: str
+
+
 ReplyPayload = OkPayload | ErrorPayload
+#: ``/ask`` 的三种回法：成功 / 失败 / 还没出结果（带 id，接着轮询）。
+AskPayload = ReplyPayload | PendingPayload
 
 
 def ok_payload(answer: str) -> OkPayload:
@@ -40,6 +49,11 @@ def ok_payload(answer: str) -> OkPayload:
 def error_payload(code: str) -> ErrorPayload:
     """status: error + error（可识别的错误码，扩展据此出失败提示）。"""
     return {"status": "error", "error": code}
+
+
+def pending_payload(session_id: str) -> PendingPayload:
+    """status: pending + id：这一趟轮询没等到，拿同一个 id 再问。"""
+    return {"status": "pending", "id": session_id}
 
 
 def _text_parts(message: Mapping[str, Any]) -> list[str]:
@@ -87,7 +101,27 @@ def extract_answer(body: Any) -> str | None:
     return text if text.strip() else None
 
 
-def payload_from_outcome(outcome: Mapping[str, Any] | Any) -> ReplyPayload:
+def answer_complete(body: Any) -> bool:
+    """最后一轮 assistant 的消息是否**已定稿**：正文非空，且 ``time.completed`` 已落。
+
+    实测：流式途中消息的 ``time`` 只有 ``created``，这一轮跑完才补上 ``streamed`` /
+    ``completed``。opencode 一轮里正文还会分几段（先「让我读一下文件」，末段才是答复），
+    只认 ``completed`` 落下的那条，免得把中途一句当答完、剩下的活没人看。
+    """
+    if extract_answer(body) is None:
+        return False
+    if not isinstance(body, list):
+        return True  # 单条消息形状（测试替身）：取得到正文就算数
+    messages = [m for m in body if isinstance(m, Mapping) and m.get("role") == "assistant"]
+    if not messages:
+        return False
+    time_field = messages[-1].get("time")
+    if not isinstance(time_field, Mapping):
+        return True  # 认不出时间：不拿它卡链子
+    return bool(time_field.get("completed"))
+
+
+def payload_from_outcome(outcome: Mapping[str, Any] | Any) -> AskPayload:
     """把 outcome 分支映射成回灌载荷；认不出的一律算非预期响应。"""
     if not isinstance(outcome, Mapping):
         return error_payload(ERROR_UNEXPECTED)
@@ -98,6 +132,8 @@ def payload_from_outcome(outcome: Mapping[str, Any] | Any) -> ReplyPayload:
         if answer is None:
             return error_payload(ERROR_UNEXPECTED)
         return ok_payload(answer)
+    if kind == "pending":
+        return pending_payload(str(outcome.get("id")))
     if kind == "not-running":
         return error_payload(ERROR_NOT_RUNNING)
     if kind == "timeout":

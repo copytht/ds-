@@ -6,7 +6,7 @@ from typing import Any
 
 from conftest import load_fixture, load_fixture_filenames
 
-EXPECTED_FILES = ["config.json", "fence.json", "opencode.json", "reply.json"]
+EXPECTED_FILES = ["action.json", "config.json", "fence.json", "opencode.json", "reply.json"]
 REPLY_ANCHOR = "agent:"
 
 
@@ -95,3 +95,32 @@ def test_config_cases_cover_known_kinds() -> None:
         assert case["kind"] in {"port", "password", "session-id"}
         assert isinstance(case["input"], str)
         assert isinstance(case["expected"], dict)
+
+
+def test_action_error_codes_are_unique() -> None:
+    """动作失败码册子（ADR-0007）：code 不重样、when 非空。"""
+    codes = load_fixture("action.json")["errorCodes"]
+    assert isinstance(codes, list) and codes
+    names = [entry["code"] for entry in codes]
+    assert all(isinstance(name, str) and name for name in names)
+    assert len(set(names)) == len(names)
+    assert all(isinstance(entry["when"], str) and entry["when"] for entry in codes)
+
+
+def test_action_cases_are_coherent() -> None:
+    """每个 case：请求体三条字段在场、响应回同一个 action；
+    成功不带 error、失败只带册子上的码（与 vitest 那半对拍）。"""
+    error_codes = [entry["code"] for entry in load_fixture("action.json")["errorCodes"]]
+    for case in raw_cases("action.json"):
+        request, response = case["request"], case["response"]
+        assert isinstance(request["action"], str) and request["action"]
+        assert isinstance(request["params"], dict)
+        assert request["target"] is None or isinstance(request["target"], str)
+        assert response["action"] == request["action"], case["name"]
+        assert isinstance(response["ok"], bool)
+        if response["ok"]:
+            assert "error" not in response, case["name"]
+            assert "result" in response, case["name"]
+        else:
+            assert response["error"] in error_codes, case["name"]
+            assert "result" not in response, case["name"]

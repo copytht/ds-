@@ -21,9 +21,12 @@ describe("端点与请求体", () => {
     expect(relayStatusUrl()).toBe("http://127.0.0.1:8787/status");
   });
 
-  it("请求体只有 question 一条", () => {
-    expect(relayAskBody("问题正文")).toBe('{"question":"问题正文"}');
-    expect(JSON.parse(relayAskBody("问题正文"))).toEqual({ question: "问题正文" });
+  it("请求体是 question + 轮询 id", () => {
+    expect(relayAskBody("问题正文", "poll-1")).toBe('{"question":"问题正文","id":"poll-1"}');
+    expect(JSON.parse(relayAskBody("问题正文", "poll-1"))).toEqual({
+      question: "问题正文",
+      id: "poll-1",
+    });
   });
 });
 
@@ -31,6 +34,12 @@ describe("parseRelayResponse · 响应 → 载荷", () => {
   it("200 + status ok → ok 载荷，answer 原样", () => {
     const payload = parseRelayResponse(200, JSON.stringify({ status: "ok", answer: "答复" }));
     expect(payload).toEqual({ status: "ok", answer: "答复" });
+  });
+
+  it("200 + status pending → 还没出结果（扩展带同一个 id 再问）", () => {
+    expect(parseRelayResponse(200, JSON.stringify({ status: "pending", id: "poll-1" }))).toEqual({
+      status: "pending",
+    });
   });
 
   it("200 + status error → 同构的 error 载荷，错误码原样带出", () => {

@@ -18,6 +18,7 @@ from dsb.opencode import ERROR_NOT_RUNNING, ERROR_TIMEOUT, ERROR_UNEXPECTED
 from dsb.server import (
     DEFAULT_PORT,
     make_server,
+    parse_ask_request,
     parse_question,
     resolve_idle_timeout,
     resolve_max_timeout,
@@ -45,9 +46,11 @@ class StubAsk:
         self.outcome = outcome
         self.error = error
         self.questions: list[str] = []
+        self.session_ids: list[str | None] = []
 
-    def __call__(self, question: str) -> Any:
+    def __call__(self, question: str, session_id: str | None = None) -> Any:
         self.questions.append(question)
+        self.session_ids.append(session_id)
         if self.error is not None:
             raise self.error
         return self.outcome
@@ -208,6 +211,21 @@ def test_parse_question_only_accepts_the_wire_shape() -> None:
     assert parse_question(json.dumps({"question": 42}).encode()) is None
     assert parse_question(json.dumps({"问题": "字段名反了"}).encode()) is None
     assert parse_question("中文不是 json".encode()) is None
+
+
+def test_parse_ask_request_takes_an_optional_poll_id() -> None:
+    """id 让一趟长问句能被拆成几趟短轮询；不合形状的 id 同罪于问题缺失。"""
+    assert parse_ask_request(json.dumps({"question": "问"}).encode()) == ("问", None)
+    assert parse_ask_request(json.dumps({"question": "问", "id": "q-1"}).encode()) == ("问", "q-1")
+    assert parse_ask_request(json.dumps({"question": "问", "id": ""}).encode()) is None
+    assert parse_ask_request(json.dumps({"question": "问", "id": 7}).encode()) is None
+
+
+def test_route_hands_the_poll_id_through() -> None:
+    ask = StubAsk()
+    status, _ = route("POST", "/ask", json.dumps({"question": "问", "id": "q-1"}).encode(), ask)
+    assert status == 200
+    assert ask.session_ids == ["q-1"]
 
 
 def test_resolve_port_prefers_the_process_environment(

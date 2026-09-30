@@ -56,7 +56,7 @@ from dsb.events import (
     session_id_of,
 )
 from dsb.log import log_event
-from dsb.opencode import extract_answer, has_assistant
+from dsb.opencode import answer_complete, has_assistant
 
 AUTH_USERNAME = "opencode"
 SERVICE_BIN = "opencode"
@@ -625,7 +625,7 @@ class OpencodeClient:
             if current != mark:
                 mark = current
                 last_activity = self._now()  # 消息侧还在长 = 在动
-            if extract_answer(fresh) is not None:
+            if answer_complete(fresh):
                 self._progress.done()
                 return {"kind": "success", "body": fresh}
             if has_assistant(fresh):

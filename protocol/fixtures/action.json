@@ -1,0 +1,55 @@
+{
+  "description": "页面动作协议（ADR-0007）。agent 用 POST /action 提交一个最小动作，请求体 {\"action\", \"params\", \"target\"}，带 Authorization: Bearer <token>（写端点验 token）。中继按 target 标签页入阻塞串行队列，经动作流 GET /actions（SSE）推给扩展，扩展在页面执行后回传，这次 POST 原地返回 response。response 成功 {\"ok\":true,\"action\",\"result\"}，失败 {\"ok\":false,\"action\",\"error\"}。",
+  "errorCodes": [
+    { "code": "unauthorized", "when": "写请求缺 token 或 token 不匹配" },
+    { "code": "no-subscriber", "when": "扩展未订阅动作流或已断开" },
+    { "code": "disabled", "when": "总开关关着" },
+    { "code": "unknown-action", "when": "动作名不在册" },
+    { "code": "timeout", "when": "动作推给扩展后超时未回传" },
+    { "code": "tab-gone", "when": "目标标签页已不存在" }
+  ],
+  "cases": [
+    {
+      "name": "tabs.list 成功",
+      "request": { "action": "tabs.list", "params": {}, "target": null },
+      "response": {
+        "ok": true,
+        "action": "tabs.list",
+        "result": {
+          "tabs": [
+            {
+              "id": 42,
+              "title": "DeepSeek - 深度求索",
+              "url": "https://chat.deepseek.com/a/chat/s/abc123"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "composer.type 指定标签页成功",
+      "request": { "action": "composer.type", "params": { "text": "你好" }, "target": "42" },
+      "response": { "ok": true, "action": "composer.type", "result": {} }
+    },
+    {
+      "name": "未订阅失败",
+      "request": { "action": "tabs.list", "params": {}, "target": null },
+      "response": { "ok": false, "action": "tabs.list", "error": "no-subscriber" }
+    },
+    {
+      "name": "总开关关闭失败",
+      "request": { "action": "tabs.list", "params": {}, "target": null },
+      "response": { "ok": false, "action": "tabs.list", "error": "disabled" }
+    },
+    {
+      "name": "未知动作失败",
+      "request": { "action": "page.nope", "params": {}, "target": null },
+      "response": { "ok": false, "action": "page.nope", "error": "unknown-action" }
+    },
+    {
+      "name": "token 无效失败",
+      "request": { "action": "tabs.list", "params": {}, "target": null },
+      "response": { "ok": false, "action": "tabs.list", "error": "unauthorized" }
+    }
+  ]
+}

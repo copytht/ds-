@@ -39,6 +39,35 @@ export type ConfigCase = {
   readonly expected: Readonly<Record<string, unknown>>;
 };
 
+/** 页面动作的请求体（`action.json`）：动作名 + 参数 + 目标标签页（null = 不挑）。 */
+export type ActionRequest = {
+  readonly action: string;
+  readonly params: Readonly<Record<string, unknown>>;
+  readonly target: string | null;
+};
+
+/** 页面动作的响应（`action.json`）：成功与失败同构到 `action` 一条，失败码另在册。 */
+export type ActionResponse =
+  | { readonly ok: true; readonly action: string; readonly result: unknown }
+  | { readonly ok: false; readonly action: string; readonly error: string };
+
+/** 页面动作对拍（`action.json`）。 */
+export type ActionCase = {
+  readonly name: string;
+  readonly request: ActionRequest;
+  readonly response: ActionResponse;
+};
+
+/** 页面动作失败码册子（`action.json`）：case 里的 `error` 只能取这里的 `code`。 */
+export type ActionErrorCode = {
+  readonly code: string;
+  readonly when: string;
+};
+
+export type ActionFixtureFile = FixtureFile<ActionCase> & {
+  readonly errorCodes: readonly ActionErrorCode[];
+};
+
 const MODULES = import.meta.glob<FixtureFile<unknown>>("../../protocol/fixtures/*.json", {
   eager: true,
   import: "default",

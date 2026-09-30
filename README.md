@@ -118,6 +118,13 @@ curl -X POST http://127.0.0.1:8787/ask \
 `{"phase": "queued" | "running" | "writing" | "done", "written": <已写字数>, "remaining": <剩余秒数或 null>}`；
 它不提供任何指挥能力，`/ask` 仍是唯一写入口。
 
+`/ask` 还能带一个**轮询 id**（`{"question": ..., "id": "poll-1"}`）：带上它，中继最多让这一趟
+挂 15s，没出结果就回 `{"status": "pending", "id": "poll-1"}`，拿同一个 id 接着问即可——**一趟
+长问句就这样拆成几趟短 fetch**。扩展必须这么走：MV3 的 service worker 对一条在途 fetch 只保它
+约 5 分钟，更长的问句一过线就被浏览器连人带连接一起收走，中继算完了也写不回来（真机日志里两次
+`BrokenPipeError`），页面永远等不到回灌、整条链静默停摆。不带 id 就还是老行为：一次问到底
+（curl 与测试走这条）。决策与取舍见 ADR-0008。
+
 失败也是同一形状：`{"status": "error", "error": "opencode-not-running" | "opencode-timeout" |
 "unexpected-response"}`，扩展据此出**失败提示**（不进对话流）。中继只交结构化结果，
 TOON 编码在扩展侧，多行正文走 tabular（SPEC §9.3，一行正文一条 row，换行不产生转义），

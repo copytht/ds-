@@ -6,9 +6,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from urllib.parse import urlparse
 
 SESSION_ID_ENV_KEY = "OPENSESS_ID"
+
+#: 动作写端点的 token 落点：固定路径、0600、不进版本库（调用方从这儿读，agent 不手工管）。
+ACTION_TOKEN_PATH = Path(__file__).resolve().parents[1] / ".dsb-token"
 
 
 def parse_service_endpoint(status_output: str) -> dict[str, str | int]:

@@ -1,6 +1,8 @@
 import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 
+import { postActionResult, runAction } from "../src/lib/action";
+import { createActionStream, type ActionFrame } from "../src/lib/actionstream";
 import { askResponseMessage, parseAskRequest } from "../src/lib/channel";
 import {
   FAILURE_LOG_STORAGE_KEY,
@@ -33,10 +35,12 @@ import {
   relayHealthUrl,
   relayStatusUrl,
   RELAY_HEALTH_TIMEOUT_MS,
+  RELAY_POLL_TIMEOUT_MS,
   RELAY_STATUS_POLL_INTERVAL_MS,
   RELAY_STATUS_TIMEOUT_MS,
   RELAY_TIMEOUT_MS,
   type AskStatus,
+  type RelayAskPoll,
   type StatusSnapshot,
 } from "../src/lib/relay";
 import {
@@ -64,6 +68,9 @@ export default defineBackground(() => {
   /** 周期探活的闹钟名与周期：30s 是 alarms 的下限，再密浏览器也不认。 */
   const HEALTH_ALARM_NAME = "relay-health";
   const HEALTH_ALARM_PERIOD_MINUTES = 0.5;
+
+  /** 订阅期间的保活间隔：MV3 的 service worker 空闲约 30s 就被收走，挂着的流也跟着没。 */
+  const KEEPALIVE_INTERVAL_MS = 20_000;
 
   /** 图标三态。 */
   let state: IconState = "off";
@@ -315,26 +322,95 @@ export default defineBackground(() => {
    * 在途期间另开一条 `/status` 轮询，让等待期不再是黑箱；收摊时无论成败都先把
    * 现场清掉，再由调用方上屏，免得答案都回来了角标还挂着个「写」。
    */
+  /**
+   * 打中继：一趟长问句拆成几趟**短 fetch**（带同一个 id 轮询），每趟最多挂
+   * `RELAY_POLL_TIMEOUT_MS`。
+   *
+   * 不这么做的话：一条 fetch 挂十分钟，MV3 的 service worker 半路被浏览器收走，连接断掉、
+   * 答复丢掉（真机撞过两次），页面永远等不到回灌、整条链就静默停摆。轮询的每一趟都是短的，
+   * 后台线程一直有事做；结果留在中继手里，掉线也能再取。
+   */
   async function askRelay(question: string): Promise<ReplyPayload> {
     const releaseKeepAlive = keepAliveWhileAsking();
     const stopStatusPolling = startStatusPolling();
+    const id = nextMessageId("poll");
+    const deadline = Date.now() + RELAY_TIMEOUT_MS;
     try {
-      const response = await fetchWithTimeout(relayAskUrl(), RELAY_TIMEOUT_MS, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: relayAskBody(question),
-      });
-      try {
-        return parseRelayResponse(response.status, await response.text());
-      } catch {
-        return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
+      for (;;) {
+        let outcome: RelayAskPoll;
+        try {
+          const response = await fetchWithTimeout(relayAskUrl(), RELAY_POLL_TIMEOUT_MS, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: relayAskBody(question, id),
+          });
+          try {
+            outcome = parseRelayResponse(response.status, await response.text());
+          } catch {
+            return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
+          }
+        } catch {
+          return errorPayload(FAILURE_RELAY_UNREACHABLE);
+        }
+        if (outcome.status !== "pending") return outcome;
+        if (Date.now() >= deadline) return errorPayload(FAILURE_RELAY_UNREACHABLE);
       }
-    } catch {
-      return errorPayload(FAILURE_RELAY_UNREACHABLE);
     } finally {
       stopStatusPolling();
       askProgress = null;
       releaseKeepAlive();
+    }
+  }
+
+  /**
+   * 动作流（ADR-0007）：总开关开着才订 `GET /actions`，关了当场断——关着时通道不活着，
+   * 和「站点范围钉死」同一条思路。中继侧另有 `disabled`，执行前这边再读一次开关。
+   *
+   * 断线重连在 `actionStream` 里自己排（开着才排），这里只管开关与保活：
+   * 保活是个定闹钟的空转调用（同 `keepAliveWhileAsking`），只为了别让 SW 30s 被收走。
+   */
+  const actionStream = createActionStream({
+    open: async (url, signal) => {
+      const response = await fetch(url, { signal });
+      if (!response.ok || response.body === null) {
+        throw new Error(`动作流没接上（HTTP ${response.status}）`);
+      }
+      return response.body;
+    },
+    onFrame: (frame) => {
+      void handleAction(frame);
+    },
+  });
+
+  let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
+
+  function syncActionStream(enabled: boolean): void {
+    actionStream.sync(enabled);
+    if (enabled && keepAliveTimer === undefined) {
+      keepAliveTimer = setInterval(() => {
+        void browser.runtime.getPlatformInfo().catch(() => undefined);
+      }, KEEPALIVE_INTERVAL_MS);
+      return;
+    }
+    if (!enabled && keepAliveTimer !== undefined) {
+      clearInterval(keepAliveTimer);
+      keepAliveTimer = undefined;
+    }
+  }
+
+  /** 收到一件动作：现读总开关 → 执行 → 把结果交回中继（不执行就什么都不回，等它判超时）。 */
+  async function handleAction(frame: ActionFrame): Promise<void> {
+    try {
+      const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
+      const outcome = await runAction(frame, {
+        enabled: readToggle(stored[TOGGLE_STORAGE_KEY]),
+        tabs: { query: (query) => browser.tabs.query(query) },
+      });
+      if (outcome === null) return;
+      await postActionResult((url, init) => fetch(url, init), frame.id, outcome);
+    } catch (error) {
+      // 执行失败不冒泡：这条流上的失败由中继按 timeout 收场，不进对话流。
+      console.log("[ds-] 动作没成", frame.action, error);
     }
   }
 
@@ -343,6 +419,7 @@ export default defineBackground(() => {
     const stored = await browser.storage.local.get([TOGGLE_STORAGE_KEY, FAILURE_LOG_STORAGE_KEY]);
     const enabled = readToggle(stored[TOGGLE_STORAGE_KEY]);
     failureLog = readFailureLog(stored[FAILURE_LOG_STORAGE_KEY]); // 留痕先上手，标题才拼得出历史
+    syncActionStream(enabled); // 动作流先跟着开关活/断，图标跟着探测结果走
     await syncHealthAlarm(enabled); // 排班先跟着开关走，图标再跟着探测结果走
     if (!enabled) {
       state = "off";

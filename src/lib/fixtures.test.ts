@@ -4,6 +4,8 @@ import {
   FIXTURE_FILENAMES,
   fixtureCases,
   fixtureFile,
+  type ActionCase,
+  type ActionFixtureFile,
   type ConfigCase,
   type FenceCase,
   type OpencodeCase,
@@ -11,7 +13,7 @@ import {
 } from "./fixtures";
 import { isKnownFailureKind, REPLY_ANCHOR } from "./reply";
 
-const EXPECTED_FILES = ["config.json", "fence.json", "opencode.json", "reply.json"];
+const EXPECTED_FILES = ["action.json", "config.json", "fence.json", "opencode.json", "reply.json"];
 
 const KNOWN_OUTCOME_KINDS = ["success", "not-running", "timeout", "http-error"];
 const KNOWN_CONFIG_KINDS = ["port", "password", "session-id"];
@@ -45,7 +47,7 @@ function rawPayload(value: unknown): Record<string, unknown> {
 }
 
 describe("共享 fixture 完整性", () => {
-  it("四个 fixture 都在，且两半按同一份清单读", () => {
+  it("五个 fixture 都在，且两半按同一份清单读", () => {
     expect(FIXTURE_FILENAMES).toEqual(EXPECTED_FILES);
   });
 
@@ -132,6 +134,45 @@ describe("配置 fixture 自洽", () => {
       expect(typeof name).toBe("string");
       expect(typeof input).toBe("string");
       expect(typeof expected).toBe("object");
+    }
+  });
+});
+
+describe("动作 fixture 自洽", () => {
+  it("失败码册子里 code 不重样、when 非空", () => {
+    const file = fixtureFile("action.json") as ActionFixtureFile;
+    const codes = file.errorCodes.map(({ code, when }) => {
+      expect(typeof code).toBe("string");
+      expect(code.length).toBeGreaterThan(0);
+      expect(typeof when).toBe("string");
+      expect(when.length).toBeGreaterThan(0);
+      return code;
+    });
+    expect(new Set(codes).size).toBe(codes.length);
+  });
+
+  it("每个 case：请求体三条字段在场，响应回同一个 action", () => {
+    for (const { request, response } of fixtureCases<ActionCase>("action.json")) {
+      expect(typeof request.action).toBe("string");
+      expect(request.params).toBeTypeOf("object");
+      expect(request.target === null || typeof request.target === "string").toBe(true);
+      expect(response.action).toBe(request.action);
+    }
+  });
+
+  it("成功不带 error、失败带册子上的码（对拍）", () => {
+    const codes = (fixtureFile("action.json") as ActionFixtureFile).errorCodes.map(
+      ({ code }) => code,
+    );
+    for (const { name, response } of fixtureCases<ActionCase>("action.json")) {
+      if (response.ok) {
+        expect(response).not.toHaveProperty("error");
+        expect(response).toHaveProperty("result");
+      } else {
+        expect(codes).toContain(response.error);
+        expect(response).not.toHaveProperty("result");
+      }
+      expect(typeof name).toBe("string");
     }
   });
 });

@@ -37,7 +37,7 @@ class StubAsk:
         self.outcome = outcome
         self.error = error
 
-    def __call__(self, question: str) -> Any:
+    def __call__(self, question: str, session_id: str | None = None) -> Any:
         if self.error is not None:
             raise self.error
         return self.outcome
@@ -128,6 +128,18 @@ def test_a_successful_ask_leaves_a_length_not_a_body(
     assert "answer_chars=" in events.text
     assert "问题正文" not in events.text
     assert "答复正文" not in events.text
+
+
+def test_a_pending_poll_is_not_logged_as_an_answer(
+    serve: Any, events: pytest.LogCaptureFixture
+) -> None:
+    """长问句的中间态（一趟没等到）不是失败也不是答完，别往日志里灌。"""
+    base = serve(StubAsk(outcome={"kind": "pending", "id": "q-1"}))
+    status, payload = post_ask(base)
+
+    assert status == 200 and payload == {"status": "pending", "id": "q-1"}
+    assert "ask-ok" not in events.text
+    assert "ask-fail" not in events.text
 
 
 def test_a_probe_that_blows_up_answers_json_and_keeps_its_name(

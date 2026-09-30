@@ -29,6 +29,11 @@ export const RELAY_TIMEOUT_MS = 1_920_000;
 /** 探活（`GET /health`）只问在不在，快点回来。 */
 export const RELAY_HEALTH_TIMEOUT_MS = 5_000;
 /**
+ * 一趟轮询最多挂多久。中继那侧最多让请求挂 15s（没出结果就回 `pending`），这里宽一点，
+ * 免得网络抖动把一趟正常轮询掐了。
+ */
+export const RELAY_POLL_TIMEOUT_MS = 20_000;
+/**
  * 现场快照（`GET /status`）同样只要个「在不在 + 走到哪一步」，跟探活一样快。
  *
  * 中继一挂，这一条会在自己的超时内报错——所以「等着的时候中继死了」不用另外
@@ -51,9 +56,15 @@ export function relayHealthUrl(): string {
   return `${RELAY_ORIGIN}${RELAY_HEALTH_PATH}`;
 }
 
-/** 问题进中继的请求体：只有 `question` 一条，逐字符原样送过去。 */
-export function relayAskBody(question: string): string {
-  return JSON.stringify({ question });
+/**
+ * 问题进中继的请求体：问题逐字符原样送，另带一个**轮询 id**。
+ *
+ * 带 id 是为了把一趟长问句拆成几趟短 fetch：MV3 的 service worker 对一条在途 fetch 只保它
+ * 约 5 分钟，更长的问句一过线就被浏览器连人带连接一起收走——中继算完了也写不回来（真机日志
+ * 里两次 `BrokenPipe`）。带同一个 id 接着问，中继把结果交出来。
+ */
+export function relayAskBody(question: string, id: string): string {
+  return JSON.stringify({ question, id });
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -61,10 +72,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * 一趟轮询的回法：还没出结果（`pending`）或最终载荷。扩展拿 `pending` 就带同一个 id 再问。
+ */
+export type RelayAskPoll = ReplyPayload | { readonly status: "pending" };
+
+/**
  * 中继的响应 → 回灌载荷（成功失败同构，解析只有一条路径）。
  * 状态码或载荷不合线协议，一律落 `unexpected-response`，不猜。
  */
-export function parseRelayResponse(status: number, bodyText: string): ReplyPayload {
+export function parseRelayResponse(status: number, bodyText: string): RelayAskPoll {
   if (status < 200 || status >= 300) return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
 
   let parsed: unknown;
@@ -76,6 +92,7 @@ export function parseRelayResponse(status: number, bodyText: string): ReplyPaylo
   if (!isPlainObject(parsed)) return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
 
   const relayStatus = parsed["status"];
+  if (relayStatus === "pending") return { status: "pending" };
   if (relayStatus === "ok") {
     const answer = parsed["answer"];
     if (typeof answer === "string" && answer.trim() !== "") return okPayload(answer);
