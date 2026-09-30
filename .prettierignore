@@ -12,4 +12,5 @@ uv.lock
 
 # 技能库与本机配置
 .agents/
+vendor/
 .env

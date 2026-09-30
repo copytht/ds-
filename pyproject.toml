@@ -35,6 +35,8 @@ module-name = "dsb"
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+# 技能库是别人家的代码，不进本仓库的格式与静态检查。
+extend-exclude = ["vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

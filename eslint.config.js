@@ -12,6 +12,7 @@ export default [
       "coverage/**",
       "node_modules/**",
       ".venv/**",
+      "vendor/**",
       "dsb/**",
       "tests/**",
     ],
