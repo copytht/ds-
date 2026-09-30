@@ -3,6 +3,15 @@ import { defineBackground } from "wxt/utils/define-background";
 
 import { askResponseMessage, parseAskRequest } from "../src/lib/channel";
 import {
+  FAILURE_LOG_STORAGE_KEY,
+  describeLastFailure,
+  markLastFailureRecovered,
+  readFailureLog,
+  rememberFailure,
+  type FailureRecord,
+  type FailureWhere,
+} from "../src/lib/failurelog";
+import {
   afterHealthProbe,
   badgeText,
   iconTitle,
@@ -15,6 +24,8 @@ import { nextMessageId } from "../src/lib/id";
 import {
   FAILURE_RELAY_UNREACHABLE,
   FAILURE_UNEXPECTED_RESPONSE,
+  describeFetchFailure,
+  describeStatusFailure,
   parseRelayResponse,
   parseStatusResponse,
   relayAskBody,
@@ -43,7 +54,9 @@ import { readToggle, TOGGLE_STORAGE_KEY } from "../src/lib/toggle";
  * 2. 工具栏图标即状态位：关 / 开且中继可达 / 开但中继不可达，悬停给原因与启动命令；
  * 3. 点击图标切换总开关（总开关本身还是只存在 `storage.local`，默认关）；
  * 4. 问句在途时轮询 `GET /status`，把等待现场（阶段 / 字数 / 剩余预算）摆上角标与悬停，
- *    中继答不上来当场翻红——进度只走图标，**不进对话流**。
+ *    中继答不上来当场翻红——进度只走图标，**不进对话流**；
+ * 5. 每次翻红都留一笔（时刻 / 环节 / 原因）进 `storage.local`，自己绿了再补上恢复时刻，
+ *    悬停回看——否则红过就蒸发，事后没人答得出「为什么红」。
  *
  * 不建 options 页、不建 popup、不建面板（spec #9 Out of Scope）。
  */
@@ -58,6 +71,43 @@ export default defineBackground(() => {
   let notice: FailureNotice | null = null;
   /** 问句在途时的现场（阶段/字数/剩余预算），由 `/status` 轮询喂；空档恒为 null。 */
   let askProgress: AskStatus | null = null;
+  /**
+   * 失败留痕，新的在最前。启动时从 `storage.local` 载入，所以 service worker 被收走、
+   * 浏览器重启都丢不了——只放内存的话，红过一次就再没人答得出「为什么红」。
+   */
+  let failureLog: FailureRecord[] = [];
+  /** 往 storage 写留痕的串行队列：轮询每 3s 失败一次，并发的读改写会互相踩。 */
+  let persistQueue: Promise<unknown> = Promise.resolve();
+
+  function persistFailureLog(): void {
+    persistQueue = persistQueue
+      .then(() => browser.storage.local.set({ [FAILURE_LOG_STORAGE_KEY]: failureLog }))
+      .catch(() => undefined); // 留痕写不进去不该把图标也拖死
+  }
+
+  /**
+   * 记一笔故障。同一环节同一原因、且上一笔还没恢复的**不重复记**——那只是同一次
+   * 故障在延续（探活每 30s、轮询每 3s 会再失败一次），留下的是故障开始的时刻。
+   */
+  function recordFailure(where: FailureWhere, cause: string): void {
+    const next = rememberFailure(failureLog, { at: Date.now(), where, cause });
+    if (next === failureLog) return;
+    failureLog = next;
+    persistFailureLog();
+  }
+
+  /**
+   * 图标翻回绿了，给最前面那笔补上恢复时刻。
+   *
+   * 返回有没有真的改过——没改就不用重画，标题里那句「N 秒后恢复」也不会白拼一遍。
+   */
+  function recoverFailure(): boolean {
+    const next = markLastFailureRecovered(failureLog, Date.now());
+    if (next === failureLog) return false;
+    failureLog = next;
+    persistFailureLog();
+    return true;
+  }
 
   /**
    * 上图标：先拼悬停文案，再画像素；像素画不出来就退回角标，三态至少还分得开。
@@ -66,7 +116,9 @@ export default defineBackground(() => {
    * 等待现场（等 / 想 / 写），这是「等着的时候什么都不知道」那个缺口的出口。
    */
   async function paintIcon(): Promise<void> {
-    await browser.action.setTitle({ title: iconTitle(state, notice, askProgress) });
+    await browser.action.setTitle({
+      title: iconTitle(state, notice, askProgress, describeLastFailure(failureLog, Date.now())),
+    });
     await browser.action.setBadgeText({ text: badgeText(state, askProgress) });
     try {
       await browser.action.setIcon({
@@ -79,15 +131,22 @@ export default defineBackground(() => {
     }
   }
 
-  /** 中继的结果 → 图标状态：成功即可达，失败把原因放进失败提示（扩展侧唯一出口）。 */
+  /**
+   * 中继的结果 → 图标状态：成功即可达，失败把原因放进失败提示（扩展侧唯一出口）。
+   * 成功顺手把留痕收尾，失败另记一笔——问句这一环跟探活不一样，它带的是中继自己
+   * 的错误码（opencode 没起 / 超时 / 响应异常），比「中继不可达」有信息量得多。
+   */
   function applyOutcome(payload: ReplyPayload): void {
     if (state === "off") return;
     if (payload.status === "ok") {
       state = "on-reachable";
       notice = null;
+      recoverFailure();
     } else {
       state = "on-unreachable";
       notice = failureNotice(payload.error);
+      recordFailure("ask", notice.reason);
+      console.log(`[ds-] 问句没成（${payload.error}），已记一笔：${notice.reason}`);
     }
     void paintIcon();
   }
@@ -106,22 +165,39 @@ export default defineBackground(() => {
     }
   }
 
-  /** 探活：开关打开时先看中继在不在（`GET /health`）。 */
-  async function pingRelay(): Promise<boolean> {
+  /**
+   * 探活：开关打开时先看中继在不在（`GET /health`）。
+   *
+   * 顺带把**为什么**不可达带回来。以前这里是 `catch { return false }`，超时、连不上、
+   * 非 2xx 三件事被折成同一件，图标一红就再没有下文了。
+   */
+  async function pingRelay(): Promise<{ reachable: boolean; cause: string | null }> {
     try {
-      return (await fetchWithTimeout(relayHealthUrl(), RELAY_HEALTH_TIMEOUT_MS)).ok;
-    } catch {
-      return false;
+      const response = await fetchWithTimeout(relayHealthUrl(), RELAY_HEALTH_TIMEOUT_MS);
+      if (!response.ok) return { reachable: false, cause: `HTTP ${response.status}` };
+      return { reachable: true, cause: null };
+    } catch (error) {
+      return { reachable: false, cause: describeFetchFailure(error, RELAY_HEALTH_TIMEOUT_MS) };
     }
   }
 
-  /** 问一次现场：读不到体面的答案一律当「这条不可信」，不猜。 */
-  async function readStatus(): Promise<StatusSnapshot> {
+  /**
+   * 问一次现场：读不到体面的答案一律当「这条不可信」，不猜；同样把读不到的原因带回来。
+   */
+  async function readStatus(): Promise<{ snapshot: StatusSnapshot; cause: string | null }> {
     try {
       const response = await fetchWithTimeout(relayStatusUrl(), RELAY_STATUS_TIMEOUT_MS);
-      return parseStatusResponse(response.status, await response.text());
-    } catch {
-      return { reachable: false, ask: null };
+      const text = await response.text();
+      const snapshot = parseStatusResponse(response.status, text);
+      return {
+        snapshot,
+        cause: snapshot.reachable ? null : describeStatusFailure(response.status, text),
+      };
+    } catch (error) {
+      return {
+        snapshot: { reachable: false, ask: null },
+        cause: describeFetchFailure(error, RELAY_STATUS_TIMEOUT_MS),
+      };
     }
   }
 
@@ -131,19 +207,21 @@ export default defineBackground(() => {
    * 每回都重画是故意的：现场的价值就在「每 3s 变一次」（字数在涨、预算在走），
    * 去重反而把它省没了；真正贵的那条 30s 探活另有 `healthProbe` 自己的去重。
    */
-  function applyStatus(snapshot: StatusSnapshot): void {
+  function applyStatus(snapshot: StatusSnapshot, cause: string | null): void {
     if (state === "off") return;
     if (!snapshot.reachable) {
       state = "on-unreachable";
       notice = failureNotice(FAILURE_RELAY_UNREACHABLE);
       askProgress = null; // 手里那份进度已经作废，留着只会误导
-      console.log("[ds-] 等待期问现场没答上来，图标翻红");
+      recordFailure("status", cause ?? "读不到现场");
+      console.log(`[ds-] 等待期问现场没答上来（${cause ?? "读不到现场"}），图标翻红`);
       void paintIcon();
       return;
     }
     if (state === "on-unreachable") {
       state = "on-reachable";
       notice = null;
+      recoverFailure();
     }
     askProgress = snapshot.ask;
     void paintIcon();
@@ -163,9 +241,9 @@ export default defineBackground(() => {
 
     async function tick(): Promise<void> {
       if (stopped) return;
-      const snapshot = await readStatus();
+      const result = await readStatus();
       if (stopped) return;
-      applyStatus(snapshot);
+      applyStatus(result.snapshot, result.cause);
       if (stopped) return;
       timer = setTimeout(() => void tick(), RELAY_STATUS_POLL_INTERVAL_MS);
     }
@@ -196,12 +274,19 @@ export default defineBackground(() => {
    * 状态没变就不重画——每 30s 一次，重画是白做的功。
    */
   async function healthProbe(): Promise<void> {
-    const reachable = await pingRelay();
-    const next = afterHealthProbe(state, reachable);
+    const probe = await pingRelay();
+    const next = afterHealthProbe(state, probe.reachable);
     const flipped = next.state !== state || next.notice !== notice;
     console.log(
-      `[ds-] 周期探活：中继${reachable ? "可达" : "不可达"}，图标${flipped ? `翻到 ${next.state}` : "不动"}`,
+      `[ds-] 周期探活：中继${probe.reachable ? "可达" : `不可达（${probe.cause ?? "原因不详"}）`}，` +
+        `图标${flipped ? `翻到 ${next.state}` : "不动"}`,
     );
+    // 记账不看 flipped：翻红要留痕、翻绿要收尾，没变的时候同一次故障也记不进第二笔。
+    if (probe.reachable) {
+      if (state === "on-unreachable") recoverFailure();
+    } else {
+      recordFailure("health", probe.cause ?? "原因不详");
+    }
     if (!flipped) return;
     state = next.state;
     notice = next.notice;
@@ -255,8 +340,9 @@ export default defineBackground(() => {
 
   /** 总开关变了就跟图标：关了即「关」，开了先按可达摆、再探一次中继。 */
   async function syncFromStorage(): Promise<void> {
-    const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
+    const stored = await browser.storage.local.get([TOGGLE_STORAGE_KEY, FAILURE_LOG_STORAGE_KEY]);
     const enabled = readToggle(stored[TOGGLE_STORAGE_KEY]);
+    failureLog = readFailureLog(stored[FAILURE_LOG_STORAGE_KEY]); // 留痕先上手，标题才拼得出历史
     await syncHealthAlarm(enabled); // 排班先跟着开关走，图标再跟着探测结果走
     if (!enabled) {
       state = "off";
@@ -270,12 +356,17 @@ export default defineBackground(() => {
     notice = null;
     await paintIcon();
 
-    const reachable = await pingRelay();
-    if (!reachable && state === "on-reachable") {
+    const probe = await pingRelay();
+    if (!probe.reachable) {
+      if (state !== "on-reachable") return; // 等待期间开关被关掉了，别再翻红
       state = "on-unreachable";
       notice = failureNotice(FAILURE_RELAY_UNREACHABLE);
+      recordFailure("health", probe.cause ?? "原因不详");
       await paintIcon();
+      return;
     }
+    // 探到了就说明上一次的红到此为止（包括关着浏览器时留下的那笔），补一句再画。
+    if (state === "on-reachable" && recoverFailure()) await paintIcon();
   }
 
   // 点击图标 = 切换总开关（启动命令走悬停文案，见 #13 补充要求）。

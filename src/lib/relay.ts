@@ -150,3 +150,28 @@ export function parseStatusResponse(status: number, bodyText: string): StatusSna
   const askStatus = parseAskStatus(ask);
   return askStatus === null ? STATUS_OFFLINE : { reachable: true, ask: askStatus };
 }
+
+/**
+ * 网络层的异常 → 一句能进日志、能上悬停的话。
+ *
+ * `fetch` 抛出来的东西分两种：自己掐表的 `AbortError`（「5 秒没回」是**有信息量**的，
+ * 中继活着但卡住了）和 `TypeError`（连都没连上）。两者排查方向相反，别都折成一个
+ * 「失败」了事——之前就是这么吞掉的，结果翻红之后没人说得出为什么。
+ */
+export function describeFetchFailure(error: unknown, timeoutMs: number): string {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return `超时（${timeoutMs}ms 没回）`;
+  }
+  return "连接失败";
+}
+
+/**
+ * 响应到了、但读不出体面的现场 → 一句话。
+ *
+ * 状态码能报就报码；2xx 却解析不出来，说明中继答了个看不懂的东西，这时正文规模是
+ * 唯一有用的事实（几十个字和空响应不是一回事），**不记正文本身**。
+ */
+export function describeStatusFailure(status: number, bodyText: string): string {
+  if (status < 200 || status >= 300) return `HTTP ${status}`;
+  return `响应读不出来（${bodyText.length} 字）`;
+}

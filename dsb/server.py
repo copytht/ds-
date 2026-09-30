@@ -11,6 +11,9 @@
 
 成功与失败同构、都回 200（只有请求本身不合线协议才回 4xx），解析只有一条路径；
 编码（TOON）不在这边，Python 侧不引任何 TOON 库。
+
+失败与慢另外留痕（:mod:`dsb.log`）：事件名固定、字段有名有姓，**问题正文进不来**
+——签名里就没有那个位置。访问日志照旧整个关掉。
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from collections.abc import Callable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,6 +30,7 @@ from urllib.parse import urlsplit
 
 from dsb.client import DEFAULT_ANSWER_TIMEOUT, DEFAULT_START_TIMEOUT, OpencodeClient
 from dsb.config import parse_session_id
+from dsb.log import SLOW_MS, log_event, setup_logging
 from dsb.opencode import ERROR_UNEXPECTED, error_payload, payload_from_outcome
 
 HEALTH_PATH = "/health"
@@ -42,6 +47,13 @@ AskFn = Callable[[str], Mapping[str, Any]]
 ProbeFn = Callable[[], str]
 StatusFn = Callable[[], Mapping[str, Any]]
 Payload = dict[str, Any]
+
+#: 哪条路炸了就叫哪个名字：探活炸了和问句炸了，排查方向完全两样。
+BROKE_EVENT: dict[str, str] = {
+    "/ask": "ask-broke",
+    "/health": "probe-broke",
+    "/status": "status-broke",
+}
 
 
 def parse_question(body: bytes) -> str | None:
@@ -94,10 +106,8 @@ def route(
         if question is None:
             # 请求本身不合线协议：错误码只在册的三个，这里落非预期响应兜底。
             return 400, error_payload(ERROR_UNEXPECTED)
-        try:
-            return 200, payload_from_outcome(ask(question))
-        except Exception:  # 中继自己出岔子也不回裸堆栈
-            return 500, error_payload(ERROR_UNEXPECTED)
+        # 不在这儿接异常：route 是纯接缝，谁出岔子谁留痕——接住就等于把现场销毁了。
+        return 200, payload_from_outcome(ask(question))
     if method in {"GET", "POST"}:
         return 404, error_payload(ERROR_UNEXPECTED)
     return 405, error_payload(ERROR_UNEXPECTED)
@@ -128,8 +138,48 @@ def make_handler(
             self._respond("DELETE")
 
         def _respond(self, method: str) -> None:
-            status_code, payload = route(method, self.path, self._body(), ask, probe, status)
+            path = urlsplit(self.path).path
+            started = time.monotonic()
+            try:
+                status_code, payload = route(method, self.path, self._body(), ask, probe, status)
+            except Exception as exc:  # route 该兜的都兜了：漏到这儿的是探活 / 别的旁路
+                took_ms = (time.monotonic() - started) * 1000
+                # 接住而不是放着断连：裸断连对扩展来说长得像「中继死了」，日志里却一个字没有。
+                log_event(
+                    BROKE_EVENT.get(path, "request-broke"),
+                    path=path,
+                    exc=exc,
+                    took_ms=took_ms,
+                )
+                self._send(500, error_payload(ERROR_UNEXPECTED))
+                return
+            self._record(path, status_code, payload, (time.monotonic() - started) * 1000)
             self._send(status_code, payload)
+
+        def _record(self, path: str, status: int, payload: Payload | None, took_ms: float) -> None:
+            """只记**失败与慢**：成功且快的探活每 30s 一条，只会把日志淹掉。"""
+            if status >= 400:
+                log_event("bad-request", path=path, http=status, took_ms=took_ms)
+                return
+            if path == ASK_PATH:
+                error = payload.get("error") if isinstance(payload, Mapping) else None
+                if isinstance(payload, Mapping) and payload.get("status") == "error":
+                    log_event(
+                        "ask-fail",
+                        error=error if isinstance(error, str) else None,
+                        took_ms=took_ms,
+                    )
+                else:
+                    answer = payload.get("answer") if isinstance(payload, Mapping) else None
+                    log_event(
+                        "ask-ok",
+                        took_ms=took_ms,
+                        answer_chars=len(answer) if isinstance(answer, str) else 0,
+                    )
+                return
+            # 探活与现场轮询慢了，就是扩展翻红的前兆——它们各有 5s 的预算。
+            if path in (HEALTH_PATH, STATUS_PATH) and took_ms >= SLOW_MS:
+                log_event("slow", path=path, took_ms=took_ms)
 
         def _body(self) -> bytes:
             length = int(self.headers.get("Content-Length") or 0)
@@ -229,6 +279,7 @@ def resolve_start_timeout(env_text: str) -> float:
 
 def main() -> None:
     """`uv run ds-mcp` 的入口：现读端口/口令/sessionID，然后对外服务。"""
+    setup_logging()
     env_text = read_env_text()
     session_id = parse_session_id(env_text)
     port = resolve_port(env_text)

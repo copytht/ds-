@@ -4,6 +4,8 @@ import {
   ASK_PHASES,
   FAILURE_RELAY_UNREACHABLE,
   FAILURE_UNEXPECTED_RESPONSE,
+  describeFetchFailure,
+  describeStatusFailure,
   parseRelayResponse,
   parseStatusResponse,
   relayAskBody,
@@ -134,5 +136,21 @@ describe("parseStatusResponse · 等待期的现场快照", () => {
     }
     // 唯独 ask: null 不在此列——那是「中继在、只是没问句在途」。
     expect(snapshot({ status: "ok", ask: null })).toEqual({ reachable: true, ask: null });
+  });
+});
+
+describe("失败原因的折算 · 翻红之后总得说得出为什么", () => {
+  it("自己掐表超时和连都没连上，是两件排查方向相反的事", () => {
+    expect(
+      describeFetchFailure(new DOMException("The operation was aborted.", "AbortError"), 5000),
+    ).toBe("超时（5000ms 没回）");
+    expect(describeFetchFailure(new TypeError("Failed to fetch"), 5000)).toBe("连接失败");
+    expect(describeFetchFailure("没头没尾的", 5000)).toBe("连接失败");
+  });
+
+  it("响应到了但读不出现场：报状态码，2xx 就报正文规模——不报正文本身", () => {
+    expect(describeStatusFailure(500, "Internal Server Error")).toBe("HTTP 500");
+    expect(describeStatusFailure(200, "不是 JSON")).toBe("响应读不出来（7 字）");
+    expect(describeStatusFailure(200, "")).toBe("响应读不出来（0 字）");
   });
 });

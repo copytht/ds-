@@ -69,17 +69,25 @@ export function badgeText(state: IconState, progress?: AskStatus | null): string
   return { queued: "等", running: "想", writing: "写", done: "" }[progress.phase];
 }
 
-/** 悬停文案：关与可达各自一句话，不可达必须带上原因与启动命令。 */
+/**
+ * 悬停文案：关与可达各自一句话，不可达必须带上原因与启动命令。
+ *
+ * 第四个参数是**上次故障的一句话**（`describeLastFailure` 产出）：红过又自己绿了之后，
+ * 原因就不再写在标题里了，只有把历史摆出来，「为什么红过」才查得到。当前正红着时
+ * 不摆——那时候第一句就是原因，重复一遍只是噪音。
+ */
 export function iconTitle(
   state: IconState,
   notice?: FailureNotice | null,
   progress?: AskStatus | null,
+  lastFailure?: string | null,
 ): string {
   if (state === "off") return `ds-：总开关已关，扩展没有接管页面。${CLICK_HINT}`;
   // 等待现场只在「开着且可达」时才有意义：不可达时手里那份进度已经作废了。
   const waiting = state === "on-reachable" && progress ? `${describeAsk(progress)}。` : "";
   if (state === "on-reachable") {
-    return `ds-：总开关已开，中继可达。${waiting}${CLICK_HINT}`;
+    const history = lastFailure ? `${lastFailure}。` : "";
+    return `ds-：总开关已开，中继可达。${waiting}${history}${CLICK_HINT}`;
   }
   const shown =
     notice ??

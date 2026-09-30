@@ -222,3 +222,38 @@ describe("iconTitle · 等待现场进悬停", () => {
     expect(title).toContain("总开关已关");
   });
 });
+
+describe("iconTitle · 上次故障回看", () => {
+  const history = "上次故障 14:49:36（2 分钟前）· 周期探活 · 超时（5000ms 没回），30 秒后恢复";
+
+  it("红过又自己绿了，悬停还答得出为什么红、几点红的、多久绿的", () => {
+    const title = iconTitle("on-reachable", null, null, history);
+    expect(title).toContain("上次故障 14:49:36");
+    expect(title).toContain("周期探活");
+    expect(title).toContain("超时（5000ms 没回）");
+    expect(title).toContain("30 秒后恢复");
+    expect(title).toContain("中继可达"); // 绿着呢，这句还得在
+  });
+
+  it("等待现场与历史同框，且现场在前", () => {
+    const title = iconTitle("on-reachable", null, ask("writing", 128, 52), history);
+    expect(title).toContain("正在写答复");
+    expect(title).toContain(history);
+    expect(title.indexOf("正在写答复")).toBeLessThan(title.indexOf(history));
+  });
+
+  it("一次都没红过就没有这句空历史", () => {
+    expect(iconTitle("on-reachable", null, null, null)).toBe(iconTitle("on-reachable"));
+    expect(iconTitle("on-reachable")).toBe(iconTitle("on-reachable"));
+  });
+
+  it("当前正红着时不摆历史——第一句就是原因，重复一遍只是噪音", () => {
+    const title = iconTitle("on-unreachable", failureNotice("relay-unreachable"), null, history);
+    expect(title).not.toContain("上次故障");
+    expect(title).toContain("本机中继 dsb 没有响应");
+  });
+
+  it("关着的时候历史更不相干", () => {
+    expect(iconTitle("off", null, null, history)).not.toContain("上次故障");
+  });
+});
