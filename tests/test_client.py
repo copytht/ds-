@@ -698,8 +698,11 @@ def test_a_long_working_turn_is_not_cut_while_it_keeps_working() -> None:
     assert clock["now"] == 800.0  # 远超静默窗口：靠「一直在动」撑过来的，不是碰巧快
 
 
-def test_the_hard_ceiling_stops_an_endless_loop_even_while_it_keeps_working() -> None:
-    """一直有动静也不能无限跑：硬顶到了照样收场（防打转的 agent 循环占死那把锁）。"""
+def test_a_working_turn_keeps_going_past_any_single_window() -> None:
+    """只要现场一直在动，就没有「整轮墙钟」把它切掉——能跑多久归 opencode 的闸管。
+
+    这轮每圈都在长（在动）、时钟走掉好几倍静默窗口；中继不许自作主张收工，一直到答完。
+    """
     open_url = FakeOpen(messages=live_messages(None))
     clock = {"now": 0.0}
     polls = {"n": 0}
@@ -707,19 +710,19 @@ def test_the_hard_ceiling_stops_an_endless_loop_even_while_it_keeps_working() ->
     def sleep(_seconds: float) -> None:
         polls["n"] += 1
         clock["now"] += 100.0
-        open_url.messages = working_messages("想" * polls["n"])  # 永远在动、永远不答完
+        if polls["n"] < 30:
+            open_url.messages = working_messages("想" * polls["n"])  # 一直在动、还没答完
+        else:
+            open_url.messages = live_messages("答复正文")
 
     client = make_client(
         open_url,
-        idle_timeout=240.0,  # 每圈才走 100s，静默窗口永远不会先到
-        max_timeout=500.0,
+        idle_timeout=240.0,  # 每圈才走 100s，静默窗口不会先到
         now=lambda: clock["now"],
         sleep=sleep,
     )
-    assert payload_from_outcome(client.ask("问题")) == {
-        "status": "error",
-        "error": ERROR_TIMEOUT,
-    }
+    assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "答复正文"}
+    assert clock["now"] == 3000.0  # 远超任何单个窗口：靠「一直在动」撑过来
 
 
 def test_an_answer_that_never_fills_in_still_times_out() -> None:

@@ -65,9 +65,9 @@ SERVICE_BIN = "opencode"
 # 早先是两段墙钟（开工 120s + 写完 240s = 360s），模型一旦进长工具循环就会被硬切；改按静默后
 # 又发现 240s 对会长时间闷头推理的模型偏紧（真机：一轮里静默过十分钟），于是放到 600s。
 DEFAULT_IDLE_TIMEOUT = 600.0
-# 子 agent 的时间上限（硬顶）：一直有动静也不能无限跑——一个打转的 agent 循环会占着那把锁、
-# 拖着扩展那一次 fetch。只做安全网，正常一次委派离它很远。
-DEFAULT_MAX_TIMEOUT = 1800.0
+# 这里**不设**「整轮墙钟」的硬顶：一次委派能跑多久交给 opencode 自己的闸——`agent.*.steps`
+# 限迭代次数、provider 的 `timeout` 限单次请求；中继只管**静默**。硬顶留在中继这边只会变成
+# 一道看不见的墙（长任务被谁切的都说不清），所以撤了（见 ADR-0006）。
 DEFAULT_POLL_INTERVAL = 0.5
 DEFAULT_HTTP_TIMEOUT = 10.0
 SERVICE_READ_TIMEOUT = 10.0
@@ -298,7 +298,6 @@ class OpencodeClient:
         service_reader: Callable[[], Mapping[str, Any]] = read_service,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
         idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
-        max_timeout: float = DEFAULT_MAX_TIMEOUT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         http_timeout: float = DEFAULT_HTTP_TIMEOUT,
         now: Callable[[], float] = time.monotonic,
@@ -309,7 +308,6 @@ class OpencodeClient:
         self._service_reader = service_reader
         self._urlopen = urlopen
         self._idle_timeout = idle_timeout
-        self._max_timeout = max_timeout
         self._poll_interval = poll_interval
         self._http_timeout = http_timeout
         self._now = now
@@ -358,17 +356,14 @@ class OpencodeClient:
             return {"kind": "not-running"}
         with self._ask_lock:
             self._progress.begin()
-            # 一次委派的两个界：**静默**超过 idle_timeout 才判超时（在动就一直等），
-            # max_timeout 是防打转的硬顶（只做安全网）。
+            # 只有一个界：**静默**超过 idle_timeout 才判超时；只要 opencode 还在动就一直等。
+            # 「能跑多久」不归中继管——那是 opencode 的 `agent.steps` / provider `timeout` 的事。
             started = self._now()
-            hard_deadline = started + self._max_timeout
             child_id: str | None = None
             try:
                 child_id, reused = self._ensure_child(service)
                 if reused:
-                    self._quiesce(
-                        service, child_id, min(started + self._idle_timeout, hard_deadline)
-                    )
+                    self._quiesce(service, child_id, started + self._idle_timeout)
                 # 事件流抢在 prompt 之前挂上：晚一步就吃不到 execution.started，
                 # 轮到「开工」那一步的现场就白瞎了。挂不上不是错，等待会退化成老的阻塞 wait。
                 stream = self._open_events(service)
@@ -381,9 +376,7 @@ class OpencodeClient:
                         {"text": answer_prompt(question, followup=self._prompted)},
                     )
                     self._prompted = True  # 消息真送进去了，下一问才轮到续问那个框
-                    outcome = self._await_answer(
-                        service, child_id, baseline_ms, started, hard_deadline, stream
-                    )
+                    outcome = self._await_answer(service, child_id, baseline_ms, started, stream)
                 finally:
                     if stream is not None:
                         stream.close()
@@ -571,15 +564,14 @@ class OpencodeClient:
         session_id: str,
         baseline_ms: int,
         started: float,
-        hard_deadline: float,
         stream: EventStream | None = None,
     ) -> Mapping[str, Any]:
-        """等到 baseline 之后确实出现一条带正文的答复为止。
+        """等到 baseline 之后确实出现一条**已定稿**的答复为止。
 
         **在动就不算超时**：``last_activity`` 记的是「这一问的现场还在往前走」——事件流上
         还有本会话的事件，或 ``/message`` 上有新消息、正文还在长——只要在动，静默窗口就
-        跟着往后推；**静默**满 ``idle_timeout`` 才判超时。``hard_deadline`` 是硬顶，防一个
-        打转的 agent 循环无限占着锁与扩展那一次 fetch。
+        跟着往后推；**静默**满 ``idle_timeout`` 才判超时。这里没有「整轮墙钟」的硬顶：能跑
+        多久归 opencode 的 ``agent.steps`` / provider ``timeout`` 管（见 ADR-0006）。
 
         等待的节拍交给事件流：每圈先把 ``/api/event`` 上到手的事件倒干净（顺带记下现场
         进度），流断了或心跳停摆就当场判死，不再陪 opencode 等到预算用完。正文判定一步
@@ -590,9 +582,6 @@ class OpencodeClient:
         session = f"/api/session/{session_id}"
         while True:
             now = self._now()
-            if now >= hard_deadline:
-                self._progress.tick(0.0)
-                return {"kind": "timeout"}
             idle_left = self._idle_timeout - (now - last_activity)
             if idle_left <= 0:
                 self._progress.tick(0.0)
@@ -604,7 +593,7 @@ class OpencodeClient:
                     service,
                     "POST",
                     f"/api/experimental/session/{session_id}/wait",
-                    timeout=min(idle_left, hard_deadline - now),
+                    timeout=idle_left,
                 )
             else:
                 events = stream.drain()
@@ -630,13 +619,7 @@ class OpencodeClient:
                 return {"kind": "success", "body": fresh}
             if has_assistant(fresh):
                 self._progress.writing()  # 事件流缺席时，靠正文侧认出「开写了」
-            remaining = max(
-                min(
-                    self._idle_timeout - (self._now() - last_activity),
-                    hard_deadline - self._now(),
-                ),
-                0.0,
-            )
+            remaining = max(self._idle_timeout - (self._now() - last_activity), 0.0)
             self._progress.tick(remaining)
             self._sleep(min(self._poll_interval, remaining))
 

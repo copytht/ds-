@@ -19,9 +19,9 @@ opencode 有没有动静。
   心跳不算，见下）；
 - **`GET .../message`** 的现场还在长：消息变多、正文加字（`message_mark` 的形状指纹）。
 
-`DSB_MAX_TIMEOUT`（默认 1800s）是硬顶：一直有动静也不能无限跑，只防一个打转的 agent 循环
-占着那把锁和扩展那一次 fetch。扩展侧兜底超时相应抬到硬顶之上（`src/lib/relay.ts`），
-由 `tests/test_relay_server.py` 的跨语言断言守住。
+这里**没有**「整轮墙钟」的硬顶：一次委派能跑多久交给 opencode 自己的闸——`agent.*.steps`
+限迭代次数、provider 的 `timeout` 限单次请求；中继只按静默判。扩展侧的兜底超时只需宽过这条
+静默线（`src/lib/relay.ts`），由 `tests/test_relay_server.py` 的跨语言断言守住。
 
 ## Considered Options
 
@@ -29,19 +29,22 @@ opencode 有没有动静。
 - **拿心跳当「在动」**：心跳是**传输**活着（进程还在、连接没断），不是**活在干**。进程活着但
   卡住时心跳照打，于是永远等不到超时。心跳继续只当「断流 / 停摆」的判死信号（`dead` /
   `stale`），不参与静默计时。
-- **在动就无限等，不要硬顶**：打转的 agent 循环会把那把 ask 锁和扩展那一次 fetch 一直占住，
-  后面的问句全排不上。留一个够远的硬顶当安全网，正常一次委派离它很远。
+- **在中继这边留一个「整轮墙钟」硬顶**（原方案）：它能兜住打转的循环，但也会把**真在干长活**
+  的委派切掉，而且是一道看不见的墙——长任务被谁切的都说不清。**改成让 opencode 自己兜**：
+  `agent.*.steps` 直接限迭代次数（打转正是它管的），provider 的 `timeout` 限单次请求；中继撤掉
+  硬顶，只管静默。见 ADR-0007 之后这次调整。
 - **只在正文增长时续**：工具执行期间没有正文增量，长工具会被误判成静默。所以事件侧认**任何**
   本会话事件、消息侧认**形状**变化，不只看正文。
 
 ## Consequences
 
-- `_await_answer` 里 `last_activity` 每次有动静就推到 `now`；判定改成
-  `now - last_activity >= idle_timeout`，硬顶另算。两段窗口合并成一个 `DSB_IDLE_TIMEOUT`，
+- `_await_answer` 里 `last_activity` 每次有动静就推到 `now`；判定是
+  `now - last_activity >= idle_timeout`。两段窗口合并成一个 `DSB_IDLE_TIMEOUT`，
   原来的 `DSB_START_TIMEOUT` / `DSB_ANSWER_TIMEOUT` 两个键删掉。
 - **挂不上事件流**的退化路认不出「在动」：等待退回阻塞 `wait`，静默窗口在那里就是墙钟。
   事件流是生产主路径，退化为少数派，这段仍是「窗口一到就掐」。
 - 复用前的「等空闲」（`_quiesce`）也吃这个窗口：超时按静默算之后，它不再有单独的预算，
   窗口一到就掐掉上一轮的尾巴继续（见 ADR-0005）。
-- **已知天花板**：一个一路有动静的无限循环仍会被 `DSB_MAX_TIMEOUT` 切。要更长就把这个键
-  调大；真不要顶，得先解决「怎么认出它在打转而不是在干活」——那是另一个问题。
+- **打转/静默交给 opencode**：`DSB_MAX_TIMEOUT` 键撤掉；一次委派跑多久由 `agent.*.steps`
+  与 provider `timeout` 决定。代价：若 opencode 那两样没配或没生效，一阵「一直在动但没产出」
+  的循环会一直占着那把 ask 锁——中继不再替它收场。

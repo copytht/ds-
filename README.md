@@ -91,8 +91,10 @@ OPENSESS_ID=<opencode 会话 id>
 `GET .../message` 上有新消息、正文还在长——这一问就一直等；**静默**超过 `DSB_IDLE_TIMEOUT`
 （默认 600s）才判超时。早先是两段墙钟（`DSB_START_TIMEOUT=120` 开工 + `DSB_ANSWER_TIMEOUT=240`
 写完 = 360s），模型一进长工具循环就会被硬切：真机跑一轮审阅耗了 268s，写答复那段只剩约 45s。
-`DSB_MAX_TIMEOUT`（默认 1800s）是硬顶，只防一个打转的 agent 循环无限占着那把锁与扩展那一次
-fetch。扩展侧的兜底超时必须宽过这个硬顶，否则先到的会是扩展，报出来的就是「中继不可达」这个
+这里**没有**「整轮墙钟」的硬顶：一次委派能跑多久交给 opencode 自己的闸——`agent.*.steps`
+限迭代次数、provider 的 `timeout` 限单次请求（见 ADR-0006 与 `opencode.json`）。中继只管
+**静默**：在动就一直等。扩展侧的兜底超时必须宽过这条静默线，否则先到的会是扩展，报出来的就是
+「中继不可达」这个
 没信息量的码——这条由 `tests/test_relay_server.py` 的跨语言断言守住（它直接读 `dsb/client.py`
 的默认值）。
 

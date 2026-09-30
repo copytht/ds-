@@ -45,7 +45,7 @@ from dsb.actions import (
     resolve_enabled,
 )
 from dsb.asks import AskSessions
-from dsb.client import DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_TIMEOUT, OpencodeClient
+from dsb.client import DEFAULT_IDLE_TIMEOUT, OpencodeClient
 from dsb.config import parse_session_id
 from dsb.log import SLOW_MS, log_event, setup_logging
 from dsb.opencode import ERROR_UNEXPECTED, error_payload, payload_from_outcome
@@ -57,7 +57,6 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 PORT_ENV_KEY = "DSB_PORT"
 IDLE_TIMEOUT_ENV_KEY = "DSB_IDLE_TIMEOUT"
-MAX_TIMEOUT_ENV_KEY = "DSB_MAX_TIMEOUT"
 MAX_BODY_BYTES = 64 * 1024
 
 AskFn = Callable[[str, str | None], Mapping[str, Any]]
@@ -377,14 +376,6 @@ def resolve_idle_timeout(env_text: str) -> float:
     return resolve_seconds(env_text, IDLE_TIMEOUT_ENV_KEY, DEFAULT_IDLE_TIMEOUT)
 
 
-def resolve_max_timeout(env_text: str) -> float:
-    """一次委派的硬顶秒数：进程环境变量优先，其次 `.env` 里的 DSB_MAX_TIMEOUT。
-
-    只在「一直有动静但永远不结束」这种打转的 agent 循环上兜底；必须宽过 idle 窗口。
-    """
-    return resolve_seconds(env_text, MAX_TIMEOUT_ENV_KEY, DEFAULT_MAX_TIMEOUT)
-
-
 def main() -> None:
     """`uv run ds-mcp` 的入口：现读端口/口令/sessionID，然后对外服务。"""
     setup_logging()
@@ -397,7 +388,6 @@ def main() -> None:
     client = OpencodeClient(
         session_id,
         idle_timeout=resolve_idle_timeout(env_text),
-        max_timeout=resolve_max_timeout(env_text),
     )
     ask = AskSessions(client.ask)  # 长问句拆成几趟短轮询，别让浏览器把后台线程连同答复一起收走
     warm = client.warm_up()  # 启动现读：端口与口令只进内存
