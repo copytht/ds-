@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 import time
 from collections.abc import Callable, Mapping
@@ -280,6 +281,9 @@ def resolve_start_timeout(env_text: str) -> float:
 def main() -> None:
     """`uv run ds-mcp` 的入口：现读端口/口令/sessionID，然后对外服务。"""
     setup_logging()
+    # pkill / 系统收摊发的是 SIGTERM，Python 默认直接退出、finally 不跑，那个一直复用的
+    # 子会话就成了没人删的孤儿（会话列表里每杀一次留一条）。让它走跟 Ctrl-C 同一条路。
+    signal.signal(signal.SIGTERM, lambda *_args: sys.exit(0))
     env_text = read_env_text()
     session_id = parse_session_id(env_text)
     port = resolve_port(env_text)
@@ -309,6 +313,8 @@ def main() -> None:
             server.serve_forever()
         except KeyboardInterrupt:
             print("\n[dsb] 已停止")
+        finally:
+            client.dispose()  # 活期间一直复用的子会话，收摊时删掉
 
 
 if __name__ == "__main__":

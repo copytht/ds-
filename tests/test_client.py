@@ -15,6 +15,7 @@ from typing import Any
 from dsb.client import (
     CHILD_ROLE,
     CHILD_TITLE,
+    CONTINUE_ROLE,
     OpencodeClient,
     ServiceUnavailable,
     answer_prompt,
@@ -182,12 +183,15 @@ class FakeOpen:
         messages: dict[str, Any] | None = None,
         prompt: Any = None,
         prompt_error: BaseException | None = None,
+        prompt_hook: Callable[[], None] | None = None,
         wait_error: BaseException | None = None,
         message_error: BaseException | None = None,
         parent: Any = None,
         spawn: Any = None,
         spawn_error: BaseException | None = None,
         delete_error: BaseException | None = None,
+        child_error: BaseException | None = None,
+        interrupt_error: BaseException | None = None,
         events: FakeEvents | None = None,
         events_error: BaseException | None = None,
         active_error: BaseException | None = None,
@@ -195,6 +199,7 @@ class FakeOpen:
         self.messages = messages
         self.prompt = {"data": {"id": "inb_1"}} if prompt is None else prompt
         self.prompt_error = prompt_error
+        self.prompt_hook = prompt_hook  # prompt 时现场要做点别的（并发用例卡在这儿）
         self.wait_error = wait_error
         self.message_error = message_error
         # 事件流默认「活着但安静」：这就是生产的主路径（挂得上、一时半会没事件）。
@@ -217,12 +222,19 @@ class FakeOpen:
         self.spawn = {"data": {"id": CHILD}} if spawn is None else spawn
         self.spawn_error = spawn_error
         self.delete_error = delete_error
+        # 复用子会话前的那次探活（GET /api/session/{CHILD}）与掐轮次的现场
+        self.child_error = child_error
+        self.interrupt_error = interrupt_error
         self.calls: list[Call] = []
 
     def __call__(self, request: Any, timeout: float | None = None) -> FakeResponse:
         self.calls.append(Call(request, timeout))
         if request.method == "GET" and request.full_url.endswith(f"/api/session/{SESSION}"):
             return FakeResponse(self.parent)
+        if request.method == "GET" and request.full_url.endswith(f"/api/session/{CHILD}"):
+            if self.child_error is not None:
+                raise self.child_error
+            return FakeResponse({"data": {"id": CHILD}})  # 会话还在，可以复用
         if request.method == "POST" and request.full_url.endswith("/api/session"):
             if self.spawn_error is not None:
                 raise self.spawn_error
@@ -231,9 +243,15 @@ class FakeOpen:
             if self.delete_error is not None:
                 raise self.delete_error
             return FakeResponse()
+        if request.full_url.endswith("/interrupt"):
+            if self.interrupt_error is not None:
+                raise self.interrupt_error
+            return FakeResponse({"interrupted": True})
         if request.full_url.endswith("/prompt"):
             if self.prompt_error is not None:
                 raise self.prompt_error
+            if self.prompt_hook is not None:
+                self.prompt_hook()
             if isinstance(self.prompt, FakeResponse):
                 return self.prompt
             return FakeResponse(self.prompt)
@@ -280,9 +298,10 @@ def test_ask_returns_success_and_skips_the_previous_answer() -> None:
         "answer": "入口在 dsb/server.py。",
     }
     methods = [call.method for call in open_url.calls]
-    assert methods == ["GET", "POST", "GET", "POST", "GET", "DELETE"]
-    # 读父会话设置 → spawn 空子会话 → 挂事件流 → prompt → message → 删子会话
-    # （事件流抢在 prompt 之前，晚一步就吃不到 execution.started）
+    assert methods == ["GET", "POST", "GET", "POST", "GET"]
+    # 读父会话设置 → spawn 空子会话 → 挂事件流 → prompt → message
+    # （事件流抢在 prompt 之前，晚一步就吃不到 execution.started；
+    #   尾巴那条 DELETE 不在这儿：子会话是活期间一直复用的，收摊才删）
     assert open_url.calls[0].method == "GET"
     assert open_url.calls[0].url.endswith(f"/api/session/{SESSION}")
     assert open_url.calls[1].method == "POST"
@@ -290,7 +309,6 @@ def test_ask_returns_success_and_skips_the_previous_answer() -> None:
     assert open_url.calls[2].url.endswith("/api/event")
     assert open_url.calls[3].url.endswith(f"/api/session/{CHILD}/prompt")
     assert "/message?" in open_url.calls[4].url
-    assert open_url.calls[5].url.endswith(f"/api/session/{CHILD}")
 
 
 def test_spawned_child_inherits_settings_but_never_history() -> None:
@@ -346,23 +364,29 @@ def test_ask_never_prompts_the_main_conversation() -> None:
     assert not any(f"/api/session/{SESSION}/wait" in c.url for c in open_url.calls)
 
 
-def test_child_is_disposed_even_when_the_answer_fails() -> None:
-    """答复失败也必须删子会话，否则会话列表里堆一排「dsb 子会话」。"""
+def test_a_failed_answer_interrupts_the_turn_but_keeps_the_child() -> None:
+    """没答成：掐掉这一轮，子会话**留着**——可继续子级下一轮还要用。
+
+    掐的是轮次不是会话：超时时它多半还在写，不掐的话下一问会被 steer 进这半个轮次里。
+    """
     open_url = FakeOpen(messages=live_messages(None), message_error=TimeoutError("boom"))
     outcome = make_client(open_url).ask("问题")
 
     assert outcome["kind"] == "timeout"
+    assert open_url.calls[-1].method == "POST"
+    assert open_url.calls[-1].url.endswith(f"/api/session/{CHILD}/interrupt")
+    assert not any(c.method == "DELETE" for c in open_url.calls)  # 会话没被删
+
+
+def test_failing_to_dispose_the_child_at_shutdown_does_not_raise() -> None:
+    """收摊删不掉只该被吞掉：这一步从来不该把进程退出变成一场异常。"""
+    open_url = FakeOpen(messages=live_messages("答复"), delete_error=OSError("删不掉"))
+    client = make_client(open_url)
+    assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "答复"}
+
+    client.dispose()  # 不外抛
     assert open_url.calls[-1].method == "DELETE"
     assert open_url.calls[-1].url.endswith(f"/api/session/{CHILD}")
-
-
-def test_failing_to_dispose_the_child_does_not_change_the_outcome() -> None:
-    """收尾失败只该被吞掉：答复已经拿到了，不能改判结果。"""
-    open_url = FakeOpen(messages=live_messages("答复"), delete_error=OSError("删不掉"))
-    outcome = make_client(open_url).ask("问题")
-
-    assert outcome["kind"] == "success"
-    assert payload_from_outcome(outcome) == {"status": "ok", "answer": "答复"}
 
 
 def test_ask_sends_the_password_only_in_the_authorization_header() -> None:
@@ -441,14 +465,16 @@ def test_deadline_exhausted_maps_to_opencode_timeout() -> None:
         "status": "error",
         "error": ERROR_TIMEOUT,
     }
+    # 尾巴那一下是**掐轮次**（没答成），不是删会话——会话要留着给下一问复用
     assert [call.method for call in open_url.calls] == [
         "GET",
         "POST",
         "GET",
         "POST",
         "GET",
-        "DELETE",
+        "POST",
     ]
+    assert open_url.calls[-1].url.endswith(f"/api/session/{CHILD}/interrupt")
 
 
 def test_child_prompt_carries_the_role_frame() -> None:
@@ -460,6 +486,159 @@ def test_child_prompt_carries_the_role_frame() -> None:
     assert "超时怎么修？" in sent["text"]
     assert sent["text"].startswith(CHILD_ROLE)
     assert sent["text"] == answer_prompt("超时怎么修？")
+
+
+# ------------------------------------------------------- 可继续子级（反复调用）
+
+
+def test_later_questions_reuse_the_child_and_get_the_followup_frame() -> None:
+    """第二问起复用同一个子会话（dsh 的 continuable），并按「续问」来框。
+
+    复用就是这套机制的全部意义：后期会被反复调用，上一轮的问答要留给下一轮当上下文。
+    所以三件事一起钉——不重起、不删，且**先等空闲再送进去**（忙时 prompt 是 steer）。
+    """
+    open_url = FakeOpen(messages=live_messages("答复"))
+    client = make_client(open_url)
+
+    assert client.ask("第一问")["kind"] == "success"
+    assert client.ask("第二问")["kind"] == "success"
+
+    spawns = [c for c in open_url.calls if c.method == "POST" and c.url.endswith("/api/session")]
+    assert len(spawns) == 1  # 子会话只起一次
+    assert not any(c.method == "DELETE" for c in open_url.calls)  # 活期间不删
+
+    prompts = [c for c in open_url.calls if c.url.endswith("/prompt")]
+    first = json.loads(prompts[0].data.decode("utf-8"))
+    second = json.loads(prompts[1].data.decode("utf-8"))
+    assert first["text"] == answer_prompt("第一问")  # 空着出生：还是首问那个框
+    assert second["text"] == answer_prompt("第二问", followup=True)
+    assert second["text"].startswith(CONTINUE_ROLE)
+
+    waits = [i for i, c in enumerate(open_url.calls) if c.url.endswith("/wait")]
+    assert len(waits) == 1  # 首问不用等（新会话恒空闲），只有复用那次要等
+    assert waits[0] < open_url.calls.index(prompts[1])  # 且必须抢在送进去之前
+
+
+def test_waiting_for_the_previous_turn_sits_inside_the_start_budget() -> None:
+    """复用时垫的那一等吃**开工段**的总账，不另开一份。
+
+    截止时刻由 ``ask`` 在进门时划一次，两段共用（360s）；谁在内部重新
+    ``now + start_timeout``，谁就会让总账悄悄变长、撞上扩展那个 480s 的兜底。
+    """
+    clock = {"now": 0.0}
+    prompts = {"n": 0}
+
+    def hook() -> None:
+        prompts["n"] += 1
+        if prompts["n"] == 2:  # 复用那一问：验活 + 等空闲把开工段吃得只剩 1s
+            clock["now"] = 119.0
+
+    open_url = FakeOpen(messages=live_messages("答复"), prompt_hook=hook)
+
+    def sleep(_seconds: float) -> None:
+        clock["now"] += 2.0  # 一觉醒来越过开工段（120s）的线
+        if clock["now"] >= 121.0:
+            open_url.messages = live_messages("答复")  # 答复这会儿才落地
+
+    client = make_client(open_url, now=lambda: clock["now"], sleep=sleep)
+    assert client.ask("第一问")["kind"] == "success"
+    open_url.messages = live_messages(None)  # 这一轮的答复还没落地
+
+    # 共用截止时刻：第二问只剩 1s，答复 121s 才来 → 超时（各算各的话这儿会成功）
+    assert payload_from_outcome(client.ask("第二问")) == {
+        "status": "error",
+        "error": ERROR_TIMEOUT,
+    }
+
+
+def test_a_vanished_child_is_respawned() -> None:
+    """子会话没了（被人删过、或 opencode 换过实例）：下次问认出来就重起一个。"""
+    open_url = FakeOpen(messages=live_messages("答复"))
+    client = make_client(open_url)
+    assert client.ask("第一问")["kind"] == "success"
+
+    open_url.child_error = urllib.error.HTTPError(
+        f"http://127.0.0.1/api/session/{CHILD}", 404, "Not Found", None, None
+    )
+    assert client.ask("第二问")["kind"] == "success"
+
+    spawns = [c for c in open_url.calls if c.method == "POST" and c.url.endswith("/api/session")]
+    assert len(spawns) == 2  # 复用前的探活报 404 → 当场重起
+
+
+def test_a_parent_without_the_three_settings_fails_loudly() -> None:
+    """缺 agent/model/location 当场报错：不再每问干等 120s，也不再静默写错工作目录。"""
+    for missing in ("agent", "model", "location"):
+        settings: dict[str, Any] = {
+            "agent": "build",
+            "model": {"providerID": "opencode", "id": "mimo-v2.6-flash-free"},
+            "location": {"directory": "/repo"},
+        }
+        settings.pop(missing)
+        open_url = FakeOpen(parent={"data": settings}, messages=live_messages("答复"))
+
+        assert payload_from_outcome(make_client(open_url).ask("问题")) == {
+            "status": "error",
+            "error": ERROR_UNEXPECTED,
+        }
+        assert not any(c.url.endswith("/prompt") for c in open_url.calls)
+        assert not any(
+            c.method == "POST" and c.url.endswith("/api/session") for c in open_url.calls
+        )
+
+
+def test_two_asks_queue_instead_of_sharing_one_turn() -> None:
+    """一个子会话同时只接一轮：后到的问句在锁上等，不被 steer 进前一轮里。
+
+    排法靠现场卡位：A 进到 prompt 就堵住，等 B 敲门，再留 0.2s。没锁的话 B 这 0.2s 里
+    早就把整趟（验活 → 等空闲 → prompt → 取答复）走完了，于是两个 prompt 挤在同一轮里。
+    """
+    a_prompting = threading.Event()
+    b_in = threading.Event()
+
+    def hook() -> None:
+        if threading.current_thread().name != "ask-a":
+            return  # 后到的那个没什么好等的：它本就该在 A 收工之后才动手
+        a_prompting.set()
+        b_in.wait(timeout=5)
+        time.sleep(0.2)
+
+    open_url = FakeOpen(
+        messages=live_messages("答复"),
+        events_error=OSError("挂不上"),  # 事件流缺席：等待退化成阻塞 wait，两轮都够快
+        prompt_hook=hook,
+    )
+    client = make_client(open_url)
+    results: dict[str, Any] = {}
+
+    def ask_a() -> None:
+        results["a"] = client.ask("第一问")
+
+    def ask_b() -> None:
+        a_prompting.wait(timeout=5)
+        b_in.set()
+        results["b"] = client.ask("第二问")
+
+    threads = [
+        threading.Thread(target=ask_a, name="ask-a"),
+        threading.Thread(target=ask_b, name="ask-b"),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    assert all(not thread.is_alive() for thread in threads)
+    assert results["a"]["kind"] == "success"
+    assert results["b"]["kind"] == "success"
+
+    turns = [
+        "prompt" if c.url.endswith("/prompt") else "answer" if "/message" in c.url else None
+        for c in open_url.calls
+    ]
+    # 两轮必须一头一尾串着：连着两个 prompt 就是第二问被 steer 进了第一轮。
+    assert [turn for turn in turns if turn] == ["prompt", "answer", "prompt", "answer"]
+    spawns = [c for c in open_url.calls if c.method == "POST" and c.url.endswith("/api/session")]
+    assert len(spawns) == 1  # 两个问句共用同一个子会话
 
 
 def test_slow_start_does_not_eat_the_answer_budget() -> None:
@@ -674,7 +853,8 @@ def test_stream_death_is_reported_as_not_running() -> None:
 
     assert outcome == {"kind": "not-running"}
     assert payload_from_outcome(outcome) == {"status": "error", "error": ERROR_NOT_RUNNING}
-    assert open_url.calls[-1].url.endswith(f"/api/session/{CHILD}")  # 子会话照删不误
+    assert open_url.calls[-1].url.endswith(f"/api/session/{CHILD}/interrupt")  # 掐掉半个轮次
+    assert not any(c.method == "DELETE" for c in open_url.calls)  # 子会话留着复用
     assert not any(c.url.endswith("/wait") for c in open_url.calls)  # 走的是事件流这条路
 
 

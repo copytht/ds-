@@ -10,9 +10,14 @@ opencode API 以本机实测为准（v2.0.18，实测早于文档与官方 SDK�
 - ``POST /api/session``，body ``{"title", "agent", "model", "location": {"directory"}}``,
   起一个**零消息**的子会话（dsh 的 spawn 语义），回 ``{"data": Session.Info}``；
   三样缺一不可：不带 ``agent``/``model`` 子会话不答，不带 ``location`` 目录落到服务进程的
-  cwd（实测 ``/Users/cu``）；
-- ``DELETE /api/session/{id}``，删掉用完的子会话；
+  cwd（实测 ``/Users/cu``）——所以 spawn 前**当场验**，缺哪样报哪样（早先缺字段是
+  每问干等 120s 才超时，毫无信息量）；
+- ``DELETE /api/session/{id}``，收摊时删掉子会话（活期间**不删**：可继续子级要复用）；
 - ``POST /api/session/{id}/prompt``，body ``{"text": ...}``，收工回 inbox 记录；
+  实测**忙时再 prompt 不排队，是 steer**——新问题被插进没跑完的那一轮里
+  （响应体带 ``delivery: "steer"``），所以复用前必须先等它空闲；
+- ``POST /api/session/{id}/interrupt``，掐掉当前这一轮、**留着子会话**（回
+  ``{"interrupted": true|false}``；空闲时回 ``false``，无害，可以放心多掐）；
 - ``GET /api/event``，SSE 事件流（见 :mod:`dsb.events`）：等待期的实时信号，
   断流即 opencode 死了；挂不上时才退回
   ``POST /api/experimental/session/{id}/wait``（阻塞到该会话空闲，回 204）；
@@ -56,9 +61,10 @@ AUTH_USERNAME = "opencode"
 SERVICE_BIN = "opencode"
 # 两段等待，两个预算（真机 #14：一个 140s 的共享预算被吃掉，答复 212s 才出来，
 # 页面只等到了 opencode-timeout —— 分开算是为了让第二段永远不被第一段挤占）。
-# 第一段是**开工**：spawn 出来的子会话恒为空闲、零消息，没有「排队」这回事，这里等的
-# 只是模型多久吐出第一条 assistant 消息（真机实测 8s）。给 120s 覆盖冷启动与限流；
-# 配置坏了也最多让页面等 2 分钟，而不是 fork 时代那个为「等主对话空出来」留的 600s。
+# 第一段是**开工**：从这问进门到模型吐出第一条 assistant 消息（真机实测 8s），
+# 给 120s 覆盖冷启动与限流；配置坏了也最多让页面等 2 分钟。**复用**子会话时这一段
+# 还要先垫在「等上一轮收干净」前面（见 ``_quiesce``）——垫多久都算在这一段里，
+# 两段合计恒为 360s，不会把总账顶出扩展那个 480s 的兜底。
 DEFAULT_START_TIMEOUT = 120.0
 # 第二段是**写完**：一旦出现 assistant 消息就换这段预算重新计时，直到正文齐。
 DEFAULT_ANSWER_TIMEOUT = 240.0
@@ -87,11 +93,23 @@ CHILD_ROLE = (
     "问题来自 DeepSeek 网页，只回答问题本身：不要描述你在哪个会话里，"
     "不要解释你的环境，不要写分析过程或复述问题，直接给答复正文。\n\n问题："
 )
+# 复用子会话时换这个框：此时**已经有**此前的问答（dsh 的 continuable，多轮委派），
+# 再说「没有任何对话」就是骗它。后半段的纪律跟首问一模一样——框架变了，
+# 「只答问题本身」这条不能跟着松。
+CONTINUE_ROLE = (
+    "同一次委派里的后续问题：这个子会话里已经有此前的问答，接着往下答。"
+    "只回答问题本身：不要描述你在哪个会话里，不要解释你的环境，"
+    "不要复述问题，也不要重讲已经答过的内容，直接给新的答复正文。\n\n问题："
+)
 
 
-def answer_prompt(question: str) -> str:
-    """页面问题 → 子 agent 看到的那条消息（带上角色框，见 :data:`CHILD_ROLE`）。"""
-    return f"{CHILD_ROLE}{question}"
+def answer_prompt(question: str, *, followup: bool = False) -> str:
+    """页面问题 → 子 agent 看到的那条消息（首问带角色框，后续问换续问框）。
+
+    ``followup`` 只看**这个子会话**收没收到过消息，不看问了几轮——换了个新子会话
+    （旧的被删了或换了 opencode 实例）就重新从 :data:`CHILD_ROLE` 起步。
+    """
+    return f"{CONTINUE_ROLE if followup else CHILD_ROLE}{question}"
 
 
 class ServiceUnavailable(Exception):
@@ -253,7 +271,8 @@ class AskProgress:
 
 
 class OpencodeClient:
-    """每问起一个空子会话送进 opencode，等它答完再把消息体折成 outcome 交出去。"""
+    """子会话**起一次、反复用**（dsh 的 continuable）：每问往同一个 id 里送，等它答完
+    再把消息体折成 outcome 交出去。主 agent 是页面那边的模型，本机主对话不参与。"""
 
     def __init__(
         self,
@@ -281,6 +300,11 @@ class OpencodeClient:
         self._wall_clock = wall_clock
         self._cached: Mapping[str, Any] | None = None
         self._progress = AskProgress()
+        # 可继续子级的三样现场状态：id（跨问复用）、这一轮是首问还是续问、
+        # 以及「一个子会话同时只接一轮」的那把锁（后到的问句排队，见 ask）。
+        self._child_id: str | None = None
+        self._prompted = False
+        self._ask_lock = threading.Lock()
 
     @property
     def progress(self) -> AskProgress:
@@ -294,9 +318,20 @@ class OpencodeClient:
     def ask(self, question: str) -> Mapping[str, Any]:
         """问一句 → outcome（``success`` 带消息体，其余是失败分支）。
 
-        每问起一个**空**子会话去答，答完就删。主 agent 是**页面上的 DeepSeek 模型**
-        ——它排一个围栏就是一次调用；委派链上的父级是它，历史也在它那边，所以子会话
-        不带本机这条主对话的任何内容，本机主对话全程不排队、不阻塞、也不参与。
+        主 agent 是**页面上的 DeepSeek 模型**——它排一个围栏就是一次调用；委派链上的
+        父级是它，历史也在它那边，所以子会话不带本机这条主对话的任何内容，本机主对话
+        全程不排队、不阻塞、也不参与。
+
+        子会话是**可继续**的：起一次，之后每问都往同一个 id 里送，上一轮的问答留给
+        下一轮当上下文（后期会被反复调用）。所以每问都得先办三件事——
+
+        1. **排队**：一个子会话同时只接一轮，后到的问句在锁上等（一个 id 上的轮次
+           串行，才谈得上「接着往下答」）；
+        2. **等空闲**：复用前先等上一轮收干净。忙时 prompt 不是排队而是 steer，新问题
+           会被插进没跑完的那一轮里（真机实测 ``delivery: "steer"``）；
+        3. **掐尾巴**：这一轮没答成，剩下的半个轮次就地掐掉，别拖到下一问。
+
+        三件事都只动**子会话**，主对话和页面谁都不碰。
         """
         if not self._session_id:
             # 没有 sessionID：在线协议的错误码里没有专码，走非预期响应兜底。
@@ -304,33 +339,112 @@ class OpencodeClient:
         service = self._service()
         if service is None:
             return {"kind": "not-running"}
-        self._progress.begin()
-        try:
-            child_id = self._spawn(service)
-            # 事件流抢在 prompt 之前挂上：晚一步就吃不到 execution.started，
-            # 「开工」这一段的现场就白瞎了。挂不上不是错，等待会退化成老的阻塞 wait。
-            stream = self._open_events(service)
+        with self._ask_lock:
+            self._progress.begin()
+            # 开工段从这一问进门算起：复用子会话时它还要先垫在「等上一轮收干净」前面，
+            # 两段合计因此恒等于 DSB_START_TIMEOUT + DSB_ANSWER_TIMEOUT（360s），
+            # 不会因为多垫一段就把总账顶出扩展那个 480s 的兜底。
+            start_deadline = self._now() + self._start_timeout
+            child_id: str | None = None
             try:
-                baseline_ms = int(self._wall_clock() * 1000)
-                self._call(
-                    service,
-                    "POST",
-                    f"/api/session/{child_id}/prompt",
-                    {"text": answer_prompt(question)},
-                )
-                return self._await_answer(service, child_id, baseline_ms, stream)
+                child_id, reused = self._ensure_child(service)
+                if reused:
+                    self._quiesce(service, child_id, start_deadline)
+                # 事件流抢在 prompt 之前挂上：晚一步就吃不到 execution.started，
+                # 「开工」这一段的现场就白瞎了。挂不上不是错，等待会退化成老的阻塞 wait。
+                stream = self._open_events(service)
+                try:
+                    baseline_ms = int(self._wall_clock() * 1000)
+                    self._call(
+                        service,
+                        "POST",
+                        f"/api/session/{child_id}/prompt",
+                        {"text": answer_prompt(question, followup=self._prompted)},
+                    )
+                    self._prompted = True  # 消息真送进去了，下一问才轮到续问那个框
+                    outcome = self._await_answer(
+                        service, child_id, baseline_ms, start_deadline, stream
+                    )
+                finally:
+                    if stream is not None:
+                        stream.close()
+                if outcome["kind"] != "success":
+                    # 子会话留着复用，但**这一轮**不能留：超时/断流时它可能还在写，
+                    # 下一问会被 steer 进这半个轮次里。
+                    self._interrupt(service, child_id)
+                return outcome
+            except Exception as exc:  # 任何现场都折成可识别分支，不往外抛裸堆栈
+                # 异常退出同样算没答成（等消息那个 GET 半路炸了也算）：掐一轮再折算。
+                if child_id is not None:
+                    self._interrupt(service, child_id)
+                outcome = outcome_from_exception(exc)
+                if outcome["kind"] == "not-running":
+                    self._cached = None  # 服务可能换了端口，下次请求现读
+                return outcome
             finally:
-                if stream is not None:
-                    stream.close()
-                # 子会话用完即弃：留着会在会话列表里堆一排「dsb 子会话」。
-                self._dispose(service, child_id)
-        except Exception as exc:  # 任何现场都折成可识别分支，不往外抛裸堆栈
-            outcome = outcome_from_exception(exc)
-            if outcome["kind"] == "not-running":
-                self._cached = None  # 服务可能换了端口，下次请求现读
-            return outcome
-        finally:
-            self._progress.finish()  # 无论成败，/status 都不能留个幽灵问句
+                self._progress.finish()  # 无论成败，/status 都不能留个幽灵问句
+
+    def _ensure_child(self, service: Mapping[str, Any]) -> tuple[str, bool]:
+        """这次要用的子会话，回 ``(id, 是不是复用)``
+        ——缓存的那个还活着就接着用，没了或压根没有就新起一个。
+
+        先 GET 一遍只为认出「会话没了」——被人删过、或 opencode 换过实例。**只有 4xx
+        算没**（会话层面的否定）：5xx 与连不上照原样抛出去，由 ``ask`` 折成对应分支，
+        别把「服务出故障」误判成「会话没了」而白起一个新子会话。
+        """
+        if self._child_id is not None:
+            try:
+                self._call(service, "GET", f"/api/session/{self._child_id}")
+                return self._child_id, True
+            except urllib.error.HTTPError as exc:
+                if not 400 <= exc.code < 500:
+                    raise
+                self._child_id = None  # 会话没了：下面重新起一个
+        # 新子会话空着出生：记账清零，下一问从首问那个框起。
+        self._child_id = self._spawn(service)
+        self._prompted = False
+        return self._child_id, False
+
+    def _quiesce(self, service: Mapping[str, Any], child_id: str, start_deadline: float) -> None:
+        """等复用的子会话空闲，再把新问题送进去；等不到就掐掉那一轮继续。
+
+        时间吃「开工」那一段的总账（``start_deadline`` 是两者共用的截止时刻）：
+        上一轮的尾巴再长，也不能把这一轮的**答复**预算吃掉，更不能把总账顶出扩展的兜底。
+        掐掉是安全的——那一轮的答复早已交出去，剩下的输出本来也不会被读
+        （下一轮的 baseline 已经划在这之后）。尾巴本身也短：真机探过，正文是一次
+        给全的（长度 0 → 338，没有半截状态），所以这一等通常只有一瞬。
+        """
+        remaining = start_deadline - self._now()
+        if remaining <= 0:
+            self._interrupt(service, child_id)
+            return
+        try:
+            self._call(
+                service,
+                "POST",
+                f"/api/experimental/session/{child_id}/wait",
+                timeout=remaining,
+            )
+        except Exception:
+            self._interrupt(service, child_id)
+
+    def _interrupt(self, service: Mapping[str, Any], child_id: str) -> None:
+        """掐掉子会话当前这一轮，**子会话本身留着**（dsh 的 interrupt）。失败只吞掉。
+
+        实测空闲时回 ``{"interrupted": false}``，无害——所以宁可多掐一次，也别让
+        孤儿轮次拖累下一问。
+        """
+        with contextlib.suppress(Exception):  # 掐不掉也改不了这一问的结论
+            self._call(service, "POST", f"/api/session/{child_id}/interrupt")
+
+    def dispose(self) -> None:
+        """收摊时删掉这次起的子会话（进程崩溃漏下的那些管不了，下次问会另起一个）。"""
+        service = self._service()
+        if service is None or self._child_id is None:
+            return
+        self._dispose(service, self._child_id)
+        self._child_id = None
+        self._prompted = False
 
     def _spawn(self, service: Mapping[str, Any]) -> str:
         """起一个**零消息**的子会话，返回它的 id（dsh 的 spawn：空对话起步）。
@@ -338,18 +452,30 @@ class OpencodeClient:
         借父会话的只有设置——``agent``、``model``、工作目录，跟 dsh 的 spawn 一样，
         **不借对话**：委派链上的父级是网页那边的模型，它的历史不在 opencode 里；
         本机主对话是另一个 agent，把它的历史喂进去就是给子 agent 塞无关上下文。
+
+        三样是「子会话能不能干活」的前置条件，缺了**当场报**：早先缺 ``agent``/``model``
+        是每问干等 120s 才超时，缺 ``location`` 更是静默把工作目录写成服务进程的 cwd——
+        两种慢/静默失败对排查一点信息量都没有，而 spawn 一个中继只干一次。
         """
         parent = self._call(service, "GET", f"/api/session/{self._session_id}")
         settings = parent.get("data") if isinstance(parent, Mapping) else None
-        body: dict[str, Any] = {"title": CHILD_TITLE}
-        if isinstance(settings, Mapping):
-            for key in ("agent", "model"):
-                if settings.get(key) is not None:
-                    body[key] = settings[key]
-            location = settings.get("location")
-            directory = location.get("directory") if isinstance(location, Mapping) else None
-            if isinstance(directory, str) and directory:
-                body["location"] = {"directory": directory}
+        location = settings.get("location") if isinstance(settings, Mapping) else None
+        directory = location.get("directory") if isinstance(location, Mapping) else None
+        agent = settings.get("agent") if isinstance(settings, Mapping) else None
+        model = settings.get("model") if isinstance(settings, Mapping) else None
+        missing = [
+            name
+            for name, value in (("agent", agent), ("model", model), ("location", directory))
+            if not value
+        ]
+        if missing:
+            raise ServiceUnavailable(f"父会话缺 {'/'.join(missing)}，子会话起不来")
+        body: dict[str, Any] = {
+            "title": CHILD_TITLE,
+            "agent": agent,
+            "model": model,
+            "location": {"directory": directory},
+        }
         spawned = self._call(service, "POST", "/api/session", body)
         child = spawned.get("data") if isinstance(spawned, Mapping) else None
         child_id = child.get("id") if isinstance(child, Mapping) else None
@@ -358,7 +484,7 @@ class OpencodeClient:
         return child_id
 
     def _dispose(self, service: Mapping[str, Any], child_id: str) -> None:
-        """删掉子会话。删不掉不外抛：答复已经拿到，不能因为收尾失败改判结果。"""
+        """删掉子会话（只在收摊时走）。删不掉只吞掉：这一步从来不该改判别的结论。"""
         with contextlib.suppress(Exception):  # 收尾失败只该被吞掉
             self._call(service, "DELETE", f"/api/session/{child_id}")
 
@@ -424,6 +550,7 @@ class OpencodeClient:
         service: Mapping[str, Any],
         session_id: str,
         baseline_ms: int,
+        start_deadline: float,
         stream: EventStream | None = None,
     ) -> Mapping[str, Any]:
         """等到 baseline 之后确实出现一条带正文的答复为止。
@@ -431,11 +558,13 @@ class OpencodeClient:
         两段预算：还没见到 assistant 消息时算「开工」（模型多久吐第一条消息），
         一旦见到就换成「写完」预算重新计时——后一段永远不被前一段挤占。
 
+        ``start_deadline`` 由 ``ask`` 在进门时划好：复用子会话时，「等上一轮收干净」
+        也吃这一段（见 ``_quiesce``），这样两段的总账在任何情况下都不变。
+
         等待的节拍交给事件流：每圈先把 ``/api/event`` 上到手的事件倒干净（顺带
         记下现场进度），流断了或心跳停摆就当场判死，不再陪 opencode 等到预算用完。
         正文判定一步没改，仍以 ``/message`` 为准——事件只当信号，不当内容。
         """
-        start_deadline = self._now() + self._start_timeout
         answer_deadline: float | None = None
         session = f"/api/session/{session_id}"
         while True:
