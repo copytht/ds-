@@ -48,6 +48,15 @@ pnpm check              # 上面四项串起来，提交前跑这个
 一句话（已写多少字、还剩多少预算），答完自动清空。现场来自中继的 `GET /status`，扩展每 3s
 轮询一次、每次自带 5s 超时，问不到当场翻红——**进度只走图标，不进对话流**（ADR-0003）。
 
+红过之后原因也留得住：每次翻红都往 `storage.local` 记一条（时刻 / 环节 / 原因），自己绿了
+再补上恢复时刻，所以 service worker 被收走、浏览器关掉都丢不了。绿着的时候悬停会回看一句：
+
+```
+ds-：总开关已开，中继可达。上次故障 15:23:59（2 分钟前）· 周期探活 · 连接失败，30 秒后恢复。点击切换总开关。
+```
+
+当前正红着时不摆历史——第一句就是原因（ADR-0004）。
+
 ## 中继 dsb（uv）
 
 ```bash
@@ -99,6 +108,19 @@ curl -X POST http://127.0.0.1:8787/ask \
 "unexpected-response"}`，扩展据此出**失败提示**（不进对话流）。中继只交结构化结果，
 TOON 编码在扩展侧，多行正文走 tabular（SPEC §9.3，一行正文一条 row，换行不产生转义），
 Python 侧不引任何 TOON 库、只产 dict。
+
+失败与慢另外留一行带时间戳的日志（`dsb/log.py`，走 stderr；`nohup uv run ds-mcp > /tmp/dsb.log 2>&1`
+就收下了）：
+
+```text
+[2026-09-30 15:26:58] ask-ok took_ms=33118 answer_chars=2
+[2026-09-30 15:13:38] bad-request path=/nope http=404 took_ms=0
+```
+
+事件名固定：`ask-ok` / `ask-fail error=…` / `ask-broke exc=…` / `probe-broke` / `status-broke` /
+`bad-request` / `slow path=/health took_ms=…`。探活与现场轮询**超过 1s** 才记 `slow`——它们各有
+5s 预算，慢了就是图标翻红的前兆。**问题正文与答复正文进不来**：字段是具名参数而不是自由 dict，
+调用点写不出 `question=`；异常只留类型名、不带消息。访问日志照旧整个关掉（ADR-0004）。
 
 ## 约定
 
