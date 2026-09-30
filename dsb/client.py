@@ -62,11 +62,11 @@ AUTH_USERNAME = "opencode"
 SERVICE_BIN = "opencode"
 # 一轮问句按**静默**计时，不按墙钟：opencode 只要还在动——事件流上还有它这个会话的事件，
 # 或 /message 上有新消息、正文还在长——这一问就一直等；**静默**超过这一段才算超时。
-# 早先是两段墙钟（开工 120s + 写完 240s = 360s），模型一旦进长工具循环就会被硬切：真机
-# 跑一轮审阅耗了 268s，写答复那段预算只剩约 45s，再慢一点就判了 opencode-timeout。
-DEFAULT_IDLE_TIMEOUT = 240.0
-# 硬顶：有动静也不能无限等——一个打转的 agent 循环会占着那把锁、拖着扩展那一次 fetch。
-# 只是安全网，正常一次委派离它很远。
+# 早先是两段墙钟（开工 120s + 写完 240s = 360s），模型一旦进长工具循环就会被硬切；改按静默后
+# 又发现 240s 对会长时间闷头推理的模型偏紧（真机：一轮里静默过十分钟），于是放到 600s。
+DEFAULT_IDLE_TIMEOUT = 600.0
+# 子 agent 的时间上限（硬顶）：一直有动静也不能无限跑——一个打转的 agent 循环会占着那把锁、
+# 拖着扩展那一次 fetch。只做安全网，正常一次委派离它很远。
 DEFAULT_MAX_TIMEOUT = 1800.0
 DEFAULT_POLL_INTERVAL = 0.5
 DEFAULT_HTTP_TIMEOUT = 10.0

@@ -89,7 +89,7 @@ OPENSESS_ID=<opencode 会话 id>
 
 一轮问句按**静默**计时，不按墙钟：opencode 只要还在动——事件流上还有它这个会话的事件，或
 `GET .../message` 上有新消息、正文还在长——这一问就一直等；**静默**超过 `DSB_IDLE_TIMEOUT`
-（默认 240s）才判超时。早先是两段墙钟（`DSB_START_TIMEOUT=120` 开工 + `DSB_ANSWER_TIMEOUT=240`
+（默认 600s）才判超时。早先是两段墙钟（`DSB_START_TIMEOUT=120` 开工 + `DSB_ANSWER_TIMEOUT=240`
 写完 = 360s），模型一进长工具循环就会被硬切：真机跑一轮审阅耗了 268s，写答复那段只剩约 45s。
 `DSB_MAX_TIMEOUT`（默认 1800s）是硬顶，只防一个打转的 agent 循环无限占着那把锁与扩展那一次
 fetch。扩展侧的兜底超时必须宽过这个硬顶，否则先到的会是扩展，报出来的就是「中继不可达」这个
