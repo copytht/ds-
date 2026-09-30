@@ -60,15 +60,14 @@ from dsb.opencode import extract_answer, has_assistant
 
 AUTH_USERNAME = "opencode"
 SERVICE_BIN = "opencode"
-# 两段等待，两个预算（真机 #14：一个 140s 的共享预算被吃掉，答复 212s 才出来，
-# 页面只等到了 opencode-timeout —— 分开算是为了让第二段永远不被第一段挤占）。
-# 第一段是**开工**：从这问进门到模型吐出第一条 assistant 消息（真机实测 8s），
-# 给 120s 覆盖冷启动与限流；配置坏了也最多让页面等 2 分钟。**复用**子会话时这一段
-# 还要先垫在「等上一轮收干净」前面（见 ``_quiesce``）——垫多久都算在这一段里，
-# 两段合计恒为 360s，不会把总账顶出扩展那个 480s 的兜底。
-DEFAULT_START_TIMEOUT = 120.0
-# 第二段是**写完**：一旦出现 assistant 消息就换这段预算重新计时，直到正文齐。
-DEFAULT_ANSWER_TIMEOUT = 240.0
+# 一轮问句按**静默**计时，不按墙钟：opencode 只要还在动——事件流上还有它这个会话的事件，
+# 或 /message 上有新消息、正文还在长——这一问就一直等；**静默**超过这一段才算超时。
+# 早先是两段墙钟（开工 120s + 写完 240s = 360s），模型一旦进长工具循环就会被硬切：真机
+# 跑一轮审阅耗了 268s，写答复那段预算只剩约 45s，再慢一点就判了 opencode-timeout。
+DEFAULT_IDLE_TIMEOUT = 240.0
+# 硬顶：有动静也不能无限等——一个打转的 agent 循环会占着那把锁、拖着扩展那一次 fetch。
+# 只是安全网，正常一次委派离它很远。
+DEFAULT_MAX_TIMEOUT = 1800.0
 DEFAULT_POLL_INTERVAL = 0.5
 DEFAULT_HTTP_TIMEOUT = 10.0
 SERVICE_READ_TIMEOUT = 10.0
@@ -192,6 +191,23 @@ def fresh_messages(body: Any, baseline_ms: int) -> list[dict[str, Any]] | None:
     return fresh
 
 
+def message_mark(messages: list[dict[str, Any]]) -> tuple[int, int, int]:
+    """一轮消息的形状指纹（条数、最后一条的创建时刻、正文总长）。
+
+    只用来认「还在长」：形状一变就说明 opencode 又有动静了（新消息、正文加字），
+    给静默计时续上。事件流缺席时它是唯一的「在动」依据。
+    """
+    total = 0
+    for message in messages:
+        for part in message.get("parts") or []:
+            if isinstance(part, Mapping):
+                text = part.get("text")
+                if isinstance(text, str):
+                    total += len(text)
+    last = created_ms(messages[-1]) if messages else 0
+    return (len(messages), last, total)
+
+
 def outcome_from_exception(exc: BaseException) -> dict[str, Any]:
     """异常 → outcome 分支：HTTP 非 2xx 是 ``http-error``，连不上是 ``not-running``。"""
     if isinstance(exc, urllib.error.HTTPError):
@@ -281,8 +297,8 @@ class OpencodeClient:
         *,
         service_reader: Callable[[], Mapping[str, Any]] = read_service,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
-        start_timeout: float = DEFAULT_START_TIMEOUT,
-        answer_timeout: float = DEFAULT_ANSWER_TIMEOUT,
+        idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+        max_timeout: float = DEFAULT_MAX_TIMEOUT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         http_timeout: float = DEFAULT_HTTP_TIMEOUT,
         now: Callable[[], float] = time.monotonic,
@@ -292,8 +308,8 @@ class OpencodeClient:
         self._session_id = session_id
         self._service_reader = service_reader
         self._urlopen = urlopen
-        self._start_timeout = start_timeout
-        self._answer_timeout = answer_timeout
+        self._idle_timeout = idle_timeout
+        self._max_timeout = max_timeout
         self._poll_interval = poll_interval
         self._http_timeout = http_timeout
         self._now = now
@@ -342,17 +358,19 @@ class OpencodeClient:
             return {"kind": "not-running"}
         with self._ask_lock:
             self._progress.begin()
-            # 开工段从这一问进门算起：复用子会话时它还要先垫在「等上一轮收干净」前面，
-            # 两段合计因此恒等于 DSB_START_TIMEOUT + DSB_ANSWER_TIMEOUT（360s），
-            # 不会因为多垫一段就把总账顶出扩展那个 480s 的兜底。
-            start_deadline = self._now() + self._start_timeout
+            # 一次委派的两个界：**静默**超过 idle_timeout 才判超时（在动就一直等），
+            # max_timeout 是防打转的硬顶（只做安全网）。
+            started = self._now()
+            hard_deadline = started + self._max_timeout
             child_id: str | None = None
             try:
                 child_id, reused = self._ensure_child(service)
                 if reused:
-                    self._quiesce(service, child_id, start_deadline)
+                    self._quiesce(
+                        service, child_id, min(started + self._idle_timeout, hard_deadline)
+                    )
                 # 事件流抢在 prompt 之前挂上：晚一步就吃不到 execution.started，
-                # 「开工」这一段的现场就白瞎了。挂不上不是错，等待会退化成老的阻塞 wait。
+                # 轮到「开工」那一步的现场就白瞎了。挂不上不是错，等待会退化成老的阻塞 wait。
                 stream = self._open_events(service)
                 try:
                     baseline_ms = int(self._wall_clock() * 1000)
@@ -364,7 +382,7 @@ class OpencodeClient:
                     )
                     self._prompted = True  # 消息真送进去了，下一问才轮到续问那个框
                     outcome = self._await_answer(
-                        service, child_id, baseline_ms, start_deadline, stream
+                        service, child_id, baseline_ms, started, hard_deadline, stream
                     )
                 finally:
                     if stream is not None:
@@ -406,16 +424,16 @@ class OpencodeClient:
         self._prompted = False
         return self._child_id, False
 
-    def _quiesce(self, service: Mapping[str, Any], child_id: str, start_deadline: float) -> None:
+    def _quiesce(self, service: Mapping[str, Any], child_id: str, deadline: float) -> None:
         """等复用的子会话空闲，再把新问题送进去；等不到就掐掉那一轮继续。
 
-        时间吃「开工」那一段的总账（``start_deadline`` 是两者共用的截止时刻）：
-        上一轮的尾巴再长，也不能把这一轮的**答复**预算吃掉，更不能把总账顶出扩展的兜底。
-        掐掉是安全的——那一轮的答复早已交出去，剩下的输出本来也不会被读
-        （下一轮的 baseline 已经划在这之后）。尾巴本身也短：真机探过，正文是一次
-        给全的（长度 0 → 338，没有半截状态），所以这一等通常只有一瞬。
+        时间吃**静默**那一段的总账（``deadline`` 是这一问进门时划的 idle 窗口）：
+        上一轮的尾巴再长，也不能把总账拖过 idle 窗口。掐掉是安全的——那一轮的答复早已
+        交出去，剩下的输出本来也不会被读（下一轮的 baseline 已经划在这之后）。尾巴本身
+        也短：真机探过，正文是一次给全的（长度 0 → 338，没有半截状态），所以这一等通常
+        只有一瞬。
         """
-        remaining = start_deadline - self._now()
+        remaining = deadline - self._now()
         if remaining <= 0:
             self._interrupt(service, child_id)
             return
@@ -552,58 +570,75 @@ class OpencodeClient:
         service: Mapping[str, Any],
         session_id: str,
         baseline_ms: int,
-        start_deadline: float,
+        started: float,
+        hard_deadline: float,
         stream: EventStream | None = None,
     ) -> Mapping[str, Any]:
         """等到 baseline 之后确实出现一条带正文的答复为止。
 
-        两段预算：还没见到 assistant 消息时算「开工」（模型多久吐第一条消息），
-        一旦见到就换成「写完」预算重新计时——后一段永远不被前一段挤占。
+        **在动就不算超时**：``last_activity`` 记的是「这一问的现场还在往前走」——事件流上
+        还有本会话的事件，或 ``/message`` 上有新消息、正文还在长——只要在动，静默窗口就
+        跟着往后推；**静默**满 ``idle_timeout`` 才判超时。``hard_deadline`` 是硬顶，防一个
+        打转的 agent 循环无限占着锁与扩展那一次 fetch。
 
-        ``start_deadline`` 由 ``ask`` 在进门时划好：复用子会话时，「等上一轮收干净」
-        也吃这一段（见 ``_quiesce``），这样两段的总账在任何情况下都不变。
-
-        等待的节拍交给事件流：每圈先把 ``/api/event`` 上到手的事件倒干净（顺带
-        记下现场进度），流断了或心跳停摆就当场判死，不再陪 opencode 等到预算用完。
-        正文判定一步没改，仍以 ``/message`` 为准——事件只当信号，不当内容。
+        等待的节拍交给事件流：每圈先把 ``/api/event`` 上到手的事件倒干净（顺带记下现场
+        进度），流断了或心跳停摆就当场判死，不再陪 opencode 等到预算用完。正文判定一步
+        没改，仍以 ``/message`` 为准——事件只当信号，不当内容。
         """
-        answer_deadline: float | None = None
+        last_activity = started
+        mark: tuple[int, int, int] | None = None
         session = f"/api/session/{session_id}"
         while True:
-            deadline = answer_deadline if answer_deadline is not None else start_deadline
-            remaining = deadline - self._now()
-            if remaining <= 0:
+            now = self._now()
+            if now >= hard_deadline:
+                self._progress.tick(0.0)
+                return {"kind": "timeout"}
+            idle_left = self._idle_timeout - (now - last_activity)
+            if idle_left <= 0:
+                self._progress.tick(0.0)
                 return {"kind": "timeout"}
             if stream is None:
-                # 没有事件流（挂不上）：退回老办法，阻塞到子会话空闲；如果它抢在
-                # agent 循环启动前就返回，下面会因为拿不到答复正文而再转一圈。
+                # 没有事件流（挂不上）：退回老办法，阻塞到子会话空闲；它只在会话空闲
+                # 或超时才回——没有事件就认不出「在动」，这一段的静默只能靠 wait 兜。
                 self._call(
                     service,
                     "POST",
                     f"/api/experimental/session/{session_id}/wait",
-                    timeout=remaining,
+                    timeout=min(idle_left, hard_deadline - now),
                 )
             else:
-                self._progress.note(stream.drain(), session_id)
+                events = stream.drain()
+                self._progress.note(events, session_id)
                 if stream.dead or stream.stale:
                     # opencode 断了，或者活着但心跳停摆：这一秒就知道，不等预算。
-                    self._progress.tick(remaining)
+                    self._progress.tick(idle_left)
                     return {"kind": "not-running"}
-            self._progress.tick(remaining)
+                if any(session_id_of(event) == session_id for event in events):
+                    last_activity = self._now()  # 本会话上有事件 = 在动
             fresh = fresh_messages(
                 self._call(service, "GET", f"{session}/message{MESSAGE_QUERY}"),
                 baseline_ms,
             )
             if fresh is None:
                 return {"kind": "unexpected"}
+            current = message_mark(fresh)
+            if current != mark:
+                mark = current
+                last_activity = self._now()  # 消息侧还在长 = 在动
             if extract_answer(fresh) is not None:
                 self._progress.done()
                 return {"kind": "success", "body": fresh}
-            # 答复开写了就换预算：正文可能还空着，但已经在写了。
-            if answer_deadline is None and has_assistant(fresh):
-                answer_deadline = self._now() + self._answer_timeout
+            if has_assistant(fresh):
                 self._progress.writing()  # 事件流缺席时，靠正文侧认出「开写了」
-            self._sleep(min(self._poll_interval, max(deadline - self._now(), 0.0)))
+            remaining = max(
+                min(
+                    self._idle_timeout - (self._now() - last_activity),
+                    hard_deadline - self._now(),
+                ),
+                0.0,
+            )
+            self._progress.tick(remaining)
+            self._sleep(min(self._poll_interval, remaining))
 
     def _call(
         self,

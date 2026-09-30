@@ -41,10 +41,10 @@ function phaseText(phase: AskPhase): string {
 }
 
 /**
- * 等待现场的一句话：走到哪一步、写了多少字、这一段还剩多少预算。
+ * 等待现场的一句话：走到哪一步、写了多少字、静默窗口还剩多久。
  *
  * 只出现在悬停里（进度不上对话流），所以怎么措辞都归这儿管；
- * 剩余预算是负数或缺着就干脆不提——报一个错的数比不报更糟。
+ * 剩余时间是负数或缺着就干脆不提——报一个错的数比不报更糟。
  */
 export function describeAsk(progress: AskStatus): string {
   const bits = [phaseText(progress.phase)];

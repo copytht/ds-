@@ -186,7 +186,7 @@ describe("describeAsk · 等待现场的一句话", () => {
     expect(describeAsk(ask("writing", 128))).toContain("已写 128 字");
   });
 
-  it("剩余预算只在为正时才报：缺着、耗尽、为负都不提", () => {
+  it("剩余时间只在为正时才报：缺着、耗尽、为负都不提", () => {
     expect(describeAsk(ask("writing", 1, 107.5))).toContain("还剩 108 秒");
     for (const remaining of [null, 0, -3]) {
       expect(describeAsk(ask("writing", 1, remaining))).not.toContain("还剩");

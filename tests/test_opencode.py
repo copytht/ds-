@@ -74,7 +74,7 @@ def test_missing_assistant_text_is_none() -> None:
 
 
 def test_has_assistant_counts_an_empty_answer_as_started() -> None:
-    """正文空着也算「开写了」——中继靠它把开工预算换成写完预算。"""
+    """正文空着也算「开写了」——中继靠它把 /status 的阶段推进到「在写」。"""
     assert has_assistant([{"role": "assistant", "parts": []}]) is True
     assert (
         has_assistant([{"role": "user", "parts": []}, {"role": "assistant", "parts": []}]) is True

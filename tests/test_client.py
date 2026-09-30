@@ -88,6 +88,25 @@ def live_messages(answer: str | None, *, old_answer: str = "上一轮的旧答�
     return {"data": data, "cursor": {"previous": None, "next": None}}
 
 
+def working_messages(reasoning: str) -> dict[str, Any]:
+    """「在干活但还没答完」的消息体：assistant 在长 reasoning，正文还没落地。
+
+    用来验「在动就不算超时」——形状每轮都变（reasoning 在长），但
+    :func:`dsb.opencode.extract_answer` 仍拿不到正文。
+    """
+    return {
+        "data": [
+            {"type": "user", "time": {"created": BASELINE_MS + 1}, "text": "问题正文"},
+            {
+                "type": "assistant",
+                "time": {"created": BASELINE_MS + 2},
+                "content": [{"type": "reasoning", "text": reasoning}],
+            },
+        ],
+        "cursor": {"previous": None, "next": None},
+    }
+
+
 class Call:
     """一次出站请求的现场记录。"""
 
@@ -452,12 +471,11 @@ def test_deadline_exhausted_maps_to_opencode_timeout() -> None:
     clock = {"now": 0.0}
 
     def jump_after_sleep(_seconds: float) -> None:
-        clock["now"] = 10_000.0  # 第一圈没等到答复，睡一觉起来已经过期
+        clock["now"] = 10_000.0  # 第一圈没等到答复，睡一觉起来静默早就过了
 
     client = make_client(
         open_url,
-        start_timeout=300.0,
-        answer_timeout=120.0,
+        idle_timeout=240.0,
         now=lambda: clock["now"],
         sleep=jump_after_sleep,
     )
@@ -519,36 +537,20 @@ def test_later_questions_reuse_the_child_and_get_the_followup_frame() -> None:
     assert waits[0] < open_url.calls.index(prompts[1])  # 且必须抢在送进去之前
 
 
-def test_waiting_for_the_previous_turn_sits_inside_the_start_budget() -> None:
-    """复用时垫的那一等吃**开工段**的总账，不另开一份。
+def test_waiting_for_the_previous_turn_is_bounded_by_the_idle_window() -> None:
+    """复用前「等上一轮收干净」也有个界，吃的是这一问进门划的静默窗口。
 
-    截止时刻由 ``ask`` 在进门时划一次，两段共用（360s）；谁在内部重新
-    ``now + start_timeout``，谁就会让总账悄悄变长、撞上扩展那个 480s 的兜底。
+    等空闲不能无限等：上一轮的尾巴再长，也不能让这一问永远进不去。界限一到就掐掉那
+    一轮继续（掐掉安全：那一轮的答复早已交出去）。这里钉的是**它确实带上了那个超时**。
     """
-    clock = {"now": 0.0}
-    prompts = {"n": 0}
+    open_url = FakeOpen(messages=live_messages("答复"))
+    client = make_client(open_url, idle_timeout=120.0)
+    assert client.ask("第一问")["kind"] == "success"  # 新会话恒空闲，不用等
+    assert client.ask("第二问")["kind"] == "success"  # 复用：先等空闲再送进去
 
-    def hook() -> None:
-        prompts["n"] += 1
-        if prompts["n"] == 2:  # 复用那一问：验活 + 等空闲把开工段吃得只剩 1s
-            clock["now"] = 119.0
-
-    open_url = FakeOpen(messages=live_messages("答复"), prompt_hook=hook)
-
-    def sleep(_seconds: float) -> None:
-        clock["now"] += 2.0  # 一觉醒来越过开工段（120s）的线
-        if clock["now"] >= 121.0:
-            open_url.messages = live_messages("答复")  # 答复这会儿才落地
-
-    client = make_client(open_url, now=lambda: clock["now"], sleep=sleep)
-    assert client.ask("第一问")["kind"] == "success"
-    open_url.messages = live_messages(None)  # 这一轮的答复还没落地
-
-    # 共用截止时刻：第二问只剩 1s，答复 121s 才来 → 超时（各算各的话这儿会成功）
-    assert payload_from_outcome(client.ask("第二问")) == {
-        "status": "error",
-        "error": ERROR_TIMEOUT,
-    }
+    waits = [call for call in open_url.calls if call.url.endswith("/wait")]
+    assert len(waits) == 1
+    assert waits[0].timeout == 120.0  # 静默窗口原样交给这次 wait
 
 
 def test_a_vanished_child_is_respawned() -> None:
@@ -649,48 +651,51 @@ def test_two_asks_queue_instead_of_sharing_one_turn() -> None:
     assert len(spawns) == 1  # 两个问句共用同一个子会话
 
 
-def test_slow_start_does_not_eat_the_answer_budget() -> None:
-    """模型迟迟不开工也不该挤占答复该有的时间（真机 #14 的回归）。
+def test_a_long_working_turn_is_not_cut_while_it_keeps_working() -> None:
+    """在动就不算超时：opencode 一路有动静，总时长远超单个静默窗口也不算超时。
 
-    开工等到 500s，远超 answer_timeout=140 —— 合在一个预算里的话这里会直接判 timeout。
+    真机对照：一轮审阅跑了 268s（按老的两段墙钟，写答复那段只剩约 45s）。这里每圈推进
+    现场（reasoning 在长 = 在动）并让时钟走掉 200s（< 静默窗口 240s），攒到 800s 仍要问成。
     """
-    open_url = FakeOpen(messages=live_messages(None))  # 起初只有还没开工的子会话
+    open_url = FakeOpen(messages=live_messages(None))
     clock = {"now": 0.0}
     polls = {"n": 0}
 
     def sleep(_seconds: float) -> None:
         polls["n"] += 1
-        if polls["n"] == 1:
-            clock["now"] = 500.0  # 模型 500s 才开工，正文还空着
-            open_url.messages = live_messages("")
+        clock["now"] += 200.0
+        if polls["n"] < 4:
+            open_url.messages = working_messages("想" * polls["n"])  # 还在长，正文没落地
         else:
-            clock["now"] = 520.0  # 答复又写了 20s
-            open_url.messages = live_messages("答复正文")
+            open_url.messages = live_messages("答复正文")  # 这一圈才写完
 
     client = make_client(
         open_url,
-        start_timeout=600.0,
-        answer_timeout=140.0,
+        idle_timeout=240.0,
         now=lambda: clock["now"],
         sleep=sleep,
     )
     assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "答复正文"}
+    assert clock["now"] == 800.0  # 远超静默窗口：靠「一直在动」撑过来的，不是碰巧快
 
 
-def test_start_budget_exhausted_maps_to_opencode_timeout() -> None:
-    """开工预算用完还没见 assistant 消息（模型一直不吐字）→ 超时。"""
+def test_the_hard_ceiling_stops_an_endless_loop_even_while_it_keeps_working() -> None:
+    """一直有动静也不能无限跑：硬顶到了照样收场（防打转的 agent 循环占死那把锁）。"""
     open_url = FakeOpen(messages=live_messages(None))
     clock = {"now": 0.0}
+    polls = {"n": 0}
 
-    def jump_after_sleep(_seconds: float) -> None:
-        clock["now"] = 10_000.0
+    def sleep(_seconds: float) -> None:
+        polls["n"] += 1
+        clock["now"] += 100.0
+        open_url.messages = working_messages("想" * polls["n"])  # 永远在动、永远不答完
 
     client = make_client(
         open_url,
-        start_timeout=600.0,
-        answer_timeout=140.0,
+        idle_timeout=240.0,  # 每圈才走 100s，静默窗口永远不会先到
+        max_timeout=500.0,
         now=lambda: clock["now"],
-        sleep=jump_after_sleep,
+        sleep=sleep,
     )
     assert payload_from_outcome(client.ask("问题")) == {
         "status": "error",
@@ -698,18 +703,17 @@ def test_start_budget_exhausted_maps_to_opencode_timeout() -> None:
     }
 
 
-def test_answer_budget_starts_when_the_answer_starts() -> None:
-    """答复一开写就换预算：正文一直空着，只给 answer_timeout 那 140s（不是 600s）。"""
-    open_url = FakeOpen(messages=live_messages(""))  # assistant 消息在，正文始终空着
+def test_an_answer_that_never_fills_in_still_times_out() -> None:
+    """答复开写了但正文一直空着（只有 reasoning），现场不再变 → 静默窗口一到就收场。"""
+    open_url = FakeOpen(messages=working_messages("想"))  # 形状固定：不再往前走
     clock = {"now": 0.0}
 
     def jump_after_sleep(_seconds: float) -> None:
-        clock["now"] += 200.0  # 每圈都跳过答复预算
+        clock["now"] += 200.0  # 每圈都跨过静默窗口
 
     client = make_client(
         open_url,
-        start_timeout=600.0,
-        answer_timeout=140.0,
+        idle_timeout=240.0,
         now=lambda: clock["now"],
         sleep=jump_after_sleep,
     )
@@ -909,7 +913,7 @@ def test_progress_snapshot_reports_phase_and_written_while_waiting() -> None:
         if rounds["n"] == 1:
             open_url.messages = live_messages("答复正文")
 
-    client = make_client(open_url, start_timeout=600.0, answer_timeout=140.0, sleep=sleep)
+    client = make_client(open_url, idle_timeout=600.0, sleep=sleep)
     client_slot.append(client)
 
     assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "答复正文"}
@@ -940,7 +944,7 @@ def test_events_from_other_sessions_never_move_our_progress() -> None:
         snapshots.append(client_slot[0].status()["ask"])
         open_url.messages = live_messages("答复")
 
-    client = make_client(open_url, start_timeout=600.0, sleep=sleep)
+    client = make_client(open_url, idle_timeout=600.0, sleep=sleep)
     client_slot.append(client)
 
     assert client.ask("问题")["kind"] == "success"

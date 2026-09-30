@@ -16,14 +16,16 @@ export const RELAY_HEALTH_PATH = "/health";
 export const RELAY_STATUS_PATH = "/status";
 
 /**
- * 扩展侧自己掐表的超时，只当「中继真死了」的兜底。先到的必须是中继：它保证在自己的
- * 两段预算内回 `opencode-timeout`（开工 120s + 写完 240s = 360s），那是个有信息量的
- * 错误码；扩展一旦先 abort，报出来的只有没信息量的「中继不可达」，还会白扔掉一次
- * 正在跑的调用。所以这个值要宽过中继最坏时长一个 HTTP 往返的量级。
+ * 扩展侧自己掐表的超时，只当「中继真死了」的兜底。先到的必须是中继：中继按**静默**计时
+ * （`DSB_IDLE_TIMEOUT`，默认 240s 没动静才判；opencode 在动就一直等），只在硬顶
+ * `DSB_MAX_TIMEOUT`（默认 1800s）上兜底——那时它回一个 `opencode-timeout`，是个有信息量
+ * 的错误码；扩展一旦先 abort，报出来的只有没信息量的「中继不可达」，还会白扔掉一次正在跑
+ * 的调用。所以这个值要宽过中继的硬顶一个 HTTP 往返的量级。
  *
- * 两个数分处 TS 与 Python 两套代码，靠 `relay.test.ts` 的跨语言断言对齐，别只改一边。
+ * 两个数分处 TS 与 Python 两套代码，没有共同的运行时事实来源，只能靠跨语言断言对齐：
+ * `tests/test_relay_server.py` 直接读这一行的字面量。别只改一边。
  */
-export const RELAY_TIMEOUT_MS = 480_000;
+export const RELAY_TIMEOUT_MS = 1_920_000;
 /** 探活（`GET /health`）只问在不在，快点回来。 */
 export const RELAY_HEALTH_TIMEOUT_MS = 5_000;
 /**
@@ -99,7 +101,7 @@ export type AskStatus = {
   readonly phase: AskPhase;
   /** 已经吐出来的正文字数——只数自己 spawn 的那个子会话。 */
   readonly written: number;
-  /** 这一段预算还剩多少秒；`null` = 中继还没定下该用哪一段。 */
+  /** 静默窗口还剩多少秒（也受硬顶约束）；`null` = 还没落定（排队时）。 */
   readonly remaining: number | null;
 };
 

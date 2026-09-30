@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from dsb.client import DEFAULT_ANSWER_TIMEOUT, DEFAULT_START_TIMEOUT, OpencodeClient
+from dsb.client import DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_TIMEOUT, OpencodeClient
 from dsb.config import parse_session_id
 from dsb.log import SLOW_MS, log_event, setup_logging
 from dsb.opencode import ERROR_UNEXPECTED, error_payload, payload_from_outcome
@@ -40,8 +40,8 @@ ASK_PATH = "/ask"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 PORT_ENV_KEY = "DSB_PORT"
-ANSWER_TIMEOUT_ENV_KEY = "DSB_ANSWER_TIMEOUT"
-START_TIMEOUT_ENV_KEY = "DSB_START_TIMEOUT"
+IDLE_TIMEOUT_ENV_KEY = "DSB_IDLE_TIMEOUT"
+MAX_TIMEOUT_ENV_KEY = "DSB_MAX_TIMEOUT"
 MAX_BODY_BYTES = 64 * 1024
 
 AskFn = Callable[[str], Mapping[str, Any]]
@@ -268,14 +268,20 @@ def resolve_seconds(env_text: str, key: str, default: float) -> float:
     return seconds
 
 
-def resolve_answer_timeout(env_text: str) -> float:
-    """答复写完的超时秒数：进程环境变量优先，其次 `.env` 里的 DSB_ANSWER_TIMEOUT。"""
-    return resolve_seconds(env_text, ANSWER_TIMEOUT_ENV_KEY, DEFAULT_ANSWER_TIMEOUT)
+def resolve_idle_timeout(env_text: str) -> float:
+    """静默多少秒算超时：进程环境变量优先，其次 `.env` 里的 DSB_IDLE_TIMEOUT。
+
+    opencode 在这个窗口里只要还有动静（事件 / 新消息 / 正文在长）就一直往下等。
+    """
+    return resolve_seconds(env_text, IDLE_TIMEOUT_ENV_KEY, DEFAULT_IDLE_TIMEOUT)
 
 
-def resolve_start_timeout(env_text: str) -> float:
-    """模型开工的超时秒数：进程环境变量优先，其次 `.env` 里的 DSB_START_TIMEOUT。"""
-    return resolve_seconds(env_text, START_TIMEOUT_ENV_KEY, DEFAULT_START_TIMEOUT)
+def resolve_max_timeout(env_text: str) -> float:
+    """一次委派的硬顶秒数：进程环境变量优先，其次 `.env` 里的 DSB_MAX_TIMEOUT。
+
+    只在「一直有动静但永远不结束」这种打转的 agent 循环上兜底；必须宽过 idle 窗口。
+    """
+    return resolve_seconds(env_text, MAX_TIMEOUT_ENV_KEY, DEFAULT_MAX_TIMEOUT)
 
 
 def main() -> None:
@@ -289,8 +295,8 @@ def main() -> None:
     port = resolve_port(env_text)
     client = OpencodeClient(
         session_id,
-        start_timeout=resolve_start_timeout(env_text),
-        answer_timeout=resolve_answer_timeout(env_text),
+        idle_timeout=resolve_idle_timeout(env_text),
+        max_timeout=resolve_max_timeout(env_text),
     )
     warm = client.warm_up()  # 启动现读：端口与口令只进内存
     print(

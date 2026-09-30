@@ -59,7 +59,7 @@ def has_assistant(body: Any) -> bool:
     """消息列表里有没有 assistant 消息（哪怕正文还空着）。
 
     与 :func:`extract_answer` 的区别是它只认「答复已经开写」这件事：正文空着
-    也算数。中继靠它把「等主对话空出来」和「等答复写完」两段等待分开算预算
+    也算数。中继靠它把 `/status` 的阶段从「还在想」推进到「在写」
     （见 :meth:`dsb.client.OpencodeClient._await_answer`）。
     """
     if not isinstance(body, list):

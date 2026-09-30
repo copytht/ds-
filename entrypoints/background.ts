@@ -53,7 +53,7 @@ import { readToggle, TOGGLE_STORAGE_KEY } from "../src/lib/toggle";
  * 1. 打中继（`POST /ask`）——网络层的失败也折成同构载荷，解析只有一条路径；
  * 2. 工具栏图标即状态位：关 / 开且中继可达 / 开但中继不可达，悬停给原因与启动命令；
  * 3. 点击图标切换总开关（总开关本身还是只存在 `storage.local`，默认关）；
- * 4. 问句在途时轮询 `GET /status`，把等待现场（阶段 / 字数 / 剩余预算）摆上角标与悬停，
+ * 4. 问句在途时轮询 `GET /status`，把等待现场（阶段 / 字数 / 剩余时间）摆上角标与悬停，
  *    中继答不上来当场翻红——进度只走图标，**不进对话流**；
  * 5. 每次翻红都留一笔（时刻 / 环节 / 原因）进 `storage.local`，自己绿了再补上恢复时刻，
  *    悬停回看——否则红过就蒸发，事后没人答得出「为什么红」。
@@ -69,7 +69,7 @@ export default defineBackground(() => {
   let state: IconState = "off";
   /** 不可达时的原因与启动命令，进悬停文案。 */
   let notice: FailureNotice | null = null;
-  /** 问句在途时的现场（阶段/字数/剩余预算），由 `/status` 轮询喂；空档恒为 null。 */
+  /** 问句在途时的现场（阶段/字数/剩余时间），由 `/status` 轮询喂；空档恒为 null。 */
   let askProgress: AskStatus | null = null;
   /**
    * 失败留痕，新的在最前。启动时从 `storage.local` 载入，所以 service worker 被收走、
@@ -228,7 +228,7 @@ export default defineBackground(() => {
   }
 
   /**
-   * 等待期的现场轮询：每 3s 打一次 `GET /status`，把中继看到的阶段 / 字数 / 剩余预算
+   * 等待期的现场轮询：每 3s 打一次 `GET /status`，把中继看到的阶段 / 字数 / 剩余时间
    * 摆到角标与悬停上。
    *
    * 「中继死了要多快发现」不需要另外立一条静默判死的规矩——每次轮询自带 5s 超时，

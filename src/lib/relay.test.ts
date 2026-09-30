@@ -89,7 +89,7 @@ describe("parseStatusResponse · 等待期的现场快照", () => {
     expect(snapshot({ status: "ok", ask: null })).toEqual({ reachable: true, ask: null });
   });
 
-  it("有问句在途 → 阶段、字数、剩余预算原样带出", () => {
+  it("有问句在途 → 阶段、字数、剩余时间原样带出", () => {
     expect(
       snapshot({ status: "ok", ask: { phase: "writing", written: 128, remaining: 107.5 } }),
     ).toEqual({ reachable: true, ask: { phase: "writing", written: 128, remaining: 107.5 } });

@@ -13,15 +13,15 @@ from typing import Any
 
 import pytest
 
-from dsb.client import DEFAULT_ANSWER_TIMEOUT, DEFAULT_START_TIMEOUT
+from dsb.client import DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_TIMEOUT
 from dsb.opencode import ERROR_NOT_RUNNING, ERROR_TIMEOUT, ERROR_UNEXPECTED
 from dsb.server import (
     DEFAULT_PORT,
     make_server,
     parse_question,
-    resolve_answer_timeout,
+    resolve_idle_timeout,
+    resolve_max_timeout,
     resolve_port,
-    resolve_start_timeout,
     route,
 )
 
@@ -222,38 +222,36 @@ def test_resolve_port_prefers_the_process_environment(
     assert resolve_port("DSB_PORT=70000") == DEFAULT_PORT
 
 
-def test_resolve_answer_timeout_prefers_the_process_environment(
+def test_resolve_idle_timeout_prefers_the_process_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("DSB_ANSWER_TIMEOUT", "30")
-    assert resolve_answer_timeout("") == 30.0
-    monkeypatch.delenv("DSB_ANSWER_TIMEOUT")
-    assert resolve_answer_timeout("DSB_ANSWER_TIMEOUT=45.5") == 45.5
-    assert resolve_answer_timeout("") == DEFAULT_ANSWER_TIMEOUT
-    assert resolve_answer_timeout("DSB_ANSWER_TIMEOUT=不是秒数") == DEFAULT_ANSWER_TIMEOUT
-    assert resolve_answer_timeout("DSB_ANSWER_TIMEOUT=-1") == DEFAULT_ANSWER_TIMEOUT
+    monkeypatch.setenv("DSB_IDLE_TIMEOUT", "30")
+    assert resolve_idle_timeout("") == 30.0
+    monkeypatch.delenv("DSB_IDLE_TIMEOUT")
+    assert resolve_idle_timeout("DSB_IDLE_TIMEOUT=45.5") == 45.5
+    assert resolve_idle_timeout("") == DEFAULT_IDLE_TIMEOUT
+    assert resolve_idle_timeout("DSB_IDLE_TIMEOUT=不是秒数") == DEFAULT_IDLE_TIMEOUT
+    assert resolve_idle_timeout("DSB_IDLE_TIMEOUT=-1") == DEFAULT_IDLE_TIMEOUT
 
 
-def test_resolve_start_timeout_reads_its_own_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DSB_START_TIMEOUT", "900")
-    assert resolve_start_timeout("") == 900.0
-    monkeypatch.delenv("DSB_START_TIMEOUT")
-    assert resolve_start_timeout("DSB_START_TIMEOUT=800") == 800.0
-    assert resolve_start_timeout("") == DEFAULT_START_TIMEOUT
-    assert resolve_start_timeout("DSB_START_TIMEOUT=不是秒数") == DEFAULT_START_TIMEOUT
-    # 开工与写完各读各的键，别互相串
-    assert resolve_start_timeout("DSB_ANSWER_TIMEOUT=45.5") == DEFAULT_START_TIMEOUT
-    assert resolve_answer_timeout("DSB_START_TIMEOUT=800") == DEFAULT_ANSWER_TIMEOUT
+def test_resolve_max_timeout_reads_its_own_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DSB_MAX_TIMEOUT", "9000")
+    assert resolve_max_timeout("") == 9000.0
+    monkeypatch.delenv("DSB_MAX_TIMEOUT")
+    assert resolve_max_timeout("DSB_MAX_TIMEOUT=8000") == 8000.0
+    assert resolve_max_timeout("") == DEFAULT_MAX_TIMEOUT
+    assert resolve_max_timeout("DSB_MAX_TIMEOUT=不是秒数") == DEFAULT_MAX_TIMEOUT
+    # 静默窗口与硬顶各读各的键，别互相串
+    assert resolve_max_timeout("DSB_IDLE_TIMEOUT=45.5") == DEFAULT_MAX_TIMEOUT
+    assert resolve_idle_timeout("DSB_MAX_TIMEOUT=8000") == DEFAULT_IDLE_TIMEOUT
 
 
 def test_the_extension_timeout_outlives_the_relay_worst_case() -> None:
-    """扩展侧的兜底超时必须宽过中继「开工 + 写完」的最坏时长。
+    """扩展侧的兜底超时必须宽过中继的硬顶。
 
     这两个数分处 TS 与 Python，没有共同的运行时事实来源，只能靠这条断言对齐：先到的
-    必须是中继——它能把超时折成 `opencode-timeout` 这个有信息量的码；扩展一旦先 abort，
-    报出来的只有没信息量的「中继不可达」，还会白扔一次正在跑的调用。
+    必须是中继——它能按静默判超时并折成 `opencode-timeout` 这个有信息量的码；扩展一旦先
+    abort，报出来的只有没信息量的「中继不可达」，还会白扔一次正在跑的调用。
     """
     source = (Path(__file__).resolve().parents[1] / "src" / "lib" / "relay.ts").read_text(
         encoding="utf-8"
@@ -262,6 +260,6 @@ def test_the_extension_timeout_outlives_the_relay_worst_case() -> None:
     assert match is not None, "src/lib/relay.ts 里找不到 RELAY_TIMEOUT_MS"
     extension_ms = int(match.group(1).replace("_", ""))
 
-    worst_case_ms = int((DEFAULT_START_TIMEOUT + DEFAULT_ANSWER_TIMEOUT) * 1000)
+    worst_case_ms = int(DEFAULT_MAX_TIMEOUT * 1000)
     # 留 120s 给中继自己的 HTTP 往返（读设置 / spawn / prompt / message / delete）
     assert extension_ms - worst_case_ms >= 120_000
