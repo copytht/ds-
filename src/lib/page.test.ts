@@ -4,10 +4,12 @@ import { fixtureCases, type ActionCase } from "./fixtures";
 import {
   clearComposer,
   clickSend,
+  findSendButton,
   newChat,
   pressEnter,
   readComposer,
   readPageState,
+  SEND_SELECTOR,
   typeComposer,
 } from "./page";
 
@@ -109,9 +111,38 @@ describe("composer.* 执行器", () => {
 describe("send.* 执行器", () => {
   const SEND = 'div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle';
 
+  // jsdom 不做布局，所有元素的 getClientRects 都是空——测试里手工补一个盒子。
+  const stubBox = (el: Element): void => {
+    (el as HTMLElement).getClientRects = () => [{ width: 1, height: 1 }] as unknown as DOMRectList;
+  };
+
+  it("findSendButton：在且没禁用就回它", () => {
+    document.body.innerHTML = `<div role="button" class="${SEND_SELECTOR.split(".").slice(1).join(" ")}"></div>`;
+    stubBox(document.querySelector(SEND_SELECTOR) as Element);
+    expect(findSendButton()).not.toBeNull();
+  });
+
+  it("findSendButton：class 带 ds-button--disabled 回 null", () => {
+    document.body.innerHTML = `<div role="button" class="${SEND_SELECTOR.split(".").slice(1).join(" ")} ds-button--disabled"></div>`;
+    stubBox(document.querySelector(SEND_SELECTOR) as Element);
+    expect(findSendButton()).toBeNull();
+  });
+
+  it("findSendButton：没这个键也回 null", () => {
+    document.body.innerHTML = "<div>什么都没有</div>";
+    expect(findSendButton()).toBeNull();
+  });
+
+  it("findSendButton：没渲染出盒子（不可见）也当没找到", () => {
+    document.body.innerHTML = `<div role="button" class="${SEND_SELECTOR.split(".").slice(1).join(" ")}"></div>`;
+    // 不 stub：jsdom 里天然 getClientRects().length === 0
+    expect(findSendButton()).toBeNull();
+  });
+
   it("点站点自己的发送键（设计系统那个圆按钮）", () => {
     document.body.innerHTML = `<textarea></textarea><div role="button" class="${SEND.split(".").slice(1).join(" ")}"></div>`;
     const el = document.querySelector(SEND) as HTMLElement;
+    stubBox(el);
     let clicked = 0;
     el.addEventListener("click", () => (clicked += 1));
 

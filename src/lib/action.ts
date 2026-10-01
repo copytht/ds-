@@ -47,6 +47,9 @@ export const ACTION_ERROR_UNKNOWN = "unknown-action";
 /** 目标标签页不在 / 这一跳没走通（target 认不出、没接执行口、消息没送到内容脚本）。 */
 export const ACTION_ERROR_TAB_GONE = "tab-gone";
 
+/** 不受总开关管的两件动作：开关本身的读写。关掉后还得能把开关翻回来。 */
+export const TOGGLE_ACTIONS: ReadonlySet<string> = new Set(["toggle.get", "toggle.set"]);
+
 /**
  * 「代你发言」闸下的动作：**动写作框的**那些。读（`composer.read`）不受管——
  * 看一眼你写了什么不算替你开口。闸关着时这些一律回 `disabled`。
@@ -71,12 +74,20 @@ export function isActionOutcome(value: unknown): value is ActionOutcome {
   return false;
 }
 
+/** 总开关的读写口（`toggle.get` / `toggle.set`）；真源是 `storage.local`。 */
+export type ToggleApi = {
+  get(): Promise<boolean>;
+  set(value: boolean): Promise<boolean>;
+};
+
 export type ActionContext = {
   /** 动作现读总开关：关着不执行，回 `disabled`（中继侧另有 `disabled` 挡着）。 */
   readonly enabled: boolean;
   /** 「代你发言」闸：关着时动写作框的动作回 `disabled`（见 `SPEAK_GATED_ACTIONS`）。 */
   readonly speak: boolean;
   readonly tabs: TabsApi;
+  /** 总开关读写口；没接上时 `toggle.get/set` 落 `unknown-action`。 */
+  readonly toggle?: ToggleApi;
   /**
    * target 标签页的执行口：把帧送到那个标签页并拿回结果。
    * 抛错 / 答不上同构载荷都由这一层折成 `tab-gone`（见 `sendMessageSendToTab`），
@@ -128,7 +139,10 @@ export async function runAction(
   frame: ActionFrame,
   context: ActionContext,
 ): Promise<ActionOutcome> {
-  if (!context.enabled) return { ok: false, error: ACTION_ERROR_DISABLED };
+  // 总开关关着：一律 `disabled`，**但 toggle.* 例外**——开关的读写不该被开关自己挡住。
+  if (!context.enabled && !TOGGLE_ACTIONS.has(frame.action)) {
+    return { ok: false, error: ACTION_ERROR_DISABLED };
+  }
   // 「代你发言」闸：动写作框的动作要这个闸开着，读不受管。
   if (SPEAK_GATED_ACTIONS.has(frame.action) && !context.speak) {
     return { ok: false, error: ACTION_ERROR_DISABLED };
@@ -144,6 +158,16 @@ export async function runAction(
   }
   if (frame.action === "tabs.list") {
     return { ok: true, result: { tabs: await listSessionTabs(context.tabs) } };
+  }
+  if (frame.action === "toggle.get" || frame.action === "toggle.set") {
+    if (context.toggle === undefined) return { ok: false, error: ACTION_ERROR_UNKNOWN };
+    if (frame.action === "toggle.get") {
+      return { ok: true, result: { enabled: await context.toggle.get() } };
+    }
+    const enabled = frame.params["enabled"];
+    // 参数不是布尔就不落一个「写成了」的假象：当认不出这个形状。
+    if (typeof enabled !== "boolean") return { ok: false, error: ACTION_ERROR_UNKNOWN };
+    return { ok: true, result: { enabled: await context.toggle.set(enabled) } };
   }
   return { ok: false, error: ACTION_ERROR_UNKNOWN }; // 名册有、扩展还没实现
 }

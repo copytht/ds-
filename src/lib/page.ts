@@ -69,14 +69,25 @@ export function clearComposer(_frame: ActionFrame): Record<string, never> {
 }
 
 /** 站点设计系统的发送键（圆箭头）；**禁用看 class**——它没有 `disabled` 属性。 */
-const SEND_SELECTOR = 'div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle';
+export const SEND_SELECTOR =
+  'div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle';
+
+/**
+ * 找站点自己的发送键：不在或被禁用（class 带 `ds-button--disabled`）都回 null。
+ * `send.click` 与回灌那条路共读这一处，别再另写一份选择器。
+ */
+export function findSendButton(): HTMLElement | null {
+  const el = document.querySelector<HTMLElement>(SEND_SELECTOR);
+  if (el === null) return null;
+  if (el.getClientRects().length === 0) return null; // 还没渲染出来：当没找到
+  if (el.classList.contains("ds-button--disabled")) return null;
+  return el;
+}
 
 /** 点站点自己的发送键（走它的发送路径）。键不可用（空输入框等）就抛，别假装发过了。 */
 export function clickSend(_frame: ActionFrame): Record<string, never> {
-  const el = document.querySelector<HTMLElement>(SEND_SELECTOR);
-  if (el === null || el.classList.contains("ds-button--disabled")) {
-    throw new Error("发送键不可用");
-  }
+  const el = findSendButton();
+  if (el === null) throw new Error("发送键不可用");
   el.click();
   return {};
 }

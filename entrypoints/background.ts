@@ -404,17 +404,16 @@ export default defineBackground(() => {
 
   let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
 
-  function syncActionStream(enabled: boolean): void {
-    actionStream.sync(enabled);
-    if (enabled && keepAliveTimer === undefined) {
+  /**
+   * 动作流**常开**：总开关关掉之后，扩展还得能收 `toggle.set true` 把它翻回来——
+   * 「把遥控器锁进被遥控的盒子」是反模式。开关的执行门在 `runAction` / 中继 `submit` 那两处。
+   */
+  function syncActionStream(): void {
+    actionStream.sync(true);
+    if (keepAliveTimer === undefined) {
       keepAliveTimer = setInterval(() => {
         void browser.runtime.getPlatformInfo().catch(() => undefined);
       }, KEEPALIVE_INTERVAL_MS);
-      return;
-    }
-    if (!enabled && keepAliveTimer !== undefined) {
-      clearInterval(keepAliveTimer);
-      keepAliveTimer = undefined;
     }
   }
 
@@ -428,6 +427,18 @@ export default defineBackground(() => {
         enabled: readToggle(stored[TOGGLE_STORAGE_KEY]),
         speak: readSpeak(stored[SPEAK_STORAGE_KEY]),
         tabs: { query: (query) => browser.tabs.query(query) },
+        // 总开关读写口：真源就是 storage.local（同一条真源，图标与武装都跟着它走）。
+        // 写入触发 storage.onChanged → syncFromStorage，武装/断流随之生效。
+        toggle: {
+          get: async () => {
+            const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
+            return readToggle(stored[TOGGLE_STORAGE_KEY]);
+          },
+          set: async (value) => {
+            await browser.storage.local.set({ [TOGGLE_STORAGE_KEY]: value });
+            return value;
+          },
+        },
         // 带 target 的动作投进那个标签页：帧裹一层 ds-/action 送过去；
         // 标签页没了 / 内容脚本没注入（sendMessage 抛错）都折成 tab-gone，不冒泡。
         sendToTab: sendMessageSendToTab((tabId, frameToTab) =>
@@ -446,7 +457,7 @@ export default defineBackground(() => {
     const stored = await browser.storage.local.get([TOGGLE_STORAGE_KEY, FAILURE_LOG_STORAGE_KEY]);
     const enabled = readToggle(stored[TOGGLE_STORAGE_KEY]);
     failureLog = readFailureLog(stored[FAILURE_LOG_STORAGE_KEY]); // 留痕先上手，标题才拼得出历史
-    syncActionStream(enabled); // 动作流先跟着开关活/断，图标跟着探测结果走
+    syncActionStream(); // 动作流常开（关了总开关也留着，好把开关翻回来）；图标跟着探测结果走
     await syncHealthAlarm(enabled); // 排班先跟着开关走，图标再跟着探测结果走
     if (!enabled) {
       state = "off";

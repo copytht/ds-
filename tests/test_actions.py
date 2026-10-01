@@ -391,6 +391,42 @@ def test_disabled_toggle_comes_back_as_disabled(
     service.enabled = True  # 别把同服务里的别的用例带下水
 
 
+def test_disabled_toggle_still_allows_toggle_actions(
+    actions: tuple[str, ActionServer, str],
+) -> None:
+    """总开关关着时 toggle.get/set 照常执行——否则就是把遥控器锁进被遥控的盒子里。"""
+    base, service, token = actions
+
+    def on_action(frame: dict[str, Any]) -> Any:
+        if frame["action"] == "toggle.get":
+            return {"enabled": False}
+        return {"enabled": bool(frame["params"].get("enabled"))}
+
+    with FakeSubscriber(base, on_action) as subscriber:
+        subscriber.wait_subscribed()
+        service.enabled = False
+
+        assert submit(base, {"action": "toggle.get", "params": {}, "target": None}, token) == (
+            200,
+            {"ok": True, "action": "toggle.get", "result": {"enabled": False}},
+        )
+        assert submit(
+            base,
+            {"action": "toggle.set", "params": {"enabled": True}, "target": None},
+            token,
+        ) == (
+            200,
+            {"ok": True, "action": "toggle.set", "result": {"enabled": True}},
+        )
+        # 其余动作照旧被门挡住
+        assert submit(base, {"action": "tabs.list", "params": {}, "target": None}, token) == (
+            200,
+            {"ok": False, "action": "tabs.list", "error": "disabled"},
+        )
+
+    service.enabled = True  # 别把同服务里的别的用例带下水
+
+
 def test_unknown_action_comes_back_as_unknown_action(
     actions: tuple[str, ActionServer, str],
 ) -> None:
@@ -498,6 +534,8 @@ def test_the_book_only_admits_actions_it_can_relay() -> None:
             "send.click",
             "send.enter",
             "chat.new",
+            "toggle.get",
+            "toggle.set",
         }
         == KNOWN_ACTIONS
     )
@@ -506,8 +544,6 @@ def test_the_book_only_admits_actions_it_can_relay() -> None:
         "stop.click",
         "wait.reply",
         "wait.fence",
-        "toggle.get",
-        "toggle.set",
     }
 
 
@@ -535,7 +571,7 @@ def test_resolve_enabled_reads_the_process_then_the_env_file(
     monkeypatch.delenv("DSB_ACTIONS_ENABLED")
     assert resolve_enabled("DSB_ACTIONS_ENABLED=false") is False
     assert resolve_enabled("DSB_ACTIONS_ENABLED=on") is True
-    assert resolve_enabled("") is True
+    assert resolve_enabled("") is False
 
 
 # ---- 纯接缝 ----

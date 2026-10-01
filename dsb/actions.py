@@ -39,6 +39,10 @@ ACTION_RESULT_PATH = "/action/result"
 ERROR_UNAUTHORIZED = "unauthorized"
 ERROR_NO_SUBSCRIBER = "no-subscriber"
 ERROR_DISABLED = "disabled"
+
+#: 不受总开关管的两件动作：开关本身的读写。关掉后还得能把开关翻回来，
+#: 否则就是「把遥控器锁进被遥控的盒子里」。
+TOGGLE_ACTIONS = frozenset({"toggle.get", "toggle.set"})
 ERROR_UNKNOWN_ACTION = "unknown-action"
 ERROR_TIMEOUT = "timeout"
 ERROR_TAB_GONE = "tab-gone"
@@ -65,13 +69,19 @@ WRITE_ACTIONS = (
     "stop.click",
     "wait.reply",
     "wait.fence",
-    "toggle.get",
-    "toggle.set",
 )
 
 #: 名册：只读那批 + 已落地的写动作（`composer.*` 已实现，进名册）。
 KNOWN_ACTIONS = READ_ACTIONS | frozenset(
-    {"composer.type", "composer.clear", "send.click", "send.enter", "chat.new"}
+    {
+        "composer.type",
+        "composer.clear",
+        "send.click",
+        "send.enter",
+        "chat.new",
+        "toggle.get",
+        "toggle.set",
+    }
 )
 
 #: 动作流的心跳：照抄 dsb/events.py 的标称间隔（事件流实测 15s 一拍）。
@@ -113,12 +123,12 @@ def ensure_token(path: Path | None = None, *, entropy_bytes: int = 32) -> str:
 
 
 def resolve_enabled(env_text: str) -> bool:
-    """动作服务的总开关：进程环境变量优先，其次 ``.env`` 里的 DSB_ACTIONS_ENABLED，缺省开。"""
+    """动作服务的总开关：进程环境变量优先，其次 ``.env`` 里的 DSB_ACTIONS_ENABLED，缺省关。"""
     raw = os.environ.get(ACTIONS_ENABLED_ENV_KEY) or parse_session_id(
         env_text, ACTIONS_ENABLED_ENV_KEY
     )
-    if raw is None:
-        return True
+    if not raw:
+        return False
     return raw.strip().lower() not in _ACTIONS_OFF
 
 
@@ -275,7 +285,7 @@ class ActionServer:
         subscriber = self._current_subscriber()
         if subscriber is None:
             return 200, {"ok": False, "action": name, "error": ERROR_NO_SUBSCRIBER}
-        if not self.enabled:
+        if not self.enabled and name not in TOGGLE_ACTIONS:
             return 200, {"ok": False, "action": name, "error": ERROR_DISABLED}
         if name not in KNOWN_ACTIONS:
             return 200, {"ok": False, "action": name, "error": ERROR_UNKNOWN_ACTION}

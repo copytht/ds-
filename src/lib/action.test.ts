@@ -13,6 +13,7 @@ import {
   type SessionTab,
   type TabCandidate,
   type TabsApi,
+  type ToggleApi,
 } from "./action";
 import type { ActionFrame } from "./actionstream";
 import { fixtureCases, fixtureFile, type ActionCase, type ActionFixtureFile } from "./fixtures";
@@ -167,6 +168,93 @@ describe("sendToTab 接线（background 侧的 browser.tabs.sendMessage）", () 
     expect(await sendToTab(42, frame({ target: "42" }))).toEqual({
       ok: false,
       error: "tab-gone",
+    });
+  });
+});
+
+function toggleApi(initial = false): ToggleApi & { value: boolean; sets: number } {
+  const api = {
+    value: initial,
+    sets: 0,
+    async get(): Promise<boolean> {
+      return api.value;
+    },
+    async set(value: boolean): Promise<boolean> {
+      api.value = value;
+      api.sets += 1;
+      return api.value;
+    },
+  };
+  return api;
+}
+
+describe("toggle.get / toggle.set", () => {
+  it("toggle.get 回总开关当前状态", async () => {
+    const toggle = toggleApi(true);
+    expect(await runAction(frame({ action: "toggle.get" }), context({ toggle }))).toEqual({
+      ok: true,
+      result: { enabled: true },
+    });
+  });
+
+  it("toggle.set 写入并回新状态", async () => {
+    const toggle = toggleApi(false);
+    const outcome = await runAction(
+      frame({ action: "toggle.set", params: { enabled: true } }),
+      context({ toggle }),
+    );
+    expect(outcome).toEqual({ ok: true, result: { enabled: true } });
+    expect(toggle.value).toBe(true);
+    expect(toggle.sets).toBe(1);
+  });
+
+  it("toggle.set 参数不是布尔 → unknown-action，别假装写过了", async () => {
+    const toggle = toggleApi(false);
+    for (const bad of [undefined, null, "true", 1, {}, []]) {
+      expect(
+        await runAction(
+          frame({ action: "toggle.set", params: { enabled: bad } }),
+          context({ toggle }),
+        ),
+      ).toEqual({ ok: false, error: "unknown-action" });
+    }
+    expect(toggle.sets).toBe(0);
+  });
+
+  it("context 没接 toggle → toggle.get/set 都回 unknown-action", async () => {
+    expect(await runAction(frame({ action: "toggle.get" }), context())).toEqual({
+      ok: false,
+      error: "unknown-action",
+    });
+    expect(
+      await runAction(frame({ action: "toggle.set", params: { enabled: true } }), context()),
+    ).toEqual({ ok: false, error: "unknown-action" });
+  });
+});
+
+describe("总开关关着时的豁免（toggle.*）", () => {
+  it("enabled=false 时 toggle.get / toggle.set 照常执行", async () => {
+    const toggle = toggleApi(false);
+    const ctx = context({ enabled: false, toggle });
+    expect(await runAction(frame({ action: "toggle.get" }), ctx)).toEqual({
+      ok: true,
+      result: { enabled: false },
+    });
+    expect(
+      await runAction(frame({ action: "toggle.set", params: { enabled: true } }), ctx),
+    ).toEqual({ ok: true, result: { enabled: true } });
+    expect(toggle.value).toBe(true);
+  });
+
+  it("enabled=false 时其余动作一律 disabled（含 tabs.list / 带 target 的）", async () => {
+    const ctx = context({ enabled: false, toggle: toggleApi(false) });
+    expect(await runAction(frame({ action: "tabs.list" }), ctx)).toEqual({
+      ok: false,
+      error: "disabled",
+    });
+    expect(await runAction(frame({ action: "composer.read", target: "42" }), ctx)).toEqual({
+      ok: false,
+      error: "disabled",
     });
   });
 });

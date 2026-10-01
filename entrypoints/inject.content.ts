@@ -4,6 +4,7 @@ import { detectSendQuestion, extractAssistantAnswer } from "../src/lib/answer";
 import { parseChainMessage, questionMessage, type ResultMessage } from "../src/lib/channel";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
 import { isOutgoingChatRequest, rewriteOutgoingBody } from "../src/lib/inject";
+import { findSendButton } from "../src/lib/page";
 import { nextMessageId } from "../src/lib/id";
 import { buildReply, hasReplyAnchor, isInjectableReply } from "../src/lib/reply";
 import { outsideFences, reportSaid } from "../src/lib/said";
@@ -152,8 +153,8 @@ export default defineContentScript({
 
         const request = originalFetch.call(window, input, requestInit);
         if (!outgoing) return request;
-        // 模型的回答只走这条路回来：克隆一份自己读，页面那一份照常流走。
         return request.then((response) => {
+          // 模型的回答只走这条路回来：克隆一份自己读，页面那一份照常流走。
           void watchResponse(response.clone());
           return response;
         });
@@ -244,15 +245,6 @@ export default defineContentScript({
 
 const COMPOSER_SELECTORS = ["textarea", '[contenteditable="true"]'];
 
-const SEND_BUTTON_SELECTORS = [
-  'button[aria-label*="send" i]',
-  'button[aria-label*="发送"]',
-  'button[data-testid*="send" i]',
-  'button[data-testid*="发送"]',
-  'button[title*="send" i]',
-  'button[title*="发送"]',
-];
-
 /**
  * 回灌作为一条真实用户消息发进当前会话：把消息填进站点自己的输入框、触发它原生的发送，
  * 于是这条消息走的与 #12 注入同一条路（同一个 `CHAT_SEND_PATH` 闸门内的那次发送）。
@@ -328,7 +320,7 @@ async function triggerSend(composer: HTMLElement): Promise<boolean> {
   dispatchEnter(composer);
   if (await waitForSend(composer, 600)) return true;
 
-  const button = findSendButton(composer);
+  const button = findSendButton();
   if (button === null) return false;
   button.click();
   return waitForSend(composer, 1200);
@@ -345,18 +337,6 @@ function dispatchEnter(composer: HTMLElement): void {
   Object.defineProperty(event, "keyCode", { value: 13 });
   Object.defineProperty(event, "which", { value: 13 });
   composer.dispatchEvent(event);
-}
-
-function findSendButton(composer: HTMLElement): HTMLElement | null {
-  for (const selector of SEND_BUTTON_SELECTORS) {
-    const candidate = document.querySelector<HTMLElement>(selector);
-    if (candidate === null) continue;
-    if (candidate.getClientRects().length === 0) continue;
-    if (candidate.hasAttribute("disabled")) continue;
-    return candidate;
-  }
-  const form = composer.closest("form");
-  return form?.querySelector<HTMLElement>("button:not([disabled])") ?? null;
 }
 
 /** 发出去的标志：输入框被站点清空。 */
