@@ -554,7 +554,7 @@ class OpencodeClient:
                 service,
                 "POST",
                 f"/api/session/{self._coordinator_id}/prompt",
-                {"text": f"【网页】{text}"},
+                {"text": f"web:{text}"},
             )
 
     def probe(self) -> str:
