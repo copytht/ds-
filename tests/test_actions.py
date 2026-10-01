@@ -25,6 +25,7 @@ from dsb.actions import (
     ACTIONS_PATH,
     KNOWN_ACTIONS,
     READ_ACTIONS,
+    WRITE_ACTIONS,
     ActionServer,
     ensure_token,
     resolve_enabled,
@@ -481,7 +482,7 @@ def test_malformed_body_is_a_protocol_error_not_an_action_error(
 
 
 def test_the_book_only_admits_actions_it_can_relay() -> None:
-    """最小集 = ADR-0007 的只读动作；写动作还是占位，提交一律判不出名字。"""
+    """名册 = ADR-0007 的只读动作 + **已落地**的写动作；没实现的仍判不出名字。"""
     assert {
         "tabs.list",
         "page.state",
@@ -489,8 +490,18 @@ def test_the_book_only_admits_actions_it_can_relay() -> None:
         "messages.list",
         "messages.last",
     } == READ_ACTIONS
-    assert KNOWN_ACTIONS == READ_ACTIONS
-    assert "composer.type" not in KNOWN_ACTIONS  # 占位，实现后再并进来
+    assert READ_ACTIONS | {"composer.type", "composer.clear"} == KNOWN_ACTIONS
+    assert "send.click" not in KNOWN_ACTIONS  # 还是占位，实现后再并进来
+    assert set(WRITE_ACTIONS) == {
+        "send.click",
+        "send.enter",
+        "stop.click",
+        "chat.new",
+        "wait.reply",
+        "wait.fence",
+        "toggle.get",
+        "toggle.set",
+    }
 
 
 def test_failure_codes_match_the_fixture_book() -> None:

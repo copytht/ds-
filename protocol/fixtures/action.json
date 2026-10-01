@@ -45,6 +45,16 @@
       "response": { "ok": true, "action": "composer.type", "result": {} }
     },
     {
+      "name": "composer.read 成功",
+      "request": { "action": "composer.read", "params": {}, "target": "42" },
+      "response": { "ok": true, "action": "composer.read", "result": { "text": "你好" } }
+    },
+    {
+      "name": "composer.clear 成功",
+      "request": { "action": "composer.clear", "params": {}, "target": "42" },
+      "response": { "ok": true, "action": "composer.clear", "result": {} }
+    },
+    {
       "name": "未订阅失败",
       "request": { "action": "tabs.list", "params": {}, "target": null },
       "response": { "ok": false, "action": "tabs.list", "error": "no-subscriber" }

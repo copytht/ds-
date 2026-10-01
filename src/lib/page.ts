@@ -22,3 +22,48 @@ export function readPageState(_frame: ActionFrame): PageState {
     composerPresent: document.querySelector(COMPOSER_SELECTOR) !== null,
   };
 }
+
+/** 写作框：优先 `<textarea>`（DeepSeek 现在就是），退到 contenteditable。 */
+function composerElement(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(COMPOSER_SELECTOR);
+}
+
+/**
+ * 写进受控输入：走**原型上的原生 value setter**，再派一个冒泡的 `input`。
+ * 直接 `el.value = x` 会被 React 的 value tracker 吞掉——页面看着像没写过。
+ */
+function writeComposer(el: HTMLElement, text: string): void {
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement : HTMLInputElement;
+    Object.getOwnPropertyDescriptor(proto.prototype, "value")?.set?.call(el, text);
+  } else {
+    el.textContent = text;
+  }
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/** 读写作框里现有的字（不发送）。 */
+export function readComposer(_frame: ActionFrame): { text: string } {
+  const el = composerElement();
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+    return { text: el.value };
+  }
+  return { text: el?.textContent ?? "" };
+}
+
+/** 往写作框写一段字（**不发送**）。`params.text` 不是字符串就写空。 */
+export function typeComposer(frame: ActionFrame): Record<string, never> {
+  const el = composerElement();
+  if (el === null) throw new Error("页面上没有写作框");
+  const text = frame.params["text"];
+  writeComposer(el, typeof text === "string" ? text : "");
+  return {};
+}
+
+/** 清空写作框（**不发送**）。 */
+export function clearComposer(_frame: ActionFrame): Record<string, never> {
+  const el = composerElement();
+  if (el === null) throw new Error("页面上没有写作框");
+  writeComposer(el, "");
+  return {};
+}

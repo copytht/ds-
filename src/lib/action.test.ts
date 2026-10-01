@@ -29,7 +29,7 @@ function tabsApi(tabs: readonly TabCandidate[]): TabsApi & { calls: number } {
 }
 
 function context(overrides: Partial<ActionContext> = {}): ActionContext {
-  return { enabled: true, tabs: tabsApi([]), ...overrides };
+  return { enabled: true, speak: true, tabs: tabsApi([]), ...overrides };
 }
 
 function frame(overrides: Partial<ActionFrame> = {}): ActionFrame {
@@ -233,5 +233,34 @@ describe("isActionOutcome 形状", () => {
     expect(isActionOutcome(undefined)).toBe(false);
     expect(isActionOutcome("yes")).toBe(false);
     expect(isActionOutcome({ ok: "yes" })).toBe(false);
+  });
+});
+
+describe("「代你发言」闸", () => {
+  const ok = async () => ({ ok: true, result: {} }) as const;
+
+  it("闸关着时动写作框的动作回 disabled，读不受管", async () => {
+    const ctx = context({ speak: false, sendToTab: ok });
+    expect(await runAction(frame({ action: "composer.type", target: "42" }), ctx)).toEqual({
+      ok: false,
+      error: "disabled",
+    });
+    expect(await runAction(frame({ action: "composer.clear", target: "42" }), ctx)).toEqual({
+      ok: false,
+      error: "disabled",
+    });
+    // 读不受这个闸管：看一眼你写了什么不算替你开口。
+    expect(await runAction(frame({ action: "composer.read", target: "42" }), ctx)).toEqual({
+      ok: true,
+      result: {},
+    });
+  });
+
+  it("闸开着时照常走", async () => {
+    const ctx = context({ speak: true, sendToTab: ok });
+    expect(await runAction(frame({ action: "composer.type", target: "42" }), ctx)).toEqual({
+      ok: true,
+      result: {},
+    });
   });
 });

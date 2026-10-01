@@ -48,3 +48,11 @@ export function parseToggleMessage(data: unknown): ToggleMessage | null {
   }
   return null;
 }
+
+/** 「代你发言」闸的存储键：与总开关（toggle）分开，默认关。 */
+export const SPEAK_STORAGE_KEY = "speak";
+
+/** 「代你发言」闸：只认显式的 `true`，其它一律当没开（与 readToggle 一个脾气）。 */
+export function readSpeak(stored: unknown): boolean {
+  return stored === true;
+}

@@ -11,7 +11,7 @@ import {
   type ActionRoster,
   type QuestionMessage,
 } from "../src/lib/channel";
-import { readPageState } from "../src/lib/page";
+import { clearComposer, readComposer, readPageState, typeComposer } from "../src/lib/page";
 import {
   parseToggleMessage,
   readToggle,
@@ -74,6 +74,9 @@ export default defineContentScript({
      */
     const ACTION_ROSTER: ActionRoster = {
       "page.state": readPageState,
+      "composer.read": readComposer,
+      "composer.type": typeComposer,
+      "composer.clear": clearComposer,
     };
 
     // background 打过来的动作帧（走 `tabs.sendMessage`）：当场交回一个 ActionOutcome；

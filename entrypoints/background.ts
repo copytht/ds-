@@ -49,7 +49,7 @@ import {
   type FailureNotice,
   type ReplyPayload,
 } from "../src/lib/reply";
-import { readToggle, TOGGLE_STORAGE_KEY } from "../src/lib/toggle";
+import { readSpeak, readToggle, SPEAK_STORAGE_KEY, TOGGLE_STORAGE_KEY } from "../src/lib/toggle";
 
 /**
  * background 这一侧干三件事：
@@ -403,9 +403,10 @@ export default defineBackground(() => {
    * 才留给中继按 timeout 收场。 */
   async function handleAction(frame: ActionFrame): Promise<void> {
     try {
-      const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
+      const stored = await browser.storage.local.get([TOGGLE_STORAGE_KEY, SPEAK_STORAGE_KEY]);
       const outcome = await runAction(frame, {
         enabled: readToggle(stored[TOGGLE_STORAGE_KEY]),
+        speak: readSpeak(stored[SPEAK_STORAGE_KEY]),
         tabs: { query: (query) => browser.tabs.query(query) },
         // 带 target 的动作投进那个标签页：帧裹一层 ds-/action 送过去；
         // 标签页没了 / 内容脚本没注入（sendMessage 抛错）都折成 tab-gone，不冒泡。

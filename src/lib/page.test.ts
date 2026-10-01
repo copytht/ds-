@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { fixtureCases, type ActionCase } from "./fixtures";
-import { readPageState } from "./page";
+import { clearComposer, readComposer, readPageState, typeComposer } from "./page";
 
 const FRAME = {
   type: "action",
@@ -47,5 +47,53 @@ describe("page.state 执行器", () => {
     expect(Object.keys(readPageState(FRAME)).sort()).toEqual(
       Object.keys(sample.result as object).sort(),
     );
+  });
+});
+
+describe("composer.* 执行器", () => {
+  const typeFrame = (text: unknown) =>
+    ({ ...FRAME, action: "composer.type", params: { text } }) as const;
+
+  it("读得到框里的字", () => {
+    document.body.innerHTML = "<textarea>写了一半</textarea>";
+
+    expect(readComposer(FRAME)).toEqual({ text: "写了一半" });
+  });
+
+  it("写进去的是原生 setter + 冒泡 input（React 受控输入的写法），且不发送", () => {
+    document.body.innerHTML = "<textarea></textarea>";
+    const el = document.querySelector("textarea") as HTMLTextAreaElement;
+    const seen: string[] = [];
+    el.addEventListener("input", (event) => seen.push((event.target as HTMLTextAreaElement).value));
+
+    typeComposer(typeFrame("你好"));
+
+    expect(el.value).toBe("你好");
+    expect(seen).toEqual(["你好"]); // 那次 input 事件真派了、也冒泡到监听者
+  });
+
+  it("params.text 不是字符串就写空", () => {
+    document.body.innerHTML = "<textarea>旧字</textarea>";
+    const el = document.querySelector("textarea") as HTMLTextAreaElement;
+
+    typeComposer(typeFrame(42));
+
+    expect(el.value).toBe("");
+  });
+
+  it("清空框里的字", () => {
+    document.body.innerHTML = "<textarea>旧字</textarea>";
+    const el = document.querySelector("textarea") as HTMLTextAreaElement;
+
+    clearComposer(FRAME);
+
+    expect(el.value).toBe("");
+  });
+
+  it("没有写作框就抛（由收信那层折成失败码）", () => {
+    document.body.innerHTML = "<div>无框</div>";
+
+    expect(() => typeComposer(typeFrame("x"))).toThrow();
+    expect(() => clearComposer(FRAME)).toThrow();
   });
 });
