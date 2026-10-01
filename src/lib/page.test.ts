@@ -4,6 +4,7 @@ import { fixtureCases, type ActionCase } from "./fixtures";
 import {
   clearComposer,
   clickSend,
+  newChat,
   pressEnter,
   readComposer,
   readPageState,
@@ -140,5 +141,24 @@ describe("send.* 执行器", () => {
     pressEnter(FRAME);
 
     expect(keys).toEqual(["Enter"]);
+  });
+});
+
+describe("chat.new 执行器", () => {
+  it("点侧栏那个「开启新对话」条目", () => {
+    document.body.innerHTML = '<div tabindex="0">开启新对话</div><div tabindex="0">别的</div>';
+    const el = document.querySelector('[tabindex="0"]') as HTMLElement;
+    let clicked = 0;
+    el.addEventListener("click", () => (clicked += 1));
+
+    newChat(FRAME);
+
+    expect(clicked).toBe(1);
+  });
+
+  it("找不到那个条目就抛", () => {
+    document.body.innerHTML = "<div>什么都没有</div>";
+
+    expect(() => newChat(FRAME)).toThrow();
   });
 });

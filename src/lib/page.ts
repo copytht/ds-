@@ -97,3 +97,12 @@ export function pressEnter(_frame: ActionFrame): Record<string, never> {
   el.dispatchEvent(new KeyboardEvent("keyup", opts));
   return {};
 }
+
+/** 「开启新对话」：侧栏那个 `tabindex=0` 的条目。文字是**本地化**的，认不出就抛。 */
+export function newChat(_frame: ActionFrame): Record<string, never> {
+  const entries = document.querySelectorAll<HTMLElement>('[tabindex="0"]');
+  const el = [...entries].find((entry) => (entry.textContent || "").trim() === "开启新对话");
+  if (el === undefined) throw new Error("找不到「开启新对话」");
+  el.click();
+  return {};
+}

@@ -50,6 +50,11 @@
       "response": { "ok": true, "action": "composer.read", "result": { "text": "你好" } }
     },
     {
+      "name": "chat.new 成功",
+      "request": { "action": "chat.new", "params": {}, "target": "42" },
+      "response": { "ok": true, "action": "chat.new", "result": {} }
+    },
+    {
       "name": "send.click 成功",
       "request": { "action": "send.click", "params": {}, "target": "42" },
       "response": { "ok": true, "action": "send.click", "result": {} }

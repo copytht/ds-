@@ -14,6 +14,7 @@ import {
 import {
   clearComposer,
   clickSend,
+  newChat,
   pressEnter,
   readComposer,
   readPageState,
@@ -86,6 +87,7 @@ export default defineContentScript({
       "composer.clear": clearComposer,
       "send.click": clickSend,
       "send.enter": pressEnter,
+      "chat.new": newChat,
     };
 
     // background 打过来的动作帧（走 `tabs.sendMessage`）：当场交回一个 ActionOutcome；
