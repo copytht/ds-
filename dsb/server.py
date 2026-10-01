@@ -49,6 +49,7 @@ from dsb.client import DEFAULT_IDLE_TIMEOUT, OpencodeClient
 from dsb.config import parse_session_id
 from dsb.log import SLOW_MS, log_event, setup_logging
 from dsb.opencode import ERROR_UNEXPECTED, error_payload, payload_from_outcome
+from dsb.said import SAID_PATH, SaidLog
 
 HEALTH_PATH = "/health"
 STATUS_PATH = "/status"
@@ -68,7 +69,7 @@ ActionFn = Callable[[bytes, str | None], tuple[int, Payload]]
 #: 扩展回传 → (状态码, 载荷)。
 ActionResultFn = Callable[[bytes], tuple[int, Payload]]
 #: 不下发 CORS 头的端点（ADR-0007 读侧）：网页的跨源读必须撞死，扩展与本机进程天然放行。
-NO_CORS_PATHS = frozenset({ACTIONS_PATH, ACTION_RESULT_PATH})
+NO_CORS_PATHS = frozenset({ACTIONS_PATH, ACTION_RESULT_PATH, SAID_PATH})
 
 #: 哪条路炸了就叫哪个名字：探活炸了和问句炸了，排查方向完全两样。
 BROKE_EVENT: dict[str, str] = {
@@ -127,6 +128,7 @@ def route(
     status: StatusFn | None = None,
     action: ActionFn | None = None,
     action_result: ActionResultFn | None = None,
+    said: SaidLog | None = None,
     authorization: str | None = None,
 ) -> tuple[int, Payload]:
     """一次请求 → (HTTP 状态码, 载荷)；纯接缝，不碰 socket。
@@ -159,6 +161,10 @@ def route(
         if action_result is None:
             return 404, error_payload(ERROR_UNEXPECTED)
         return action_result(body)
+    if path == SAID_PATH and method in {"GET", "POST"}:
+        if said is None:
+            return 404, error_payload(ERROR_UNEXPECTED)
+        return said.read() if method == "GET" else said.add(body)
     if method in {"GET", "POST"}:
         return 404, error_payload(ERROR_UNEXPECTED)
     return 405, error_payload(ERROR_UNEXPECTED)
@@ -169,6 +175,7 @@ def make_handler(
     probe: ProbeFn | None = None,
     status: StatusFn | None = None,
     actions: ActionServer | None = None,
+    said: SaidLog | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """造请求处理类（每次请求一个实例；socket 细节只在这层）。"""
 
@@ -214,6 +221,7 @@ def make_handler(
                     status,
                     action=action,
                     action_result=action_result,
+                    said=said,
                     authorization=self.headers.get("Authorization"),
                 )
             except Exception as exc:  # route 该兜的都兜了：漏到这儿的是探活 / 别的旁路
@@ -317,9 +325,10 @@ def make_server(
     probe: ProbeFn | None = None,
     status: StatusFn | None = None,
     actions: ActionServer | None = None,
+    said: SaidLog | None = None,
 ) -> ThreadingHTTPServer:
     """起中继的 HTTP 服务（测试用 port=0 拿随机端口）。"""
-    server = ThreadingHTTPServer((host, port), make_handler(ask, probe, status, actions))
+    server = ThreadingHTTPServer((host, port), make_handler(ask, probe, status, actions, said))
     server.daemon_threads = True
     return server
 
@@ -393,6 +402,7 @@ def main() -> None:
     warm = client.warm_up()  # 启动现读：端口与口令只进内存
     # 动作服务：token 启动现生成/复用（0600，固定路径），开关现读（DSB_ACTIONS_ENABLED）。
     actions = ActionServer(ensure_token(), enabled=resolve_enabled(env_text))
+    said = SaidLog()
     print(
         f"[dsb] 中继已启动：http://{DEFAULT_HOST}:{port}"
         f"（{ASK_PATH} / {STATUS_PATH} / {HEALTH_PATH} / {ACTION_PATH} / {ACTIONS_PATH}）",
@@ -409,7 +419,7 @@ def main() -> None:
             file=sys.stderr,
         )
     with make_server(
-        ask.ask, port=port, probe=client.probe, status=client.status, actions=actions
+        ask.ask, port=port, probe=client.probe, status=client.status, actions=actions, said=said
     ) as server:
         try:
             server.serve_forever()

@@ -1,11 +1,12 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 
-import { detectAskQuestion } from "../src/lib/answer";
+import { detectAskQuestion, extractAssistantAnswer } from "../src/lib/answer";
 import { parseChainMessage, questionMessage, type ResultMessage } from "../src/lib/channel";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
 import { isOutgoingChatRequest, rewriteOutgoingBody } from "../src/lib/inject";
 import { nextMessageId } from "../src/lib/id";
-import { buildReply, isInjectableReply } from "../src/lib/reply";
+import { buildReply, hasReplyAnchor, isInjectableReply } from "../src/lib/reply";
+import { reportSaid } from "../src/lib/said";
 import { parseToggleMessage, wantStateMessage } from "../src/lib/toggle";
 
 type XhrTarget = { readonly method: string; readonly url: string };
@@ -95,6 +96,10 @@ export default defineContentScript({
         if (raw.includes("```say")) {
           console.log(`[ds-] 响应里有 \`\`\`say 字样却没认出围栏（${raw.length} 字）`);
         }
+        // 没有围栏 = 这段是**说给人**的：报给中继，别无声无息丢掉。
+        // 回灌自己（首行是 `agent:`）不算：那是桥送回去的，再报就成了回声。
+        const said = extractAssistantAnswer(raw).trim();
+        if (said !== "" && !hasReplyAnchor(said)) void reportSaid(said);
         return;
       }
       const id = nextMessageId("ask");
