@@ -72,6 +72,15 @@ export default defineBackground(() => {
   /** 订阅期间的保活间隔：MV3 的 service worker 空闲约 30s 就被收走，挂着的流也跟着没。 */
   const KEEPALIVE_INTERVAL_MS = 20_000;
 
+  /**
+   * 一趟轮询没打上时，最多重试几次、每次隔多久。
+   *
+   * 答复算好后留在中继手里（同一个轮询 id 随时能取），所以「一趟失败就整趟放弃」纯属白扔；
+   * 真机上那正是「页面以为没问成、反复重发同一块」的来源。20 次 × 1s ≈ 20s 的容错。
+   */
+  const MAX_POLL_MISSES = 20;
+  const POLL_RETRY_DELAY_MS = 1_000;
+
   /** 图标三态。 */
   let state: IconState = "off";
   /** 不可达时的原因与启动命令，进悬停文案。 */
@@ -335,6 +344,7 @@ export default defineBackground(() => {
     const stopStatusPolling = startStatusPolling();
     const id = nextMessageId("poll");
     const deadline = Date.now() + RELAY_TIMEOUT_MS;
+    let misses = 0;
     try {
       for (;;) {
         let outcome: RelayAskPoll;
@@ -349,8 +359,15 @@ export default defineBackground(() => {
           } catch {
             return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
           }
+          misses = 0;
         } catch {
-          return errorPayload(FAILURE_RELAY_UNREACHABLE);
+          // 一趟没打上（中继短暂抽风、或 SW 刚被唤醒）：**带同一个 id 重试**。
+          // 答复已经算好、留在中继手里，一趟失败就整趟放弃等于白扔一次调用
+          // ——真机上这就是「页面以为没问成、反复重发」的来源。
+          misses += 1;
+          if (misses >= MAX_POLL_MISSES) return errorPayload(FAILURE_RELAY_UNREACHABLE);
+          await new Promise((resolve) => setTimeout(resolve, POLL_RETRY_DELAY_MS));
+          continue;
         }
         if (outcome.status !== "pending") return outcome;
         if (Date.now() >= deadline) return errorPayload(FAILURE_RELAY_UNREACHABLE);

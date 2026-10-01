@@ -37,7 +37,9 @@ class StubAsk:
         self.outcome = outcome
         self.error = error
 
-    def __call__(self, question: str, session_id: str | None = None) -> Any:
+    def __call__(
+        self, question: str, session_id: str | None = None, page: str | None = None
+    ) -> Any:
         if self.error is not None:
             raise self.error
         return self.outcome
