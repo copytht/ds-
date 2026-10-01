@@ -4,13 +4,13 @@ import {
   actionListener,
   actionRequestMessage,
   ACTION_MESSAGE_TYPE,
-  askRequestMessage,
-  askResponseMessage,
+  sendRequestMessage,
+  sendResponseMessage,
   CHAIN_MESSAGE_SOURCE,
   isReplyPayload,
   parseActionRequest,
-  parseAskRequest,
-  parseAskResponse,
+  parseSendRequest,
+  parseSendResponse,
   parseChainMessage,
   questionMessage,
   resultMessage,
@@ -20,21 +20,21 @@ import type { ActionFrame } from "./actionstream";
 
 describe("页面世界 ↔ 隔离世界的信封", () => {
   it("问题信封原样过", () => {
-    const message = questionMessage("ask-1", "仓库结构是什么");
+    const message = questionMessage("send-1", "仓库结构是什么");
     expect(message).toEqual({
       source: CHAIN_MESSAGE_SOURCE,
       kind: "question",
-      id: "ask-1",
+      id: "send-1",
       question: "仓库结构是什么",
     });
     expect(parseChainMessage(message)).toEqual(message);
   });
 
   it("结果信封带同构载荷，原样过", () => {
-    const message = resultMessage("ask-1", { status: "ok", answer: "答复" });
+    const message = resultMessage("send-1", { status: "ok", answer: "答复" });
     expect(parseChainMessage(message)).toEqual(message);
 
-    const failed = resultMessage("ask-1", { status: "error", error: "opencode-timeout" });
+    const failed = resultMessage("send-1", { status: "error", error: "opencode-timeout" });
     expect(parseChainMessage(failed)).toEqual(failed);
   });
 
@@ -53,12 +53,12 @@ describe("页面世界 ↔ 隔离世界的信封", () => {
       parseChainMessage({
         source: CHAIN_MESSAGE_SOURCE,
         kind: "question",
-        id: "ask-1",
+        id: "send-1",
         question: "   ",
       }),
     ).toBeNull();
     expect(
-      parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "question", id: "ask-1" }),
+      parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "question", id: "send-1" }),
     ).toBeNull();
   });
 
@@ -67,7 +67,7 @@ describe("页面世界 ↔ 隔离世界的信封", () => {
       parseChainMessage({
         source: CHAIN_MESSAGE_SOURCE,
         kind: "result",
-        id: "ask-1",
+        id: "send-1",
         payload: { status: "ok" },
       }),
     ).toBeNull();
@@ -75,7 +75,7 @@ describe("页面世界 ↔ 隔离世界的信封", () => {
       parseChainMessage({
         source: CHAIN_MESSAGE_SOURCE,
         kind: "result",
-        id: "ask-1",
+        id: "send-1",
         payload: { status: "nope", error: "x" },
       }),
     ).toBeNull();
@@ -83,7 +83,7 @@ describe("页面世界 ↔ 隔离世界的信封", () => {
       parseChainMessage({
         source: CHAIN_MESSAGE_SOURCE,
         kind: "result",
-        id: "ask-1",
+        id: "send-1",
         payload: "agent:\nstatus: ok",
       }),
     ).toBeNull();
@@ -92,27 +92,27 @@ describe("页面世界 ↔ 隔离世界的信封", () => {
 
 describe("隔离世界 ↔ background 的信封", () => {
   it("请求与响应原样过", () => {
-    const request = askRequestMessage("ask-2", "问题");
-    expect(parseAskRequest(request)).toEqual(request);
+    const request = sendRequestMessage("send-2", "问题");
+    expect(parseSendRequest(request)).toEqual(request);
 
-    const response = askResponseMessage("ask-2", {
+    const response = sendResponseMessage("send-2", {
       status: "error",
       error: "opencode-not-running",
     });
-    expect(parseAskResponse(response)).toEqual(response);
+    expect(parseSendResponse(response)).toEqual(response);
   });
 
   it("认不出的请求与响应不收", () => {
-    expect(parseAskRequest({})).toBeNull();
-    expect(parseAskRequest({ type: "ds-/other", id: "1", question: "q" })).toBeNull();
-    expect(parseAskRequest({ type: "ds-/ask", id: "1", question: "" })).toBeNull();
-    expect(parseAskResponse(undefined)).toBeNull();
-    expect(parseAskResponse({ id: "1", payload: { status: "error" } })).toBeNull();
-    expect(parseAskResponse({ payload: { status: "ok", answer: "a" } })).toBeNull();
+    expect(parseSendRequest({})).toBeNull();
+    expect(parseSendRequest({ type: "ds-/other", id: "1", question: "q" })).toBeNull();
+    expect(parseSendRequest({ type: "ds-/send", id: "1", question: "" })).toBeNull();
+    expect(parseSendResponse(undefined)).toBeNull();
+    expect(parseSendResponse({ id: "1", payload: { status: "error" } })).toBeNull();
+    expect(parseSendResponse({ payload: { status: "ok", answer: "a" } })).toBeNull();
   });
 
   it("background 没答上来时兜底成中继没响应的载荷", () => {
-    const result = unreachableResult("ask-2");
+    const result = unreachableResult("send-2");
     expect(result.payload).toEqual({ status: "error", error: "relay-unreachable" });
     expect(parseChainMessage(result)).toEqual(result);
   });
@@ -155,7 +155,7 @@ describe("background ↔ 内容脚本的动作信封", () => {
 
   it("缺字段 / 错 type / 形状不对的一律 null", () => {
     expect(parseActionRequest(undefined)).toBeNull();
-    expect(parseActionRequest({ type: "ds-/ask", id: "1", question: "q" })).toBeNull();
+    expect(parseActionRequest({ type: "ds-/send", id: "1", question: "q" })).toBeNull();
     expect(parseActionRequest({ type: ACTION_MESSAGE_TYPE })).toBeNull();
     expect(
       parseActionRequest({ type: ACTION_MESSAGE_TYPE, frame: { ...ACTION_FRAME, id: "" } }),
@@ -210,10 +210,10 @@ describe("内容脚本的动作收信（entrypoints/content.ts 接的那一层�
     expect(sendResponse).toHaveBeenCalledWith({ ok: true, result: { state: "idle" } });
   });
 
-  it("认不出的消息不响应（不抢 ask 的消息、不回 undefined 当结果）", async () => {
+  it("认不出的消息不响应（不抢 send 的消息、不回 undefined 当结果）", async () => {
     const sendResponse = vi.fn();
     expect(
-      actionListener({})(askRequestMessage("ask-1", "问题"), undefined, sendResponse),
+      actionListener({})(sendRequestMessage("send-1", "问题"), undefined, sendResponse),
     ).toBeUndefined();
     expect(actionListener({})({ hello: "world" }, undefined, sendResponse)).toBeUndefined();
     expect(actionListener({})(undefined, undefined, sendResponse)).toBeUndefined();

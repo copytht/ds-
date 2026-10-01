@@ -1,45 +1,49 @@
 import { describe, expect, it } from "vitest";
 
 import { fixtureCases, type FenceCase } from "./fixtures";
-import { parseAskFence } from "./fence";
+import { parseSendFence } from "./fence";
 
-describe("parseAskFence · 共享 fixture", () => {
+describe("parseSendFence · 共享 fixture", () => {
   for (const { name, input, expectedQuestion } of fixtureCases<FenceCase>("fence.json")) {
     it(name, () => {
-      expect(parseAskFence(input)).toBe(expectedQuestion);
+      expect(parseSendFence(input)).toBe(expectedQuestion);
     });
   }
 });
 
-describe("parseAskFence · 边界", () => {
+describe("parseSendFence · 边界", () => {
   it("没有围栏的输入返回 null", () => {
-    expect(parseAskFence("")).toBeNull();
-    expect(parseAskFence("只是普通文本")).toBeNull();
+    expect(parseSendFence("")).toBeNull();
+    expect(parseSendFence("只是普通文本")).toBeNull();
   });
 
   it("问题与围栏起始同一行也算有效围栏", () => {
-    expect(parseAskFence("```say 合在一行的问题\n```")).toBe("合在一行的问题");
+    expect(parseSendFence("```send 合在一行的问题\n```")).toBe("合在一行的问题");
   });
 
-  it("```sayfoo 不是围栏", () => {
-    expect(parseAskFence("```sayfoo\n问题\n```")).toBeNull();
+  it("```sendfoo 不是围栏", () => {
+    expect(parseSendFence("```sendfoo\n问题\n```")).toBeNull();
   });
 
-  it("``` ask 不是围栏", () => {
-    expect(parseAskFence("``` ask\n问题\n```")).toBeNull();
+  it("``` send（空格版）不是围栏", () => {
+    expect(parseSendFence("``` send\n问题\n```")).toBeNull();
+  });
+
+  it("```say 是旧词，不再被认出", () => {
+    expect(parseSendFence("```say\n问题\n```")).toBeNull();
   });
 
   it("围栏里问空了返回 null", () => {
-    expect(parseAskFence("```say   \n```")).toBeNull();
-    expect(parseAskFence("```say\n   \n   \n```")).toBeNull();
+    expect(parseSendFence("```send   \n```")).toBeNull();
+    expect(parseSendFence("```send\n   \n   \n```")).toBeNull();
   });
 
   it("问题正文只裁掉首尾空白，内部换行保留", () => {
-    expect(parseAskFence("```say\n  第一行\n第二行  \n```")).toBe("第一行\n第二行");
+    expect(parseSendFence("```send\n  第一行\n第二行  \n```")).toBe("第一行\n第二行");
   });
 
   it("只认第一块：后面再排也不追加", () => {
-    const text = "```say\n第一个\n```\n```say\n第二个\n```";
-    expect(parseAskFence(text)).toBe("第一个");
+    const text = "```send\n第一个\n```\n```send\n第二个\n```";
+    expect(parseSendFence(text)).toBe("第一个");
   });
 });

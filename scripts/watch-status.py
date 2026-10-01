@@ -27,7 +27,7 @@ def snapshot(url: str) -> dict[str, object] | None:
     """读一次现场；中继不可达回 ``None``。"""
     with urllib.request.urlopen(url, timeout=3) as response:
         body = json.load(response)
-    return body.get("ask") if isinstance(body, dict) else None
+    return body.get("send") if isinstance(body, dict) else None
 
 
 def main() -> None:
@@ -38,15 +38,15 @@ def main() -> None:
     spin = 0
     while time.time() < deadline:
         try:
-            ask = snapshot(url)
+            send = snapshot(url)
         except Exception:
             print("? 中继不可达", flush=True)
             return
-        if not ask:
+        if not send:
             print("- idle", flush=True)
             return
-        left = ask.get("remaining")
-        print(f"{SPIN[spin % 4]} {ask.get('phase')} {'' if left is None else round(float(left))}")
+        left = send.get("remaining")
+        print(f"{SPIN[spin % 4]} {send.get('phase')} {'' if left is None else round(float(left))}")
         spin += 1
         time.sleep(interval)
 

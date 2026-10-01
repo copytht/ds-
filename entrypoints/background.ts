@@ -3,7 +3,7 @@ import { defineBackground } from "wxt/utils/define-background";
 
 import { postActionResult, runAction, sendMessageSendToTab } from "../src/lib/action";
 import { createActionStream, type ActionFrame } from "../src/lib/actionstream";
-import { actionRequestMessage, askResponseMessage, parseAskRequest } from "../src/lib/channel";
+import { actionRequestMessage, sendResponseMessage, parseSendRequest } from "../src/lib/channel";
 import {
   FAILURE_LOG_STORAGE_KEY,
   describeLastFailure,
@@ -30,8 +30,8 @@ import {
   describeStatusFailure,
   parseRelayResponse,
   parseStatusResponse,
-  relayAskBody,
-  relayAskUrl,
+  relaySendBody,
+  relaySendUrl,
   relayHealthUrl,
   relayStatusUrl,
   RELAY_HEALTH_TIMEOUT_MS,
@@ -39,8 +39,8 @@ import {
   RELAY_STATUS_POLL_INTERVAL_MS,
   RELAY_STATUS_TIMEOUT_MS,
   RELAY_TIMEOUT_MS,
-  type AskStatus,
-  type RelayAskPoll,
+  type SendStatus,
+  type RelaySendPoll,
   type StatusSnapshot,
 } from "../src/lib/relay";
 import {
@@ -54,7 +54,7 @@ import { readSpeak, readToggle, SPEAK_STORAGE_KEY, TOGGLE_STORAGE_KEY } from "..
 /**
  * background 这一侧干三件事：
  *
- * 1. 打中继（`POST /ask`）——网络层的失败也折成同构载荷，解析只有一条路径；
+ * 1. 打中继（`POST /send`）——网络层的失败也折成同构载荷，解析只有一条路径；
  * 2. 工具栏图标即状态位：关 / 开且中继可达 / 开但中继不可达，悬停给原因与启动命令；
  * 3. 点击图标切换总开关（总开关本身还是只存在 `storage.local`，默认关）；
  * 4. 问句在途时轮询 `GET /status`，把等待现场（阶段 / 字数 / 剩余时间）摆上角标与悬停，
@@ -86,7 +86,7 @@ export default defineBackground(() => {
   /** 不可达时的原因与启动命令，进悬停文案。 */
   let notice: FailureNotice | null = null;
   /** 问句在途时的现场（阶段/字数/剩余时间），由 `/status` 轮询喂；空档恒为 null。 */
-  let askProgress: AskStatus | null = null;
+  let sendProgress: SendStatus | null = null;
   /**
    * 失败留痕，新的在最前。启动时从 `storage.local` 载入，所以 service worker 被收走、
    * 浏览器重启都丢不了——只放内存的话，红过一次就再没人答得出「为什么红」。
@@ -133,9 +133,9 @@ export default defineBackground(() => {
    */
   async function paintIcon(): Promise<void> {
     await browser.action.setTitle({
-      title: iconTitle(state, notice, askProgress, describeLastFailure(failureLog, Date.now())),
+      title: iconTitle(state, notice, sendProgress, describeLastFailure(failureLog, Date.now())),
     });
-    await browser.action.setBadgeText({ text: badgeText(state, askProgress) });
+    await browser.action.setBadgeText({ text: badgeText(state, sendProgress) });
     try {
       await browser.action.setIcon({
         imageData: new ImageData(renderIcon(state), ICON_SIZE, ICON_SIZE),
@@ -161,7 +161,7 @@ export default defineBackground(() => {
     } else {
       state = "on-unreachable";
       notice = failureNotice(payload.error);
-      recordFailure("ask", notice.reason);
+      recordFailure("send", notice.reason);
       console.log(`[ds-] 问句没成（${payload.error}），已记一笔：${notice.reason}`);
     }
     void paintIcon();
@@ -211,7 +211,7 @@ export default defineBackground(() => {
       };
     } catch (error) {
       return {
-        snapshot: { reachable: false, ask: null },
+        snapshot: { reachable: false, send: null },
         cause: describeFetchFailure(error, RELAY_STATUS_TIMEOUT_MS),
       };
     }
@@ -228,7 +228,7 @@ export default defineBackground(() => {
     if (!snapshot.reachable) {
       state = "on-unreachable";
       notice = failureNotice(FAILURE_RELAY_UNREACHABLE);
-      askProgress = null; // 手里那份进度已经作废，留着只会误导
+      sendProgress = null; // 手里那份进度已经作废，留着只会误导
       recordFailure("status", cause ?? "读不到现场");
       console.log(`[ds-] 等待期问现场没答上来（${cause ?? "读不到现场"}），图标翻红`);
       void paintIcon();
@@ -239,7 +239,7 @@ export default defineBackground(() => {
       notice = null;
       recoverFailure();
     }
-    askProgress = snapshot.ask;
+    sendProgress = snapshot.send;
     void paintIcon();
   }
 
@@ -273,7 +273,7 @@ export default defineBackground(() => {
 
   /**
    * 周期探活的排班：开着才排、关了就撤——总开关关着时扩展不该每 30s 白被叫醒一次。
-   * 这条只管「中继还在不在」；问句在途时的存活另有 keepAliveWhileAsking 兜着。
+   * 这条只管「中继还在不在」；问句在途时的存活另有 keepAliveWhileSending 兜着。
    */
   async function syncHealthAlarm(enabled: boolean): Promise<void> {
     if (enabled) {
@@ -318,7 +318,7 @@ export default defineBackground(() => {
    * MV3 的 service worker 闲置 30 秒就会被收走，而中继这一趟可能更久；
    * 答复在途时点一下扩展 API 把它按住，不改任何业务行为。
    */
-  function keepAliveWhileAsking(): () => void {
+  function keepAliveWhileSending(): () => void {
     const timer = setInterval(() => {
       void browser.runtime.getPlatformInfo().catch(() => undefined);
     }, 20_000);
@@ -339,8 +339,8 @@ export default defineBackground(() => {
    * 答复丢掉（真机撞过两次），页面永远等不到回灌、整条链就静默停摆。轮询的每一趟都是短的，
    * 后台线程一直有事做；结果留在中继手里，掉线也能再取。
    */
-  async function askRelay(question: string, page: string | null = null): Promise<ReplyPayload> {
-    const releaseKeepAlive = keepAliveWhileAsking();
+  async function sendRelay(question: string, page: string | null = null): Promise<ReplyPayload> {
+    const releaseKeepAlive = keepAliveWhileSending();
     const stopStatusPolling = startStatusPolling();
     // 轮询 id 必须**跨 SW 重载唯一**：中继按 id 缓存结果（同一 id 只起一份活），
     // 而 nextMessageId 的计数器在 service worker 重启后从 0 重来——再用 `poll-1`
@@ -350,12 +350,12 @@ export default defineBackground(() => {
     let misses = 0;
     try {
       for (;;) {
-        let outcome: RelayAskPoll;
+        let outcome: RelaySendPoll;
         try {
-          const response = await fetchWithTimeout(relayAskUrl(), RELAY_POLL_TIMEOUT_MS, {
+          const response = await fetchWithTimeout(relaySendUrl(), RELAY_POLL_TIMEOUT_MS, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: relayAskBody(question, id, page),
+            body: relaySendBody(question, id, page),
           });
           try {
             outcome = parseRelayResponse(response.status, await response.text());
@@ -377,7 +377,7 @@ export default defineBackground(() => {
       }
     } finally {
       stopStatusPolling();
-      askProgress = null;
+      sendProgress = null;
       releaseKeepAlive();
     }
   }
@@ -387,7 +387,7 @@ export default defineBackground(() => {
    * 和「站点范围钉死」同一条思路。中继侧另有 `disabled`，执行前这边再读一次开关。
    *
    * 断线重连在 `actionStream` 里自己排（开着才排），这里只管开关与保活：
-   * 保活是个定闹钟的空转调用（同 `keepAliveWhileAsking`），只为了别让 SW 30s 被收走。
+   * 保活是个定闹钟的空转调用（同 `keepAliveWhileSending`），只为了别让 SW 30s 被收走。
    */
   const actionStream = createActionStream({
     open: async (url, signal) => {
@@ -451,7 +451,7 @@ export default defineBackground(() => {
     if (!enabled) {
       state = "off";
       notice = null;
-      askProgress = null; // 关了就不该再揣着上一次等待的现场
+      sendProgress = null; // 关了就不该再揣着上一次等待的现场
       await paintIcon();
       return;
     }
@@ -491,11 +491,11 @@ export default defineBackground(() => {
 
   // 隔离世界送来的问句：打中继，把同构载荷原路交回。
   browser.runtime.onMessage.addListener((message) => {
-    const request = parseAskRequest(message);
+    const request = parseSendRequest(message);
     if (request === null) return undefined;
-    return askRelay(request.question, request.page).then((payload) => {
+    return sendRelay(request.question, request.page).then((payload) => {
       applyOutcome(payload);
-      return askResponseMessage(request.id, payload);
+      return sendResponseMessage(request.id, payload);
     });
   });
 

@@ -1,6 +1,6 @@
 """一次问句的「在途 / 已决」结果，按 id 复用——扩展的短轮询就挂在这上面。
 
-**为什么不是一条长 fetch**：扩展原来对 ``/ask`` 挂一条长连接等到底。MV3 的 service worker
+**为什么不是一条长 fetch**：扩展原来对 ``/send`` 挂一条长连接等到底。MV3 的 service worker
 对一条在途 fetch 只保它约 5 分钟，更长的问句一过线，浏览器就把后台线程收走、连接断掉——
 中继算完了也写不回去（真机日志里两次 ``BrokenPipeError``），页面永远等不到回灌，整条链子
 就静默停在原地。改成「提交带 id、接着轮询」：每趟 fetch 都是短的（默认最多挂
@@ -29,7 +29,7 @@ DEFAULT_HOLD_SECONDS = 15.0
 #: 已决结果留几个 id：扩展取到就没人再问，留几个兜「取到一半掉线」。
 DEFAULT_KEEP_RESULTS = 32
 #: 慢到这个数就留一条痕，免得「问了好久没回」事后无迹可查。
-SLOW_ASK_MS = 300_000.0
+SLOW_SEND_MS = 300_000.0
 
 #: 子会话层要的签名：``(问题, 页面会话 id)`` → outcome。
 #: 页面会话 id 为 None 时是「认不出是哪条会话」，子会话层归到默认那一份。
@@ -46,7 +46,7 @@ class _Session:
         self.done = threading.Event()
 
 
-class AskSessions:
+class SendSessions:
     """``(问题, 轮询 id)`` → outcome：带 id 就短轮询复用，不带 id 就阻塞到底（老行为）。"""
 
     def __init__(
@@ -63,7 +63,7 @@ class AskSessions:
         self._sessions: dict[str, _Session] = {}
         self._order: deque[str] = deque()
 
-    def ask(
+    def send(
         self,
         question: str,
         session_id: str | None = None,
@@ -96,7 +96,7 @@ class AskSessions:
             while len(self._order) > self._keep:
                 self._sessions.pop(self._order.popleft(), None)
             threading.Thread(
-                target=self._work, args=(session,), name="dsb-ask", daemon=True
+                target=self._work, args=(session,), name="dsb-send", daemon=True
             ).start()
             return session
 
@@ -109,6 +109,6 @@ class AskSessions:
             session.outcome = {"kind": "unexpected"}
         session.done.set()
         took_ms = (time.monotonic() - started) * 1000
-        if took_ms >= SLOW_ASK_MS:
+        if took_ms >= SLOW_SEND_MS:
             # 「问了好久没回」得留一笔：断链时人只看得到这一行。
-            log_event("ask-slow", took_ms=took_ms)
+            log_event("send-slow", took_ms=took_ms)

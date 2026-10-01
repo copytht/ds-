@@ -1,7 +1,7 @@
 """动作服务（ADR-0007）：token、SSE 动作流、按 target 的阻塞串行队列、失败码册子。
 
 假扩展订阅者自己连 ``GET /actions`` 读 SSE、按约定把结果 ``POST /action/result`` 回传——
-全程不碰真扩展，也不碰真 opencode（ask 一律 stub）。
+全程不碰真扩展，也不碰真 opencode（send 一律 stub）。
 """
 
 from __future__ import annotations
@@ -39,8 +39,8 @@ ACTION_FIXTURE = REPO_ROOT / "protocol" / "fixtures" / "action.json"
 REQUEST = {"action": "tabs.list", "params": {}, "target": None}
 
 
-def stub_ask(_question: str) -> dict[str, Any]:
-    """替身 ask：动作测试不打 /ask，给个能过 payload 映射的形状即可。"""
+def stub_send(_question: str) -> dict[str, Any]:
+    """替身 send：动作测试不打 /send，给个能过 payload 映射的形状即可。"""
     return {"kind": "success", "body": []}
 
 
@@ -159,7 +159,7 @@ def actions(tmp_path: Path) -> Iterator[tuple[str, ActionServer, str]]:
     """随机端口起中继 + 动作服务；token 现生成在 tmp 里，收摊时一起关。"""
     token = ensure_token(tmp_path / "token")
     service = ActionServer(token, timeout=1.0)
-    server = make_server(stub_ask, host=HOST, port=0, actions=service)
+    server = make_server(stub_send, host=HOST, port=0, actions=service)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield f"http://{HOST}:{server.server_address[1]}", service, token
@@ -551,15 +551,15 @@ def test_route_hands_action_requests_to_its_own_seam() -> None:
         "POST",
         "/action?x=1",
         json.dumps(REQUEST).encode(),
-        stub_ask,
+        stub_send,
         action=action,
         authorization="Bearer 手里的",
     ) == (401, {"ok": False, "action": "tabs.list", "error": "unauthorized"})
     # 没接动作服务时按未知端点走，不假装自己能执行
-    assert route("POST", "/action", json.dumps(REQUEST).encode(), stub_ask)[0] == 404
-    assert route("POST", "/action/result", b"{}", stub_ask)[0] == 404
+    assert route("POST", "/action", json.dumps(REQUEST).encode(), stub_send)[0] == 404
+    assert route("POST", "/action/result", b"{}", stub_send)[0] == 404
     # SSE 不走这条纯接缝：它得写流（由 RelayHandler 单独接）
-    assert route("GET", ACTIONS_PATH, b"", stub_ask)[0] == 404
+    assert route("GET", ACTIONS_PATH, b"", stub_send)[0] == 404
 
 
 def test_result_endpoint_needs_no_token(actions: tuple[str, ActionServer, str]) -> None:

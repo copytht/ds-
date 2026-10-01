@@ -328,7 +328,7 @@ def make_client(open_url: FakeOpen, **kwargs: Any) -> OpencodeClient:
 
 def test_ask_returns_success_and_skips_the_previous_answer() -> None:
     open_url = FakeOpen(messages=live_messages("入口在 dsb/server.py。"))
-    outcome = make_client(open_url).ask("repo 里 dsb 的入口在哪？")
+    outcome = make_client(open_url).send("repo 里 dsb 的入口在哪？")
 
     assert outcome["kind"] == "success"
     assert payload_from_outcome(outcome) == {
@@ -356,7 +356,7 @@ def test_spawned_child_inherits_settings_but_never_history() -> None:
     走 fork 就等于把无关上下文塞给子 agent。这里把「不走 /fork」钉成回归。
     """
     open_url = FakeOpen(messages=live_messages("答复"))
-    make_client(open_url).ask("问题")
+    make_client(open_url).send("问题")
 
     assert not any(call.url.endswith("/fork") for call in open_url.calls)
     created = json.loads(open_url.calls[1].data.decode("utf-8"))
@@ -371,7 +371,7 @@ def test_spawned_child_inherits_settings_but_never_history() -> None:
 def test_spawn_without_an_id_is_an_unexpected_response() -> None:
     """spawn 拿不到子会话 id → 非预期响应，不该静默把问题塞回主对话。"""
     open_url = FakeOpen(spawn={"data": {"note": "没有 id"}})
-    outcome = make_client(open_url).ask("问题")
+    outcome = make_client(open_url).send("问题")
 
     assert payload_from_outcome(outcome) == {
         "status": "error",
@@ -382,7 +382,7 @@ def test_spawn_without_an_id_is_an_unexpected_response() -> None:
 
 def test_spawn_connection_loss_is_not_running() -> None:
     open_url = FakeOpen(spawn_error=urllib.error.URLError(ConnectionRefusedError("没起")))
-    outcome = make_client(open_url).ask("问题")
+    outcome = make_client(open_url).send("问题")
     assert outcome == {"kind": "not-running"}
     assert payload_from_outcome(outcome) == {"status": "error", "error": ERROR_NOT_RUNNING}
 
@@ -394,7 +394,7 @@ def test_ask_never_prompts_the_main_conversation() -> None:
     被读走，也没有任何等待落在它身上（子会话是新起的，跟它无关）。
     """
     open_url = FakeOpen(messages=live_messages("答复"))
-    make_client(open_url).ask("问题")
+    make_client(open_url).send("问题")
 
     reads = [c for c in open_url.calls if c.url.endswith(f"/api/session/{SESSION}")]
     assert [c.method for c in reads] == ["GET"]
@@ -408,7 +408,7 @@ def test_a_failed_answer_interrupts_the_turn_but_keeps_the_child() -> None:
     掐的是轮次不是会话：超时时它多半还在写，不掐的话下一问会被 steer 进这半个轮次里。
     """
     open_url = FakeOpen(messages=live_messages(None), message_error=TimeoutError("boom"))
-    outcome = make_client(open_url).ask("问题")
+    outcome = make_client(open_url).send("问题")
 
     assert outcome["kind"] == "timeout"
     assert open_url.calls[-1].method == "POST"
@@ -420,7 +420,7 @@ def test_failing_to_dispose_the_child_at_shutdown_does_not_raise() -> None:
     """收摊删不掉只该被吞掉：这一步从来不该把进程退出变成一场异常。"""
     open_url = FakeOpen(messages=live_messages("答复"), delete_error=OSError("删不掉"))
     client = make_client(open_url)
-    assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "答复"}
+    assert payload_from_outcome(client.send("问题")) == {"status": "ok", "answer": "答复"}
 
     client.dispose()  # 不外抛
     assert open_url.calls[-1].method == "DELETE"
@@ -429,7 +429,7 @@ def test_failing_to_dispose_the_child_at_shutdown_does_not_raise() -> None:
 
 def test_ask_sends_the_password_only_in_the_authorization_header() -> None:
     open_url = FakeOpen(messages=live_messages("答复"))
-    make_client(open_url).ask("问题")
+    make_client(open_url).send("问题")
 
     for call in open_url.calls:
         assert call.url.startswith(f"http://{HOST}:{PORT}/")
@@ -449,7 +449,7 @@ def test_ask_reports_not_running_when_service_read_fails() -> None:
     client = OpencodeClient(
         SESSION, service_reader=boom, urlopen=open_url, sleep=lambda _seconds: None
     )
-    assert payload_from_outcome(client.ask("问题")) == {
+    assert payload_from_outcome(client.send("问题")) == {
         "status": "error",
         "error": ERROR_NOT_RUNNING,
     }
@@ -465,11 +465,11 @@ def test_connection_refused_is_not_running_and_forces_a_reread() -> None:
         return SERVICE
 
     client = make_client(open_url, service_reader=reader)
-    assert payload_from_outcome(client.ask("问题")) == {
+    assert payload_from_outcome(client.send("问题")) == {
         "status": "error",
         "error": ERROR_NOT_RUNNING,
     }
-    assert payload_from_outcome(client.ask("再问一次")) == {
+    assert payload_from_outcome(client.send("再问一次")) == {
         "status": "error",
         "error": ERROR_NOT_RUNNING,
     }
@@ -479,7 +479,7 @@ def test_connection_refused_is_not_running_and_forces_a_reread() -> None:
 def test_wait_timeout_maps_to_opencode_timeout() -> None:
     """事件流挂不上时退回阻塞 wait（老路），它等超时照旧折成 opencode-timeout。"""
     open_url = FakeOpen(wait_error=TimeoutError("timed out"), events_error=OSError("挂不上"))
-    outcome = make_client(open_url).ask("问题")
+    outcome = make_client(open_url).send("问题")
     assert outcome == {"kind": "timeout"}
     assert payload_from_outcome(outcome) == {"status": "error", "error": ERROR_TIMEOUT}
     assert any(c.url.endswith("/wait") for c in open_url.calls)  # 退化路确实走了 wait
@@ -498,7 +498,7 @@ def test_deadline_exhausted_maps_to_opencode_timeout() -> None:
         now=lambda: clock["now"],
         sleep=jump_after_sleep,
     )
-    assert payload_from_outcome(client.ask("问题")) == {
+    assert payload_from_outcome(client.send("问题")) == {
         "status": "error",
         "error": ERROR_TIMEOUT,
     }
@@ -517,7 +517,7 @@ def test_deadline_exhausted_maps_to_opencode_timeout() -> None:
 def test_child_prompt_carries_the_role_frame() -> None:
     """子会话空着出生，角色框把「没有此前的对话」讲清楚，让它只答问题本身。"""
     open_url = FakeOpen(messages=live_messages("答复"))
-    make_client(open_url).ask("超时怎么修？")
+    make_client(open_url).send("超时怎么修？")
 
     sent = json.loads(open_url.calls[3].data.decode("utf-8"))  # 0父 1spawn 2事件流 3prompt
     assert "超时怎么修？" in sent["text"]
@@ -537,8 +537,8 @@ def test_later_questions_reuse_the_child_and_get_the_followup_frame() -> None:
     open_url = FakeOpen(messages=live_messages("答复"))
     client = make_client(open_url)
 
-    assert client.ask("第一问")["kind"] == "success"
-    assert client.ask("第二问")["kind"] == "success"
+    assert client.send("第一问")["kind"] == "success"
+    assert client.send("第二问")["kind"] == "success"
 
     spawns = [c for c in open_url.calls if c.method == "POST" and c.url.endswith("/api/session")]
     assert len(spawns) == 1  # 子会话只起一次
@@ -564,8 +564,8 @@ def test_waiting_for_the_previous_turn_is_bounded_by_the_idle_window() -> None:
     """
     open_url = FakeOpen(messages=live_messages("答复"))
     client = make_client(open_url, idle_timeout=120.0)
-    assert client.ask("第一问")["kind"] == "success"  # 新会话恒空闲，不用等
-    assert client.ask("第二问")["kind"] == "success"  # 复用：先等空闲再送进去
+    assert client.send("第一问")["kind"] == "success"  # 新会话恒空闲，不用等
+    assert client.send("第二问")["kind"] == "success"  # 复用：先等空闲再送进去
 
     waits = [call for call in open_url.calls if call.url.endswith("/wait")]
     assert len(waits) == 1
@@ -576,12 +576,12 @@ def test_a_vanished_child_is_respawned() -> None:
     """子会话没了（被人删过、或 opencode 换过实例）：下次问认出来就重起一个。"""
     open_url = FakeOpen(messages=live_messages("答复"))
     client = make_client(open_url)
-    assert client.ask("第一问")["kind"] == "success"
+    assert client.send("第一问")["kind"] == "success"
 
     open_url.child_error = urllib.error.HTTPError(
         f"http://127.0.0.1/api/session/{CHILD}", 404, "Not Found", None, None
     )
-    assert client.ask("第二问")["kind"] == "success"
+    assert client.send("第二问")["kind"] == "success"
 
     spawns = [c for c in open_url.calls if c.method == "POST" and c.url.endswith("/api/session")]
     assert len(spawns) == 2  # 复用前的探活报 404 → 当场重起
@@ -604,7 +604,7 @@ def test_a_parent_without_the_three_settings_fails_loudly(caplog: Any) -> None:
         open_url = FakeOpen(parent={"data": settings}, messages=live_messages("答复"))
 
         with caplog.at_level("INFO", logger="dsb"):
-            assert payload_from_outcome(make_client(open_url).ask("问题")) == {
+            assert payload_from_outcome(make_client(open_url).send("问题")) == {
                 "status": "error",
                 "error": ERROR_UNEXPECTED,
             }
@@ -626,7 +626,7 @@ def test_two_asks_queue_instead_of_sharing_one_turn() -> None:
     b_in = threading.Event()
 
     def hook() -> None:
-        if threading.current_thread().name != "ask-a":
+        if threading.current_thread().name != "send-a":
             return  # 后到的那个没什么好等的：它本就该在 A 收工之后才动手
         a_prompting.set()
         b_in.wait(timeout=5)
@@ -640,17 +640,17 @@ def test_two_asks_queue_instead_of_sharing_one_turn() -> None:
     client = make_client(open_url)
     results: dict[str, Any] = {}
 
-    def ask_a() -> None:
-        results["a"] = client.ask("第一问")
+    def send_a() -> None:
+        results["a"] = client.send("第一问")
 
-    def ask_b() -> None:
+    def send_b() -> None:
         a_prompting.wait(timeout=5)
         b_in.set()
-        results["b"] = client.ask("第二问")
+        results["b"] = client.send("第二问")
 
     threads = [
-        threading.Thread(target=ask_a, name="ask-a"),
-        threading.Thread(target=ask_b, name="ask-b"),
+        threading.Thread(target=send_a, name="send-a"),
+        threading.Thread(target=send_b, name="send-b"),
     ]
     for thread in threads:
         thread.start()
@@ -694,7 +694,7 @@ def test_a_long_working_turn_is_not_cut_while_it_keeps_working() -> None:
         now=lambda: clock["now"],
         sleep=sleep,
     )
-    assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "答复正文"}
+    assert payload_from_outcome(client.send("问题")) == {"status": "ok", "answer": "答复正文"}
     assert clock["now"] == 800.0  # 远超静默窗口：靠「一直在动」撑过来的，不是碰巧快
 
 
@@ -721,7 +721,7 @@ def test_a_working_turn_keeps_going_past_any_single_window() -> None:
         now=lambda: clock["now"],
         sleep=sleep,
     )
-    assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "答复正文"}
+    assert payload_from_outcome(client.send("问题")) == {"status": "ok", "answer": "答复正文"}
     assert clock["now"] == 3000.0  # 远超任何单个窗口：靠「一直在动」撑过来
 
 
@@ -739,7 +739,7 @@ def test_an_answer_that_never_fills_in_still_times_out() -> None:
         now=lambda: clock["now"],
         sleep=jump_after_sleep,
     )
-    assert payload_from_outcome(client.ask("问题")) == {
+    assert payload_from_outcome(client.send("问题")) == {
         "status": "error",
         "error": ERROR_TIMEOUT,
     }
@@ -756,14 +756,14 @@ def test_mid_turn_text_is_not_taken_as_the_answer() -> None:
             open_url.messages = live_messages("真正的答复")  # 这一圈才定稿
 
     client = make_client(open_url, sleep=sleep)
-    assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "真正的答复"}
+    assert payload_from_outcome(client.send("问题")) == {"status": "ok", "answer": "真正的答复"}
     assert polls["n"] == 1  # 中途那句没能让它提前收工
 
 
 def test_http_error_from_opencode_is_unexpected_response() -> None:
     error = urllib.error.HTTPError("http://127.0.0.1/", 500, "Server Error", None, None)
     open_url = FakeOpen(prompt_error=error)
-    outcome = make_client(open_url).ask("问题")
+    outcome = make_client(open_url).send("问题")
     assert outcome == {"kind": "http-error", "status": 500}
     assert payload_from_outcome(outcome) == {"status": "error", "error": ERROR_UNEXPECTED}
 
@@ -771,7 +771,7 @@ def test_http_error_from_opencode_is_unexpected_response() -> None:
 def test_missing_session_id_never_calls_opencode() -> None:
     open_url = FakeOpen(messages=live_messages("答复"))
     client = OpencodeClient(None, service_reader=lambda: SERVICE, urlopen=open_url)
-    assert payload_from_outcome(client.ask("问题")) == {
+    assert payload_from_outcome(client.send("问题")) == {
         "status": "error",
         "error": ERROR_UNEXPECTED,
     }
@@ -780,7 +780,7 @@ def test_missing_session_id_never_calls_opencode() -> None:
 
 def test_unparsable_prompt_response_is_unexpected_response() -> None:
     open_url = FakeOpen(prompt=FakeResponse(raw="<html>不是 json</html>".encode()))
-    assert payload_from_outcome(make_client(open_url).ask("问题")) == {
+    assert payload_from_outcome(make_client(open_url).send("问题")) == {
         "status": "error",
         "error": ERROR_UNEXPECTED,
     }
@@ -788,7 +788,7 @@ def test_unparsable_prompt_response_is_unexpected_response() -> None:
 
 def test_unrecognised_message_body_is_unexpected_response() -> None:
     open_url = FakeOpen(messages={"note": "opencode 换了形状"})
-    assert payload_from_outcome(make_client(open_url).ask("问题")) == {
+    assert payload_from_outcome(make_client(open_url).send("问题")) == {
         "status": "error",
         "error": ERROR_UNEXPECTED,
     }
@@ -879,7 +879,7 @@ def test_event_stream_reads_are_switched_to_blocking() -> None:
     当场 ``dead``，问句秒回 ``opencode-not-running``。
     """
     open_url = FakeOpen(messages=live_messages("答复"))
-    make_client(open_url).ask("问题")
+    make_client(open_url).send("问题")
     assert open_url.events.socket.timeout is None  # 连上之后读是无限等的
 
 
@@ -898,7 +898,7 @@ def test_stream_death_is_reported_as_not_running() -> None:
     老办法只能靠 `wait` 那个长挂的连接被对端收走才发觉；事件流是 TCP 一断立刻知道。
     """
     open_url = FakeOpen(messages=live_messages(None), events=FakeEvents(dies=True))
-    outcome = make_client(open_url).ask("问题")
+    outcome = make_client(open_url).send("问题")
 
     assert outcome == {"kind": "not-running"}
     assert payload_from_outcome(outcome) == {"status": "error", "error": ERROR_NOT_RUNNING}
@@ -916,7 +916,7 @@ def test_stalled_heartbeat_is_reported_as_not_running() -> None:
         clock["now"] = 40.0  # 一圈就越过停摆线（标称心跳 15s，漏两拍算数）
 
     client = make_client(open_url, now=lambda: clock["now"], sleep=sleep)
-    assert payload_from_outcome(client.ask("问题")) == {
+    assert payload_from_outcome(client.send("问题")) == {
         "status": "error",
         "error": ERROR_NOT_RUNNING,
     }
@@ -946,17 +946,17 @@ def test_progress_snapshot_reports_phase_and_written_while_waiting() -> None:
 
     def sleep(_seconds: float) -> None:
         rounds["n"] += 1
-        snapshots.append(client_slot[0].status()["ask"])  # 这一圈的现场
+        snapshots.append(client_slot[0].status()["send"])  # 这一圈的现场
         if rounds["n"] == 1:
             open_url.messages = live_messages("答复正文")
 
     client = make_client(open_url, idle_timeout=600.0, sleep=sleep)
     client_slot.append(client)
 
-    assert payload_from_outcome(client.ask("问题")) == {"status": "ok", "answer": "答复正文"}
+    assert payload_from_outcome(client.send("问题")) == {"status": "ok", "answer": "答复正文"}
     assert snapshots[0] == {"phase": "writing", "written": 8, "remaining": 600.0}
     # 收摊之后不能留个幽灵问句
-    assert client.status() == {"status": "ok", "ask": None}
+    assert client.status() == {"status": "ok", "send": None}
 
 
 def test_events_from_other_sessions_never_move_our_progress() -> None:
@@ -978,13 +978,13 @@ def test_events_from_other_sessions_never_move_our_progress() -> None:
     snapshots: list[Any] = []
 
     def sleep(_seconds: float) -> None:
-        snapshots.append(client_slot[0].status()["ask"])
+        snapshots.append(client_slot[0].status()["send"])
         open_url.messages = live_messages("答复")
 
     client = make_client(open_url, idle_timeout=600.0, sleep=sleep)
     client_slot.append(client)
 
-    assert client.ask("问题")["kind"] == "success"
+    assert client.send("问题")["kind"] == "success"
     # 别人家开工了，我们的阶段还停在排队
     assert snapshots[0]["phase"] == "queued"
     assert snapshots[0]["written"] == 0
@@ -992,9 +992,9 @@ def test_events_from_other_sessions_never_move_our_progress() -> None:
 
 def test_status_is_idle_outside_an_ask() -> None:
     client = make_client(FakeOpen(messages=live_messages("答复")))
-    assert client.status() == {"status": "ok", "ask": None}
-    client.ask("问题")
-    assert client.status() == {"status": "ok", "ask": None}
+    assert client.status() == {"status": "ok", "send": None}
+    client.send("问题")
+    assert client.status() == {"status": "ok", "send": None}
 
 
 def test_probe_reports_opencode_liveness() -> None:

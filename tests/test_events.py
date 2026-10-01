@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 
-from dsb.client import PHASE_QUEUED, PHASE_WRITING, AskProgress
+from dsb.client import PHASE_QUEUED, PHASE_WRITING, SendProgress
 from dsb.events import (
     EVENT_HEARTBEAT,
     EVENT_QUEUE_CAP,
@@ -150,7 +150,7 @@ def test_pump_holds_at_most_the_queue_cap_when_nobody_is_draining() -> None:
 
 
 def test_progress_is_idle_until_an_ask_begins() -> None:
-    progress = AskProgress()
+    progress = SendProgress()
     assert progress.snapshot() is None  # 空档不留幽灵问句
     progress.begin()
     assert progress.snapshot() == {"phase": PHASE_QUEUED, "written": 0, "remaining": None}
@@ -161,7 +161,7 @@ def test_progress_is_idle_until_an_ask_begins() -> None:
 
 
 def test_progress_counts_writing_from_its_own_session_only() -> None:
-    progress = AskProgress()
+    progress = SendProgress()
     progress.begin()
     progress.note(
         [
@@ -180,7 +180,7 @@ def test_progress_counts_writing_from_its_own_session_only() -> None:
 
 def test_progress_falls_back_to_the_message_side_without_an_event_stream() -> None:
     """事件流缺席时，正文侧也能认出「开写了」，阶段照样往前走。"""
-    progress = AskProgress()
+    progress = SendProgress()
     progress.begin()
     assert progress.snapshot()["phase"] == PHASE_QUEUED
     progress.writing()

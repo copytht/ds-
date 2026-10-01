@@ -220,10 +220,10 @@ def outcome_from_exception(exc: BaseException) -> dict[str, Any]:
     return {"kind": "unexpected"}
 
 
-class AskProgress:
+class SendProgress:
     """一次问句的现场进度，供 ``GET /status`` 转述。
 
-    写它的是 ``ask`` 所在的请求线程，读它的是扩展每隔几秒打过来的另一个线程，
+    写它的是 ``send`` 所在的请求线程，读它的是扩展每隔几秒打过来的另一个线程，
     所以全部走锁；``snapshot()`` 回 ``None`` 表示现在没有问句在途。
     """
 
@@ -316,21 +316,21 @@ class OpencodeClient:
         self._sleep = sleep
         self._wall_clock = wall_clock
         self._cached: Mapping[str, Any] | None = None
-        self._progress = AskProgress()
+        self._progress = SendProgress()
         # 可继续子级的现场**按页面会话分表**（ADR-0005 的已知天花板）：
         # 每条页面会话各有一份——子会话 id（跨问复用）、首问还是续问、
-        # 以及「一个子会话同时只接一轮」的那把锁（后到的问句排队，见 ask）。
+        # 以及「一个子会话同时只接一轮」的那把锁（后到的问句排队，见 send）。
         # key 是页面会话 id；认不出会话 id 的老调用（curl / 测试）落 "" 这一份，
         # 行为与原先单会话一致。
         self._children: dict[str, str] = {}
         self._prompted: dict[str, bool] = {}
-        self._ask_locks: dict[str, threading.Lock] = {}
-        # 只管上面三张表的元操作（增删查、建锁）：与 key 级的 _ask_locks 不同层，
+        self._send_locks: dict[str, threading.Lock] = {}
+        # 只管上面三张表的元操作（增删查、建锁）：与 key 级的 _send_locks 不同层，
         # 锁序永远是「先 key 锁、后这张表的锁」，不会死锁。
         self._children_lock = threading.Lock()
 
     @property
-    def progress(self) -> AskProgress:
+    def progress(self) -> SendProgress:
         """在途问句的现场进度（`GET /status` 就读它）。
 
         **单份**：多页面会话并行时这里只能报其中一条（最近开始的），`/status`
@@ -346,17 +346,17 @@ class OpencodeClient:
         这把锁管「同页面会话串行」；后到的问句在锁上等（串行才谈得上「接着往下答」）。
         """
         with self._children_lock:
-            lock = self._ask_locks.get(key)
+            lock = self._send_locks.get(key)
             if lock is None:
                 lock = threading.Lock()
-                self._ask_locks[key] = lock
+                self._send_locks[key] = lock
             return lock
 
     def warm_up(self) -> bool:
         """启动时现读一次端口与口令；读不到返回 False，之后按请求重试。"""
         return self._service() is not None
 
-    def ask(self, question: str, page_session_id: str | None = None) -> Mapping[str, Any]:
+    def send(self, question: str, page_session_id: str | None = None) -> Mapping[str, Any]:
         """问一句 → outcome（``success`` 带消息体，其余是失败分支）。
 
         ``page_session_id`` 是**页面会话 id**（``/a/chat/s/<id>`` 里那段）：每条页面
@@ -413,7 +413,7 @@ class OpencodeClient:
         ——缓存的那个还活着就接着用，没了或压根没有就新起一个。
 
         先 GET 一遍只为认出「会话没了」——被人删过、或 opencode 换过实例。**只有 4xx
-        算没**（会话层面的否定）：5xx 与连不上照原样抛出去，由 ``ask`` 折成对应分支，
+        算没**（会话层面的否定）：5xx 与连不上照原样抛出去，由 ``send`` 折成对应分支，
         别把「服务出故障」误判成「会话没了」而白起一个新子会话。
         """
         with self._children_lock:
@@ -596,7 +596,7 @@ class OpencodeClient:
 
     def status(self) -> Mapping[str, Any]:
         """``GET /status`` 的载荷：现在有没有问句在途，在途的话走到哪一步了。"""
-        return {"status": "ok", "ask": self._progress.snapshot()}
+        return {"status": "ok", "send": self._progress.snapshot()}
 
     def _await_answer(
         self,

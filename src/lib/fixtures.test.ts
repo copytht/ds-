@@ -65,9 +65,9 @@ describe("共享 fixture 完整性", () => {
 });
 
 describe("围栏 fixture 自洽", () => {
-  it("抽出问题的输入里必须排着 ```say 围栏", () => {
+  it("抽出问题的输入里必须排着 ```send 围栏", () => {
     for (const { input, expectedQuestion } of fixtureCases<FenceCase>("fence.json")) {
-      if (expectedQuestion !== null) expect(input).toContain("```say");
+      if (expectedQuestion !== null) expect(input).toContain("```send");
     }
   });
 });

@@ -65,7 +65,7 @@ describe("rememberFailure · 记一笔", () => {
   it("同一次故障只记一笔：还没恢复就挡住，哪怕环节和原因都换了", () => {
     const ongoing = [healthFailure(1, "连接失败")];
     expect(rememberFailure(ongoing, healthFailure(2))).toBe(ongoing);
-    expect(rememberFailure(ongoing, { at: 3, where: "ask", cause: "超时" })).toBe(ongoing);
+    expect(rememberFailure(ongoing, { at: 3, where: "send", cause: "超时" })).toBe(ongoing);
   });
 
   it("恢复过之后，下一次是新的一笔", () => {
@@ -141,7 +141,7 @@ describe("describeLastFailure · 一句里答得出三件事", () => {
     const where = (record: FailureRecord) => describeLastFailure([record], now);
     expect(where({ at, where: "health", cause: "x" })).toContain("周期探活");
     expect(where({ at, where: "status", cause: "x" })).toContain("等待期问现场");
-    expect(where({ at, where: "ask", cause: "x" })).toContain("问句");
+    expect(where({ at, where: "send", cause: "x" })).toContain("问句");
   });
 
   it("一次都没红过就没有这句", () => {

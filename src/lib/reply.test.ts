@@ -109,7 +109,7 @@ describe("failureNotice · 扩展侧失败提示", () => {
 
   it("中继本身没响应时也给「中继不可达」", () => {
     expect(failureNotice("relay-unreachable").title).toBe("中继不可达");
-    expect(failureNotice("relay-unreachable").command).toBe("uv run ds-mcp");
+    expect(failureNotice("relay-unreachable").command).toBe("uv run dsb");
   });
 
   it("没问成的原因都带启动命令", () => {

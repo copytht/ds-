@@ -37,8 +37,8 @@ class PendingPayload(TypedDict):
 
 
 ReplyPayload = OkPayload | ErrorPayload
-#: ``/ask`` 的三种回法：成功 / 失败 / 还没出结果（带 id，接着轮询）。
-AskPayload = ReplyPayload | PendingPayload
+#: ``/send`` 的三种回法：成功 / 失败 / 还没出结果（带 id，接着轮询）。
+SendPayload = ReplyPayload | PendingPayload
 
 
 def ok_payload(answer: str) -> OkPayload:
@@ -121,7 +121,7 @@ def answer_complete(body: Any) -> bool:
     return bool(time_field.get("completed"))
 
 
-def payload_from_outcome(outcome: Mapping[str, Any] | Any) -> AskPayload:
+def payload_from_outcome(outcome: Mapping[str, Any] | Any) -> SendPayload:
     """把 outcome 分支映射成回灌载荷；认不出的一律算非预期响应。"""
     if not isinstance(outcome, Mapping):
         return error_payload(ERROR_UNEXPECTED)

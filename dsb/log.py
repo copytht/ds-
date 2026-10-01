@@ -2,7 +2,7 @@
 
 `BaseHTTPRequestHandler.log_message` 在 server.py 里被整个关掉——那条路会把请求行原样
 写下来，等于拿访问日志当业务日志。这里记的是另一件事：**失败与慢**。事件名固定、字段
-有名有姓，事后 `grep -E 'ask-fail|probe-broke|slow' /tmp/dsb.log` 就能回答
+有名有姓，事后 `grep -E 'send-fail|probe-broke|slow' /tmp/dsb.log` 就能回答
 「图标为什么红过、几点红的、慢在哪儿」。
 
 字段是**具名参数**、不是自由 dict：调用点想写 ``question=...`` 都写不进去。正文进不来
@@ -31,7 +31,7 @@ def _logger() -> logging.Logger:
 
 
 def setup_logging() -> None:
-    """把事件接到 stderr：`nohup uv run ds-mcp > /tmp/dsb.log 2>&1` 正好收下。
+    """把事件接到 stderr：`nohup uv run dsb > /tmp/dsb.log 2>&1` 正好收下。
 
     只在起服务时调一次。测试不调，所以 pytest 里既不会重复打印，caplog 又照常捞得到
     （记录照样向上冒泡）。
@@ -55,10 +55,10 @@ def log_event(
     answer_chars: int | None = None,
     missing: str | None = None,
 ) -> None:
-    """一条事件，形如 ``[2026-09-30 14:49:36] ask-fail error=opencode-timeout took_ms=360123``。
+    """一条事件，形如 ``[2026-09-30 14:49:36] send-fail error=opencode-timeout took_ms=360123``。
 
     只收这几个具名字段：问题正文、答复正文、异常消息都进不来。问句成功也记一条
-    （``ask-ok``），因为「问过、答了、花了多久」是这条链上最有信息量的正常事件。
+    （``send-ok``），因为「问过、答了、花了多久」是这条链上最有信息量的正常事件。
     """
     bits = [event]
     if path is not None:

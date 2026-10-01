@@ -1,5 +1,5 @@
 [project]
-name = "ds-mcp"
+name = "dsb"
 version = "0.1.0"
 description = "本机 HTTP 中继：把扩展的问题转给 opencode、把答复转回扩展（不是 MCP 服务）"
 readme = "README.md"
@@ -10,7 +10,7 @@ requires-python = ">=3.13"
 dependencies = []
 
 [project.scripts]
-ds-mcp = "dsb.server:main"
+dsb = "dsb.server:main"
 
 [dependency-groups]
 dev = [

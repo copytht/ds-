@@ -1,4 +1,4 @@
-"""中继服务本身：起得来、一条 HTTP 往返拿到结构化载荷（ask 一律 stub，不碰真 opencode）。"""
+"""中继服务本身：起得来、一条 HTTP 往返拿到结构化载荷（send 一律 stub，不碰真 opencode）。"""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from dsb.opencode import ERROR_NOT_RUNNING, ERROR_TIMEOUT, ERROR_UNEXPECTED
 from dsb.server import (
     DEFAULT_PORT,
     make_server,
-    parse_ask_request,
     parse_question,
+    parse_send_request,
     resolve_idle_timeout,
     resolve_port,
     route,
@@ -38,8 +38,8 @@ OK_BODY = {
 }
 
 
-class StubAsk:
-    """替身 ask：记下收到的问题，回预设的 outcome（或直接抛）。"""
+class StubSend:
+    """替身 send：记下收到的问题，回预设的 outcome（或直接抛）。"""
 
     def __init__(self, outcome: Any = OK_BODY, error: BaseException | None = None) -> None:
         self.outcome = outcome
@@ -64,11 +64,11 @@ class StubAsk:
 
 @pytest.fixture()
 def serve() -> Iterator[Callable[..., str]]:
-    """随机端口起中继；每个替身 ask 一个端口，收摊时一起关。"""
+    """随机端口起中继；每个替身 send 一个端口，收摊时一起关。"""
     running: list[tuple[Any, threading.Thread]] = []
 
-    def factory(ask: Any, probe: Any = None, status: Any = None) -> str:
-        server = make_server(ask, host=HOST, port=0, probe=probe, status=status)
+    def factory(send: Any, probe: Any = None, status: Any = None) -> str:
+        server = make_server(send, host=HOST, port=0, probe=probe, status=status)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         running.append((server, thread))
@@ -83,10 +83,10 @@ def serve() -> Iterator[Callable[..., str]]:
 
 
 @pytest.fixture()
-def relay(serve: Callable[..., str]) -> tuple[str, StubAsk]:
-    """一个普通中继：(base URL, ask 替身)。"""
-    ask = StubAsk()
-    return serve(ask), ask
+def relay(serve: Callable[..., str]) -> tuple[str, StubSend]:
+    """一个普通中继：(base URL, send 替身)。"""
+    send = StubSend()
+    return serve(send), send
 
 
 def request(url: str, *, method: str = "GET", body: bytes | None = None) -> tuple[int, dict]:
@@ -101,11 +101,11 @@ def request(url: str, *, method: str = "GET", body: bytes | None = None) -> tupl
         return exc.code, json.loads(exc.read())
 
 
-def post_ask(base: str, question: str = "问题") -> tuple[int, dict]:
-    return request(f"{base}/ask", method="POST", body=json.dumps({"question": question}).encode())
+def post_send(base: str, question: str = "问题") -> tuple[int, dict]:
+    return request(f"{base}/send", method="POST", body=json.dumps({"question": question}).encode())
 
 
-def test_health_endpoint_answers_ok(relay: tuple[str, StubAsk]) -> None:
+def test_health_endpoint_answers_ok(relay: tuple[str, StubSend]) -> None:
     base, _ask = relay
     assert request(f"{base}/health") == (200, {"status": "ok"})
 
@@ -113,36 +113,36 @@ def test_health_endpoint_answers_ok(relay: tuple[str, StubAsk]) -> None:
 @pytest.mark.parametrize("opencode", ["up", "down"])
 def test_health_also_reports_opencode_liveness(serve: Callable[..., str], opencode: str) -> None:
     """中继活着不代表 opencode 活着——两件事出事时长得一模一样，分开了才好排查。"""
-    base = serve(StubAsk(), probe=lambda: opencode)
+    base = serve(StubSend(), probe=lambda: opencode)
     assert request(f"{base}/health") == (200, {"status": "ok", "opencode": opencode})
 
 
-def test_status_says_idle_when_nothing_is_in_flight(relay: tuple[str, StubAsk]) -> None:
+def test_status_says_idle_when_nothing_is_in_flight(relay: tuple[str, StubSend]) -> None:
     base, _ask = relay
-    assert request(f"{base}/status") == (200, {"status": "ok", "ask": None})
+    assert request(f"{base}/status") == (200, {"status": "ok", "send": None})
 
 
 def test_status_relays_the_in_flight_ask(serve: Callable[..., str]) -> None:
     """等待期的现场原样转述：阶段、已写字数、还剩多少预算。"""
     snapshot = {"phase": "writing", "written": 128, "remaining": 107.5}
-    base = serve(StubAsk(), status=lambda: {"status": "ok", "ask": snapshot})
-    assert request(f"{base}/status") == (200, {"status": "ok", "ask": snapshot})
+    base = serve(StubSend(), status=lambda: {"status": "ok", "send": snapshot})
+    assert request(f"{base}/status") == (200, {"status": "ok", "send": snapshot})
 
 
-def test_one_round_trip_returns_ok_payload(relay: tuple[str, StubAsk]) -> None:
-    base, ask = relay
-    status, payload = post_ask(base, "repo 里 dsb 的入口在哪？")
+def test_one_round_trip_returns_ok_payload(relay: tuple[str, StubSend]) -> None:
+    base, send = relay
+    status, payload = post_send(base, "repo 里 dsb 的入口在哪？")
 
     assert status == 200
     assert payload == {"status": "ok", "answer": "入口在 dsb/server.py。"}
-    assert ask.questions == ["repo 里 dsb 的入口在哪？"]
+    assert send.questions == ["repo 里 dsb 的入口在哪？"]
 
 
 def test_opencode_not_running_is_an_identifiable_error(
     serve: Callable[..., str],
 ) -> None:
-    base = serve(StubAsk(outcome={"kind": "not-running"}))
-    assert post_ask(base) == (200, {"status": "error", "error": ERROR_NOT_RUNNING})
+    base = serve(StubSend(outcome={"kind": "not-running"}))
+    assert post_send(base) == (200, {"status": "error", "error": ERROR_NOT_RUNNING})
 
 
 @pytest.mark.parametrize(
@@ -155,13 +155,13 @@ def test_opencode_not_running_is_an_identifiable_error(
 def test_failure_outcomes_come_back_as_error_payloads(
     serve: Callable[..., str], outcome: dict[str, Any], expected: str
 ) -> None:
-    base = serve(StubAsk(outcome=outcome))
-    assert post_ask(base) == (200, {"status": "error", "error": expected})
+    base = serve(StubSend(outcome=outcome))
+    assert post_send(base) == (200, {"status": "error", "error": expected})
 
 
 def test_ask_that_blows_up_still_answers_json(serve: Callable[..., str]) -> None:
-    base = serve(StubAsk(error=RuntimeError("中继自己坏了")))
-    assert post_ask(base) == (500, {"status": "error", "error": ERROR_UNEXPECTED})
+    base = serve(StubSend(error=RuntimeError("中继自己坏了")))
+    assert post_send(base) == (500, {"status": "error", "error": ERROR_UNEXPECTED})
 
 
 @pytest.mark.parametrize(
@@ -169,24 +169,24 @@ def test_ask_that_blows_up_still_answers_json(serve: Callable[..., str]) -> None
     [b"", b"not json", b"[]", b"{}", json.dumps({"question": "   "}).encode()],
 )
 def test_bad_request_body_is_rejected_with_a_payload(
-    relay: tuple[str, StubAsk], body: bytes
+    relay: tuple[str, StubSend], body: bytes
 ) -> None:
-    base, ask = relay
-    status, payload = request(f"{base}/ask", method="POST", body=body)
+    base, send = relay
+    status, payload = request(f"{base}/send", method="POST", body=body)
 
     assert status == 400
     assert payload == {"status": "error", "error": ERROR_UNEXPECTED}
-    assert ask.questions == []
+    assert send.questions == []
 
 
-def test_unknown_path_is_a_payload_not_a_stack(relay: tuple[str, StubAsk]) -> None:
+def test_unknown_path_is_a_payload_not_a_stack(relay: tuple[str, StubSend]) -> None:
     base, _ask = relay
     assert request(f"{base}/nope") == (404, {"status": "error", "error": ERROR_UNEXPECTED})
 
 
-def test_preflight_allows_the_extension_origin(relay: tuple[str, StubAsk]) -> None:
+def test_preflight_allows_the_extension_origin(relay: tuple[str, StubSend]) -> None:
     base, _ask = relay
-    req = urllib.request.Request(f"{base}/ask", method="OPTIONS")
+    req = urllib.request.Request(f"{base}/send", method="OPTIONS")
     with urllib.request.urlopen(req, timeout=10) as response:
         assert response.status == 204
         assert response.headers["Access-Control-Allow-Origin"] == "*"
@@ -194,21 +194,21 @@ def test_preflight_allows_the_extension_origin(relay: tuple[str, StubAsk]) -> No
 
 
 def test_route_is_pure_and_covers_every_path() -> None:
-    ask = StubAsk()
-    assert route("GET", "/health", b"", ask) == (200, {"status": "ok"})
-    assert route("GET", "/health", b"", ask, probe=lambda: "up") == (
+    send = StubSend()
+    assert route("GET", "/health", b"", send) == (200, {"status": "ok"})
+    assert route("GET", "/health", b"", send, probe=lambda: "up") == (
         200,
         {"status": "ok", "opencode": "up"},
     )
-    assert route("GET", "/status?x=1", b"", ask) == (200, {"status": "ok", "ask": None})
-    assert route("POST", "/ask?x=1", json.dumps({"question": "问"}).encode(), ask) == (
+    assert route("GET", "/status?x=1", b"", send) == (200, {"status": "ok", "send": None})
+    assert route("POST", "/send?x=1", json.dumps({"question": "问"}).encode(), send) == (
         200,
         {"status": "ok", "answer": "入口在 dsb/server.py。"},
     )
-    assert route("GET", "/ask", b"", ask)[0] == 404
-    assert route("GET", "/nope", b"", ask)[0] == 404
-    assert route("PUT", "/health", b"", ask)[0] == 405
-    assert ask.questions == ["问"]
+    assert route("GET", "/send", b"", send)[0] == 404
+    assert route("GET", "/nope", b"", send)[0] == 404
+    assert route("PUT", "/health", b"", send)[0] == 405
+    assert send.questions == ["问"]
 
 
 def test_parse_question_only_accepts_the_wire_shape() -> None:
@@ -219,35 +219,35 @@ def test_parse_question_only_accepts_the_wire_shape() -> None:
     assert parse_question("中文不是 json".encode()) is None
 
 
-def test_parse_ask_request_takes_an_optional_poll_id_and_page_id() -> None:
+def test_parse_send_request_takes_an_optional_poll_id_and_page_id() -> None:
     """id 让一趟长问句能被拆成几趟短轮询；page 让中继按页面会话分表（ADR-0005）。"""
-    assert parse_ask_request(json.dumps({"question": "问"}).encode()) == ("问", None, None)
-    assert parse_ask_request(json.dumps({"question": "问", "id": "q-1"}).encode()) == (
+    assert parse_send_request(json.dumps({"question": "问"}).encode()) == ("问", None, None)
+    assert parse_send_request(json.dumps({"question": "问", "id": "q-1"}).encode()) == (
         "问",
         "q-1",
         None,
     )
-    assert parse_ask_request(json.dumps({"question": "问", "page": "abc"}).encode()) == (
+    assert parse_send_request(json.dumps({"question": "问", "page": "abc"}).encode()) == (
         "问",
         None,
         "abc",
     )
-    assert parse_ask_request(
+    assert parse_send_request(
         json.dumps({"question": "问", "id": "q-1", "page": "abc"}).encode()
     ) == ("问", "q-1", "abc")
-    assert parse_ask_request(json.dumps({"question": "问", "id": ""}).encode()) is None
-    assert parse_ask_request(json.dumps({"question": "问", "id": 7}).encode()) is None
-    assert parse_ask_request(json.dumps({"question": "问", "page": ""}).encode()) is None
-    assert parse_ask_request(json.dumps({"question": "问", "page": 7}).encode()) is None
+    assert parse_send_request(json.dumps({"question": "问", "id": ""}).encode()) is None
+    assert parse_send_request(json.dumps({"question": "问", "id": 7}).encode()) is None
+    assert parse_send_request(json.dumps({"question": "问", "page": ""}).encode()) is None
+    assert parse_send_request(json.dumps({"question": "问", "page": 7}).encode()) is None
 
 
 def test_route_hands_the_poll_id_and_page_id_through() -> None:
-    ask = StubAsk()
+    send = StubSend()
     body = json.dumps({"question": "问", "id": "q-1", "page": "abc"}).encode()
-    status, _ = route("POST", "/ask", body, ask)
+    status, _ = route("POST", "/send", body, send)
     assert status == 200
-    assert ask.session_ids == ["q-1"]
-    assert ask.page_session_ids == ["abc"]
+    assert send.session_ids == ["q-1"]
+    assert send.page_session_ids == ["abc"]
 
 
 def test_resolve_port_prefers_the_process_environment(

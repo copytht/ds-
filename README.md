@@ -63,7 +63,7 @@ ds-：总开关已开，中继可达。上次故障 15:23:59（2 分钟前）· 
 uv sync                 # 建 .venv 并按 uv.lock 装依赖
 uv run pytest           # 跑测试
 uv run ruff check .     # lint
-uv run ds-mcp           # 起本机 HTTP 中继（脚本名沿用，名分见 ADR-0001）
+uv run dsb           # 起本机 HTTP 中继
 ```
 
 起之前本机要有 opencode 后台服务在跑，仓库根的 `.env`（不进版本库）写一行会话 id：
@@ -109,18 +109,18 @@ OPENSESS_ID=<opencode 会话 id>
 
 ```bash
 curl http://127.0.0.1:8787/health                     # {"status": "ok", "opencode": "up"}
-curl http://127.0.0.1:8787/status                     # {"status": "ok", "ask": null}
-curl -X POST http://127.0.0.1:8787/ask \
+curl http://127.0.0.1:8787/status                     # {"status": "ok", "send": null}
+curl -X POST http://127.0.0.1:8787/send \
   -H 'content-type: application/json' \
   -d '{"question": "repo 里 dsb 的入口在哪？"}'        # {"status": "ok", "answer": "..."}
 ```
 
 `/health` 把中继与 opencode 分开报（`opencode: "up" | "down"`）——出事时两者长得一模一样，
-分开了才知道该重启哪个。`/status` 是**只读**现场：`ask` 为 `null` 表示没有问句在途，否则是
+分开了才知道该重启哪个。`/status` 是**只读**现场：`send` 为 `null` 表示没有问句在途，否则是
 `{"phase": "queued" | "running" | "writing" | "done", "written": <已写字数>, "remaining": <剩余秒数或 null>}`；
-它不提供任何指挥能力，`/ask` 仍是唯一写入口。
+它不提供任何指挥能力，`/send` 仍是唯一写入口。
 
-`/ask` 还能带一个**轮询 id**（`{"question": ..., "id": "poll-1"}`）：带上它，中继最多让这一趟
+`/send` 还能带一个**轮询 id**（`{"question": ..., "id": "poll-1"}`）：带上它，中继最多让这一趟
 挂 15s，没出结果就回 `{"status": "pending", "id": "poll-1"}`，拿同一个 id 接着问即可——**一趟
 长问句就这样拆成几趟短 fetch**。扩展必须这么走：MV3 的 service worker 对一条在途 fetch 只保它
 约 5 分钟，更长的问句一过线就被浏览器连人带连接一起收走，中继算完了也写不回来（真机日志里两次
@@ -132,15 +132,15 @@ curl -X POST http://127.0.0.1:8787/ask \
 TOON 编码在扩展侧，多行正文走 tabular（SPEC §9.3，一行正文一条 row，换行不产生转义），
 Python 侧不引任何 TOON 库、只产 dict。
 
-失败与慢另外留一行带时间戳的日志（`dsb/log.py`，走 stderr；`nohup uv run ds-mcp > /tmp/dsb.log 2>&1`
+失败与慢另外留一行带时间戳的日志（`dsb/log.py`，走 stderr；`nohup uv run dsb > /tmp/dsb.log 2>&1`
 就收下了）：
 
 ```text
-[2026-09-30 15:26:58] ask-ok took_ms=33118 answer_chars=2
+[2026-09-30 15:26:58] send-ok took_ms=33118 answer_chars=2
 [2026-09-30 15:13:38] bad-request path=/nope http=404 took_ms=0
 ```
 
-事件名固定：`ask-ok` / `ask-fail error=…` / `ask-broke exc=…` / `spawn-missing missing=…` /
+事件名固定：`send-ok` / `send-fail error=…` / `send-broke exc=…` / `spawn-missing missing=…` /
 `probe-broke` / `status-broke` / `bad-request` / `slow path=/health took_ms=…`。探活与现场轮询
 **超过 1s** 才记 `slow`——它们各有 5s 预算，慢了就是图标翻红的前兆。`spawn-missing` 记缺了父会话
 哪样设置（`agent`/`model`/`location`），页面只拿得到 `unexpected-response`，缺哪样得靠它。**问题正文

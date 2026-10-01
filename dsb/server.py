@@ -1,12 +1,12 @@
-"""`uv run ds-mcp` 起的本机 HTTP 中继（ADR-0001：中继，不是 MCP 服务）。
+"""`uv run dsb` 起的本机 HTTP 中继（ADR-0001：中继，不是 MCP 服务）。
 
 端点（扩展侧只打这三条）：
 
 - ``GET  /health`` → ``{"status": "ok", "opencode": "up" | "down"}``：中继在不在、
   opencode 在不在（两件事出事时长得一样，分开了才知道该重启哪个）；
-- ``GET  /status`` → ``{"status": "ok", "ask": null | {"phase", "written", "remaining"}}``
+- ``GET  /status`` → ``{"status": "ok", "send": null | {"phase", "written", "remaining"}}``
   ：现在有没有问句在途，在途的话走到哪一步——等待期的现场，只读；
-- ``POST /ask``    body ``{"question": "..."}`` → ``{"status": "ok", "answer": ...}``
+- ``POST /send``    body ``{"question": "..."}`` → ``{"status": "ok", "answer": ...}``
   或 ``{"status": "error", "error": ...}``（错误码只在 #10 fixture 的册子上）。
 
 动作服务（ADR-0007，实现在 :mod:`dsb.actions`）另加三条：
@@ -44,23 +44,23 @@ from dsb.actions import (
     ensure_token,
     resolve_enabled,
 )
-from dsb.asks import AskSessions
 from dsb.client import DEFAULT_IDLE_TIMEOUT, OpencodeClient
 from dsb.config import parse_coord_session_id, parse_session_id
 from dsb.log import SLOW_MS, log_event, setup_logging
 from dsb.opencode import ERROR_UNEXPECTED, error_payload, payload_from_outcome
 from dsb.said import SAID_PATH, SaidLog
+from dsb.sends import SendSessions
 
 HEALTH_PATH = "/health"
 STATUS_PATH = "/status"
-ASK_PATH = "/ask"
+SEND_PATH = "/send"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 PORT_ENV_KEY = "DSB_PORT"
 IDLE_TIMEOUT_ENV_KEY = "DSB_IDLE_TIMEOUT"
 MAX_BODY_BYTES = 64 * 1024
 
-AskFn = Callable[[str, str | None, str | None], Mapping[str, Any]]
+SendFn = Callable[[str, str | None, str | None], Mapping[str, Any]]
 ProbeFn = Callable[[], str]
 StatusFn = Callable[[], Mapping[str, Any]]
 Payload = dict[str, Any]
@@ -73,7 +73,7 @@ NO_CORS_PATHS = frozenset({ACTIONS_PATH, ACTION_RESULT_PATH, SAID_PATH})
 
 #: 哪条路炸了就叫哪个名字：探活炸了和问句炸了，排查方向完全两样。
 BROKE_EVENT: dict[str, str] = {
-    "/ask": "ask-broke",
+    "/send": "send-broke",
     "/health": "probe-broke",
     "/status": "status-broke",
     "/action": "action-broke",
@@ -81,11 +81,11 @@ BROKE_EVENT: dict[str, str] = {
 }
 
 
-def parse_ask_request(body: bytes) -> tuple[str, str | None, str | None] | None:
+def parse_send_request(body: bytes) -> tuple[str, str | None, str | None] | None:
     """请求体 → ``(问题, 轮询 id, 页面会话 id)``；后两者都可选。
 
     不合 ``{"question": "...", "id"?: "...", "page"?: "..."}`` 的一律 None。
-    - ``id``：短轮询 id（一趟长问句拆成几趟短 fetch，见 :mod:`dsb.asks`）；
+    - ``id``：短轮询 id（一趟长问句拆成几趟短 fetch，见 :mod:`dsb.sends`）；
     - ``page``：**页面会话 id**（``/a/chat/s/<id>`` 里那段）。中继按它分表：每条页面会话
       各自一个子会话、各自的锁、各自的首问/续问框（ADR-0005）。
     """
@@ -111,7 +111,7 @@ def parse_ask_request(body: bytes) -> tuple[str, str | None, str | None] | None:
 
 def parse_question(body: bytes) -> str | None:
     """请求体 → 问题正文；只看问题那一条（老接缝，校验与测试用）。"""
-    parsed = parse_ask_request(body)
+    parsed = parse_send_request(body)
     return None if parsed is None else parsed[0]
 
 
@@ -130,7 +130,7 @@ def route(
     method: str,
     path: str,
     body: bytes,
-    ask: AskFn,
+    send: SendFn,
     probe: ProbeFn | None = None,
     status: StatusFn | None = None,
     action: ActionFn | None = None,
@@ -150,16 +150,16 @@ def route(
         return 200, health_payload(probe() if probe is not None else None)
     if method == "GET" and path == STATUS_PATH:
         if status is None:
-            return 200, {"status": "ok", "ask": None}
+            return 200, {"status": "ok", "send": None}
         return 200, dict(status())
-    if method == "POST" and path == ASK_PATH:
-        parsed = parse_ask_request(body)
+    if method == "POST" and path == SEND_PATH:
+        parsed = parse_send_request(body)
         if parsed is None:
             # 请求本身不合线协议：错误码只在册的三个，这里落非预期响应兜底。
             return 400, error_payload(ERROR_UNEXPECTED)
         question, poll_id, page_session_id = parsed
         # 不在这儿接异常：route 是纯接缝，谁出岔子谁留痕——接住就等于把现场销毁了。
-        return 200, payload_from_outcome(ask(question, poll_id, page_session_id))
+        return 200, payload_from_outcome(send(question, poll_id, page_session_id))
     if method == "POST" and path == ACTION_PATH:
         if action is None:
             return 404, error_payload(ERROR_UNEXPECTED)
@@ -178,7 +178,7 @@ def route(
 
 
 def make_handler(
-    ask: AskFn,
+    send: SendFn,
     probe: ProbeFn | None = None,
     status: StatusFn | None = None,
     actions: ActionServer | None = None,
@@ -223,7 +223,7 @@ def make_handler(
                     method,
                     self.path,
                     self._body(),
-                    ask,
+                    send,
                     probe,
                     status,
                     action=action,
@@ -273,20 +273,20 @@ def make_handler(
             if status >= 400:
                 log_event("bad-request", path=path, http=status, took_ms=took_ms)
                 return
-            if path == ASK_PATH:
+            if path == SEND_PATH:
                 if isinstance(payload, Mapping) and payload.get("status") == "pending":
                     return  # 一趟没等到（长问句的正常中间态）：不是失败，不记
                 error = payload.get("error") if isinstance(payload, Mapping) else None
                 if isinstance(payload, Mapping) and payload.get("status") == "error":
                     log_event(
-                        "ask-fail",
+                        "send-fail",
                         error=error if isinstance(error, str) else None,
                         took_ms=took_ms,
                     )
                 else:
                     answer = payload.get("answer") if isinstance(payload, Mapping) else None
                     log_event(
-                        "ask-ok",
+                        "send-ok",
                         took_ms=took_ms,
                         answer_chars=len(answer) if isinstance(answer, str) else 0,
                     )
@@ -326,7 +326,7 @@ def make_handler(
 
 
 def make_server(
-    ask: AskFn,
+    send: SendFn,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     probe: ProbeFn | None = None,
@@ -335,7 +335,7 @@ def make_server(
     said: SaidLog | None = None,
 ) -> ThreadingHTTPServer:
     """起中继的 HTTP 服务（测试用 port=0 拿随机端口）。"""
-    server = ThreadingHTTPServer((host, port), make_handler(ask, probe, status, actions, said))
+    server = ThreadingHTTPServer((host, port), make_handler(send, probe, status, actions, said))
     server.daemon_threads = True
     return server
 
@@ -393,7 +393,7 @@ def resolve_idle_timeout(env_text: str) -> float:
 
 
 def main() -> None:
-    """`uv run ds-mcp` 的入口：现读端口/口令/sessionID，然后对外服务。"""
+    """`uv run dsb` 的入口：现读端口/口令/sessionID，然后对外服务。"""
     setup_logging()
     # pkill / 系统收摊发的是 SIGTERM，Python 默认直接退出、finally 不跑，那个一直复用的
     # 子会话就成了没人删的孤儿（会话列表里每杀一次留一条）。让它走跟 Ctrl-C 同一条路。
@@ -406,14 +406,14 @@ def main() -> None:
         coordinator_id=parse_coord_session_id(env_text),
         idle_timeout=resolve_idle_timeout(env_text),
     )
-    ask = AskSessions(client.ask)  # 长问句拆成几趟短轮询，别让浏览器把后台线程连同答复一起收走
+    send = SendSessions(client.send)  # 长问句拆成几趟短轮询，别让浏览器把后台线程连同答复一起收走
     warm = client.warm_up()  # 启动现读：端口与口令只进内存
     # 动作服务：token 启动现生成/复用（0600，固定路径），开关现读（DSB_ACTIONS_ENABLED）。
     actions = ActionServer(ensure_token(), enabled=resolve_enabled(env_text))
     said = SaidLog(notify=client.say)
     print(
         f"[dsb] 中继已启动：http://{DEFAULT_HOST}:{port}"
-        f"（{ASK_PATH} / {STATUS_PATH} / {HEALTH_PATH} / {ACTION_PATH} / {ACTIONS_PATH}）",
+        f"（{SEND_PATH} / {STATUS_PATH} / {HEALTH_PATH} / {ACTION_PATH} / {ACTIONS_PATH}）",
         flush=True,
     )
     if session_id is None:
@@ -427,7 +427,7 @@ def main() -> None:
             file=sys.stderr,
         )
     with make_server(
-        ask.ask, port=port, probe=client.probe, status=client.status, actions=actions, said=said
+        send.send, port=port, probe=client.probe, status=client.status, actions=actions, said=said
     ) as server:
         try:
             server.serve_forever()

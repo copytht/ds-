@@ -30,8 +30,8 @@ OK_BODY = {
 }
 
 
-class StubAsk:
-    """替身 ask：回预设的 outcome（或直接抛）。"""
+class StubSend:
+    """替身 send：回预设的 outcome（或直接抛）。"""
 
     def __init__(self, outcome: Any = OK_BODY, error: BaseException | None = None) -> None:
         self.outcome = outcome
@@ -50,8 +50,8 @@ def serve() -> Iterator[Any]:
     """随机端口起中继；收摊时一起关。"""
     running: list[tuple[Any, threading.Thread]] = []
 
-    def factory(ask: Any, probe: Any = None, status: Any = None) -> str:
-        server = make_server(ask, host=HOST, port=0, probe=probe, status=status)
+    def factory(send: Any, probe: Any = None, status: Any = None) -> str:
+        server = make_server(send, host=HOST, port=0, probe=probe, status=status)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         running.append((server, thread))
@@ -84,27 +84,27 @@ def request(url: str, *, method: str = "GET", body: bytes | None = None) -> tupl
         return exc.code, json.loads(exc.read())
 
 
-def post_ask(base: str, question: str = "问题正文在这") -> tuple[int, dict]:
-    return request(f"{base}/ask", method="POST", body=json.dumps({"question": question}).encode())
+def post_send(base: str, question: str = "问题正文在这") -> tuple[int, dict]:
+    return request(f"{base}/send", method="POST", body=json.dumps({"question": question}).encode())
 
 
 def test_question_text_cannot_be_logged_because_it_is_not_in_the_signature() -> None:
     """结构性保证：调用点想记正文都写不出参数来。"""
     with pytest.raises(TypeError):
-        log_event("ask-ok", question="问题正文")  # pyright: ignore[reportCallIssue]
+        log_event("send-ok", question="问题正文")  # pyright: ignore[reportCallIssue]
     with pytest.raises(TypeError):
-        log_event("ask-ok", answer="答复正文")  # pyright: ignore[reportCallIssue]
+        log_event("send-ok", answer="答复正文")  # pyright: ignore[reportCallIssue]
 
 
 def test_event_line_names_the_event_and_its_fields(events: pytest.LogCaptureFixture) -> None:
-    log_event("ask-fail", error=ERROR_NOT_RUNNING, took_ms=1234.4)
-    assert "ask-fail error=opencode-not-running took_ms=1234" in events.text
+    log_event("send-fail", error=ERROR_NOT_RUNNING, took_ms=1234.4)
+    assert "send-fail error=opencode-not-running took_ms=1234" in events.text
 
 
 def test_an_exception_keeps_only_its_type_name(events: pytest.LogCaptureFixture) -> None:
     """异常消息里可能嵌着用户的东西，只留类型名。"""
-    log_event("ask-broke", path="/ask", exc=RuntimeError("问题正文"))
-    assert "ask-broke path=/ask" in events.text
+    log_event("send-broke", path="/send", exc=RuntimeError("问题正文"))
+    assert "send-broke path=/send" in events.text
     assert "RuntimeError" in events.text
     assert "问题正文" not in events.text
 
@@ -112,9 +112,9 @@ def test_an_exception_keeps_only_its_type_name(events: pytest.LogCaptureFixture)
 def test_a_failed_ask_leaves_its_error_code_and_duration(
     serve: Any, events: pytest.LogCaptureFixture
 ) -> None:
-    base = serve(StubAsk(outcome={"kind": "not-running"}))
-    assert post_ask(base)[1] == {"status": "error", "error": ERROR_NOT_RUNNING}
-    assert "ask-fail error=opencode-not-running" in events.text
+    base = serve(StubSend(outcome={"kind": "not-running"}))
+    assert post_send(base)[1] == {"status": "error", "error": ERROR_NOT_RUNNING}
+    assert "send-fail error=opencode-not-running" in events.text
     assert "took_ms=" in events.text
 
 
@@ -122,11 +122,11 @@ def test_a_successful_ask_leaves_a_length_not_a_body(
     serve: Any, events: pytest.LogCaptureFixture
 ) -> None:
     """成功也记一条——「问过、答了、花了多久」是这条链上最有信息量的正常事件。"""
-    base = serve(StubAsk())
-    status, payload = post_ask(base, "问题正文在这")
+    base = serve(StubSend())
+    status, payload = post_send(base, "问题正文在这")
 
     assert status == 200 and payload["status"] == "ok"
-    assert "ask-ok" in events.text
+    assert "send-ok" in events.text
     assert "answer_chars=" in events.text
     assert "问题正文" not in events.text
     assert "答复正文" not in events.text
@@ -136,12 +136,12 @@ def test_a_pending_poll_is_not_logged_as_an_answer(
     serve: Any, events: pytest.LogCaptureFixture
 ) -> None:
     """长问句的中间态（一趟没等到）不是失败也不是答完，别往日志里灌。"""
-    base = serve(StubAsk(outcome={"kind": "pending", "id": "q-1"}))
-    status, payload = post_ask(base)
+    base = serve(StubSend(outcome={"kind": "pending", "id": "q-1"}))
+    status, payload = post_send(base)
 
     assert status == 200 and payload == {"status": "pending", "id": "q-1"}
-    assert "ask-ok" not in events.text
-    assert "ask-fail" not in events.text
+    assert "send-ok" not in events.text
+    assert "send-fail" not in events.text
 
 
 def test_a_probe_that_blows_up_answers_json_and_keeps_its_name(
@@ -152,7 +152,7 @@ def test_a_probe_that_blows_up_answers_json_and_keeps_its_name(
     def boom() -> str:
         raise RuntimeError("探活炸了")
 
-    base = serve(StubAsk(), probe=boom)
+    base = serve(StubSend(), probe=boom)
     assert request(f"{base}/health") == (500, {"status": "error", "error": ERROR_UNEXPECTED})
     assert "probe-broke" in events.text
     assert "RuntimeError" in events.text
@@ -163,7 +163,7 @@ def test_a_slow_probe_is_recorded_a_fast_one_is_not(
     serve: Any, events: pytest.LogCaptureFixture
 ) -> None:
     """探活慢了就是翻红的前兆（扩展只给 5s）；正常那条记下来只是噪音。"""
-    fast = serve(StubAsk(), probe=lambda: "up")
+    fast = serve(StubSend(), probe=lambda: "up")
     request(f"{fast}/health")
     assert "slow" not in events.text
 
@@ -171,7 +171,7 @@ def test_a_slow_probe_is_recorded_a_fast_one_is_not(
         time.sleep((SLOW_MS + 50) / 1000)
         return "up"
 
-    slow_base = serve(StubAsk(), probe=slow)
+    slow_base = serve(StubSend(), probe=slow)
     request(f"{slow_base}/health")
     assert "slow path=/health took_ms=" in events.text
 
@@ -179,6 +179,6 @@ def test_a_slow_probe_is_recorded_a_fast_one_is_not(
 def test_a_request_that_breaks_the_wire_shape_is_recorded(
     serve: Any, events: pytest.LogCaptureFixture
 ) -> None:
-    base = serve(StubAsk())
+    base = serve(StubSend())
     assert request(f"{base}/nope")[0] == 404
     assert "bad-request path=/nope http=404" in events.text

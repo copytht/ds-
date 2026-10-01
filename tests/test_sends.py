@@ -10,19 +10,19 @@ import threading
 import time
 from typing import Any
 
-from dsb.asks import AskSessions
+from dsb.sends import SendSessions
 
 
 def test_without_an_id_it_blocks_like_before() -> None:
-    sessions = AskSessions(lambda question, page: {"kind": "success", "question": question})
-    assert sessions.ask("问") == {"kind": "success", "question": "问"}
+    sessions = SendSessions(lambda question, page: {"kind": "success", "question": question})
+    assert sessions.send("问") == {"kind": "success", "question": "问"}
 
 
 def test_a_quick_run_comes_back_in_the_same_poll() -> None:
-    sessions = AskSessions(
+    sessions = SendSessions(
         lambda question, page: {"kind": "success", "question": question}, hold=5.0
     )
-    assert sessions.ask("问", "q-1") == {"kind": "success", "question": "问"}
+    assert sessions.send("问", "q-1") == {"kind": "success", "question": "问"}
 
 
 def test_a_slow_run_returns_pending_then_the_result() -> None:
@@ -32,13 +32,13 @@ def test_a_slow_run_returns_pending_then_the_result() -> None:
         release.wait(5)
         return {"kind": "success", "question": question}
 
-    sessions = AskSessions(slow, hold=0.05)
-    assert sessions.ask("问", "q-1") == {"kind": "pending", "id": "q-1"}
+    sessions = SendSessions(slow, hold=0.05)
+    assert sessions.send("问", "q-1") == {"kind": "pending", "id": "q-1"}
     release.set()
     outcome: dict[str, Any] = {"kind": "pending"}
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        outcome = sessions.ask("问", "q-1")
+        outcome = sessions.send("问", "q-1")
         if outcome.get("kind") != "pending":
             break
         time.sleep(0.01)
@@ -54,10 +54,10 @@ def test_the_same_id_never_starts_a_second_run() -> None:
         release.wait(5)
         return {"kind": "success"}
 
-    sessions = AskSessions(run, hold=0.05)
-    sessions.ask("问", "q-1")
-    sessions.ask("问", "q-1")
-    sessions.ask("问", "q-1")
+    sessions = SendSessions(run, hold=0.05)
+    sessions.send("问", "q-1")
+    sessions.send("问", "q-1")
+    sessions.send("问", "q-1")
     release.set()
     time.sleep(0.1)
     assert runs == ["问"]
@@ -67,8 +67,8 @@ def test_a_crashing_run_is_folded_into_an_unexpected_branch() -> None:
     def boom(question: str, page: str | None) -> dict[str, Any]:
         raise RuntimeError("炸了")
 
-    sessions = AskSessions(boom, hold=5.0)
-    assert sessions.ask("问", "q-1") == {"kind": "unexpected"}
+    sessions = SendSessions(boom, hold=5.0)
+    assert sessions.send("问", "q-1") == {"kind": "unexpected"}
 
 
 def test_older_results_are_forgotten_once_the_keep_window_slides() -> None:
@@ -78,10 +78,10 @@ def test_older_results_are_forgotten_once_the_keep_window_slides() -> None:
         runs.append(question)
         return {"kind": "success", "question": question}
 
-    sessions = AskSessions(run, hold=5.0, keep=1)
-    sessions.ask("一", "a")
-    sessions.ask("二", "b")
-    sessions.ask("三", "a")
+    sessions = SendSessions(run, hold=5.0, keep=1)
+    sessions.send("一", "a")
+    sessions.send("二", "b")
+    sessions.send("三", "a")
     assert runs == ["一", "二", "三"]
 
 
@@ -94,10 +94,10 @@ def test_page_session_id_is_passed_through_to_run() -> None:
         release.wait(5)
         return {"kind": "success"}
 
-    sessions = AskSessions(run, hold=0.05)
-    sessions.ask("一问", "poll-1", "page-A")
-    sessions.ask("二问", "poll-2", "page-B")
-    sessions.ask("三问", "poll-3", None)
+    sessions = SendSessions(run, hold=0.05)
+    sessions.send("一问", "poll-1", "page-A")
+    sessions.send("二问", "poll-2", "page-B")
+    sessions.send("三问", "poll-3", None)
     release.set()
     time.sleep(0.1)
     assert ("一问", "page-A") in got

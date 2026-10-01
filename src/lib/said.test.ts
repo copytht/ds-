@@ -26,7 +26,7 @@ describe("reportSaid", () => {
 
 describe("outsideFences", () => {
   it("摘掉围栏，留下围栏外的话", () => {
-    const text = "先说一句给人听的。\n\n```say\n帮我跑个东西\n```\n\n排完了，等它。";
+    const text = "先说一句给人听的。\n\n```send\n帮我跑个东西\n```\n\n排完了，等它。";
     expect(outsideFences(text)).toBe("先说一句给人听的。\n\n\n\n排完了，等它。");
   });
 
@@ -35,6 +35,6 @@ describe("outsideFences", () => {
   });
 
   it("全是围栏就空", () => {
-    expect(outsideFences("```say\n帮我跑个东西\n```")).toBe("");
+    expect(outsideFences("```send\n帮我跑个东西\n```")).toBe("");
   });
 });

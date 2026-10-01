@@ -1,14 +1,14 @@
 {
-  "description": "围栏对拍：页面 → agent 的 ```say 围栏解析（扩展侧解析，中继只收到已提取的问题正文）。",
+  "description": "围栏对拍：页面 → agent 的 ```send 围栏解析（扩展侧解析，中继只收到已提取的问题正文）。",
   "cases": [
     {
       "name": "有效围栏",
-      "input": "先等一下：\n```say\nrepo 里 dsb 的入口在哪？\n```\n然后继续。",
+      "input": "先等一下：\n```send\nrepo 里 dsb 的入口在哪？\n```\n然后继续。",
       "expectedQuestion": "repo 里 dsb 的入口在哪？"
     },
     {
       "name": "多行问题正文",
-      "input": "```say\n第一行问题\n第二行问题\n```",
+      "input": "```send\n第一行问题\n第二行问题\n```",
       "expectedQuestion": "第一行问题\n第二行问题"
     },
     {
@@ -17,13 +17,13 @@
       "expectedQuestion": null
     },
     {
-      "name": "非 say 围栏不认",
+      "name": "非 send 围栏不认",
       "input": "```note\n随手记\n```",
       "expectedQuestion": null
     },
     {
       "name": "一次排多块只认第一块",
-      "input": "```say\n第一个问题\n```\n中间的话\n```say\n第二个问题\n```",
+      "input": "```send\n第一个问题\n```\n中间的话\n```send\n第二个问题\n```",
       "expectedQuestion": "第一个问题"
     },
     {
@@ -33,7 +33,7 @@
     },
     {
       "name": "围栏没闭合",
-      "input": "```say\n问题还没写完",
+      "input": "```send\n问题还没写完",
       "expectedQuestion": null
     }
   ]

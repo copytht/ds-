@@ -3,9 +3,9 @@ import { defineContentScript } from "wxt/utils/define-content-script";
 
 import {
   actionListener,
-  askRequestMessage,
+  sendRequestMessage,
   pageSessionIdOf,
-  parseAskResponse,
+  parseSendResponse,
   parseChainMessage,
   resultMessage,
   unreachableResult,
@@ -48,9 +48,9 @@ export default defineContentScript({
     const forwardToRelay = async (question: QuestionMessage): Promise<void> => {
       try {
         const response = await browser.runtime.sendMessage(
-          askRequestMessage(question.id, question.question, pageSessionIdOf(location.href)),
+          sendRequestMessage(question.id, question.question, pageSessionIdOf(location.href)),
         );
-        const parsed = parseAskResponse(response);
+        const parsed = parseSendResponse(response);
         window.postMessage(
           parsed === null
             ? unreachableResult(question.id)
@@ -92,7 +92,7 @@ export default defineContentScript({
     };
 
     // background 打过来的动作帧（走 `tabs.sendMessage`）：当场交回一个 ActionOutcome；
-    // 认不出的信封一声不吭，不抢 ask 那条路的消息。
+    // 认不出的信封一声不吭，不抢 send 那条路的消息。
     browser.runtime.onMessage.addListener(actionListener(ACTION_ROSTER));
 
     // 总开关改了立刻广播，刷新与重启靠 storage 自己保持。

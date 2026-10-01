@@ -267,7 +267,7 @@ class ActionServer:
         """
         request = parse_action_request(body)
         if request is None:
-            # 请求本身不合线协议：跟 /ask 一个脾气，非预期响应兜底。
+            # 请求本身不合线协议：跟 /send 一个脾气，非预期响应兜底。
             return 400, {"ok": False, "action": "", "error": ERROR_UNEXPECTED}
         name = request["action"]
         if bearer_token(authorization) != self._token:

@@ -20,10 +20,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm format:check",
-    "mcp:dev": "uv run ds-mcp",
-    "mcp:test": "uv run pytest",
-    "mcp:lint": "uv run ruff check . && uv run ruff format --check .",
-    "quality": "pnpm check && pnpm mcp:lint && pnpm mcp:test"
+    "relay:dev": "uv run dsb",
+    "relay:test": "uv run pytest",
+    "relay:lint": "uv run ruff check . && uv run ruff format --check .",
+    "quality": "pnpm check && pnpm relay:lint && pnpm relay:test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

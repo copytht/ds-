@@ -5,9 +5,9 @@
  * 中间隔着隔离世界那一层；三段路各认各的信封，形状不对的一律不猜（返回 null）。
  *
  * - `question` / `result`：页面世界 ↔ 隔离世界，走 `window.postMessage`；
- * - `ask` 请求 / 响应：隔离世界 ↔ background，走 `browser.runtime`；
+ * - `send` 请求 / 响应：隔离世界 ↔ background，走 `browser.runtime`；
  * - `action` 请求与执行结果：background ↔ 内容脚本，走 `browser.tabs.sendMessage`，
- *   认不出的信封一声不吭（`actionListener` 返回 undefined），不抢 ask 那条路的消息。
+ *   认不出的信封一声不吭（`actionListener` 返回 undefined），不抢 send 那条路的消息。
  */
 
 import { ACTION_ERROR_TAB_GONE, ACTION_ERROR_UNKNOWN, type ActionOutcome } from "./action";
@@ -18,8 +18,8 @@ import { errorPayload, type ReplyPayload } from "./reply";
 /** 页面世界与隔离世界共用的信封标记；认不出这个标记的一概不收。 */
 export const CHAIN_MESSAGE_SOURCE = "ds-/chain";
 /** background 那条路的信封标记。 */
-export const ASK_MESSAGE_TYPE = "ds-/ask";
-/** background → 内容脚本的动作信封标记（照 ask 的套路，各认各的 type）。 */
+export const SEND_MESSAGE_TYPE = "ds-/send";
+/** background → 内容脚本的动作信封标记（照 send 的套路，各认各的 type）。 */
 export const ACTION_MESSAGE_TYPE = "ds-/action";
 
 export type QuestionMessage = {
@@ -38,15 +38,15 @@ export type ResultMessage = {
 
 export type ChainMessage = QuestionMessage | ResultMessage;
 
-export type AskRequest = {
-  readonly type: typeof ASK_MESSAGE_TYPE;
+export type SendRequest = {
+  readonly type: typeof SEND_MESSAGE_TYPE;
   readonly id: string;
   readonly question: string;
   /** 页面会话 id（`/a/chat/s/<id>` 里那段）；认不出是 null，中继落到默认那一份（ADR-0005）。 */
   readonly page: string | null;
 };
 
-export type AskResponse = {
+export type SendResponse = {
   readonly id: string;
   readonly payload: ReplyPayload;
 };
@@ -92,15 +92,15 @@ export function pageSessionIdOf(url: string): string | null {
   return match?.[1] ?? null;
 }
 
-export function askRequestMessage(
+export function sendRequestMessage(
   id: string,
   question: string,
   page: string | null = null,
-): AskRequest {
-  return { type: ASK_MESSAGE_TYPE, id, question, page };
+): SendRequest {
+  return { type: SEND_MESSAGE_TYPE, id, question, page };
 }
 
-export function askResponseMessage(id: string, payload: ReplyPayload): AskResponse {
+export function sendResponseMessage(id: string, payload: ReplyPayload): SendResponse {
   return { id, payload };
 }
 
@@ -133,9 +133,9 @@ export function parseChainMessage(data: unknown): ChainMessage | null {
 }
 
 /** 认隔离世界 → background 的请求。 */
-export function parseAskRequest(data: unknown): AskRequest | null {
+export function parseSendRequest(data: unknown): SendRequest | null {
   if (!isPlainObject(data)) return null;
-  if (data["type"] !== ASK_MESSAGE_TYPE) return null;
+  if (data["type"] !== SEND_MESSAGE_TYPE) return null;
   const id = data["id"];
   const question = data["question"];
   if (!isValidId(id) || !isValidQuestion(question)) return null;
@@ -143,19 +143,19 @@ export function parseAskRequest(data: unknown): AskRequest | null {
   if (raw !== undefined && raw !== null && (typeof raw !== "string" || raw === "")) {
     return null;
   }
-  return askRequestMessage(id, question, typeof raw === "string" ? raw : null);
+  return sendRequestMessage(id, question, typeof raw === "string" ? raw : null);
 }
 
 /** 认 background → 隔离世界的响应；响应丢了按中继没响应兜底交给调用方。 */
-export function parseAskResponse(data: unknown): AskResponse | null {
+export function parseSendResponse(data: unknown): SendResponse | null {
   if (!isPlainObject(data)) return null;
   const id = data["id"];
   const payload = data["payload"];
   if (!isValidId(id) || !isReplyPayload(payload)) return null;
-  return askResponseMessage(id, payload);
+  return sendResponseMessage(id, payload);
 }
 
-/** background → 内容脚本：一件动作裹一层信封（照 ask 的套路，各认各的 type）。 */
+/** background → 内容脚本：一件动作裹一层信封（照 send 的套路，各认各的 type）。 */
 export function actionRequestMessage(frame: ActionFrame): ActionRequest {
   return { type: ACTION_MESSAGE_TYPE, frame };
 }
@@ -184,7 +184,7 @@ export function parseActionRequest(data: unknown): ActionRequest | null {
 /**
  * 内容脚本收动作：认得出的动作帧当场回一个 `ActionOutcome`（同步返回 `true` 保住
  * sendResponse 的通道，结果异步交回），认不出的消息返回 `undefined` 一声不吭——
- * ask 那条路的信封也在这条 runtime 通道上，不能抢。
+ * send 那条路的信封也在这条 runtime 通道上，不能抢。
  *
  * 执行器在本地名册里查：没有就当场回 `unknown-action`，不让 background 白等 30s。
  */

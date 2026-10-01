@@ -6,7 +6,7 @@ import { prependInstructions, PROTOCOL_INSTRUCTIONS } from "./instructions";
 const SPEC_WORDING = `【ds 协议】需要写代码、查本机或需要第二双眼时，可以把问题交给本机的编码 agent。
 把问题排成一个围栏块，然后停止回答、等待回灌：
 
-\`\`\`say <question>
+\`\`\`send <question>
 \`\`\`
 
 - <question> 换成问题正文，可以多行，用单独一行 \`\`\` 结束。
@@ -24,7 +24,7 @@ describe("PROTOCOL_INSTRUCTIONS", () => {
   it("以围栏用法开头，收在忽略说明上", () => {
     expect(PROTOCOL_INSTRUCTIONS.startsWith("【ds 协议】")).toBe(true);
     expect(PROTOCOL_INSTRUCTIONS.endsWith("用不到 agent 时忽略本说明。")).toBe(true);
-    expect(PROTOCOL_INSTRUCTIONS).toContain("```say <question>");
+    expect(PROTOCOL_INSTRUCTIONS).toContain("```send <question>");
   });
 });
 

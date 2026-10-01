@@ -20,7 +20,7 @@ export function hasReplyAnchor(text: string): boolean {
 }
 
 /** 工具栏图标点击后给出的启动命令。 */
-export const RELAY_START_COMMAND = "uv run ds-mcp";
+export const RELAY_START_COMMAND = "uv run dsb";
 
 export type OkPayload = { readonly status: "ok"; readonly answer: string };
 export type ErrorPayload = { readonly status: "error"; readonly error: string };

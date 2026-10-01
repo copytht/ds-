@@ -15,7 +15,7 @@ export const FAILURE_LOG_STORAGE_KEY = "ds-/failures";
 export const FAILURE_LOG_CAP = 20;
 
 /** 失败发生在哪一环——排查方向完全不同，所以必须留。 */
-export type FailureWhere = "health" | "status" | "ask";
+export type FailureWhere = "health" | "status" | "send";
 
 export type FailureRecord = {
   /** 故障**开始**的时刻（同一次故障的延续不另起一条）。 */
@@ -30,7 +30,7 @@ export type FailureRecord = {
 const WHERE_LABELS: Readonly<Record<FailureWhere, string>> = {
   health: "周期探活",
   status: "等待期问现场",
-  ask: "问句",
+  send: "问句",
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -38,7 +38,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isFailureWhere(value: unknown): value is FailureWhere {
-  return value === "health" || value === "status" || value === "ask";
+  return value === "health" || value === "status" || value === "send";
 }
 
 /**

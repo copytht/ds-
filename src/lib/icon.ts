@@ -6,7 +6,7 @@
  * background 只负责把结果交给 `browser.action`，并把点击接到总开关上。
  */
 
-import { FAILURE_RELAY_UNREACHABLE, type AskPhase, type AskStatus } from "./relay";
+import { FAILURE_RELAY_UNREACHABLE, type SendPhase, type SendStatus } from "./relay";
 import { failureNotice, RELAY_START_COMMAND, type FailureNotice } from "./reply";
 
 export type IconState = "off" | "on-reachable" | "on-unreachable";
@@ -33,7 +33,7 @@ const GLYPHS: Readonly<Record<IconState, readonly string[]>> = {
 const CLICK_HINT = "点击切换总开关。";
 
 /** 等待期各阶段的一句话：角标只取头一个字，悬停说全。 */
-function phaseText(phase: AskPhase): string {
+function phaseText(phase: SendPhase): string {
   if (phase === "queued") return "子会话已送出，等模型开工";
   if (phase === "running") return "模型在想";
   if (phase === "writing") return "正在写答复";
@@ -46,7 +46,7 @@ function phaseText(phase: AskPhase): string {
  * 只出现在悬停里（进度不上对话流），所以怎么措辞都归这儿管；
  * 剩余时间是负数或缺着就干脆不提——报一个错的数比不报更糟。
  */
-export function describeAsk(progress: AskStatus): string {
+export function describeSend(progress: SendStatus): string {
   const bits = [phaseText(progress.phase)];
   if (progress.phase === "writing" && progress.written > 0) {
     bits.push(`已写 ${progress.written} 字`);
@@ -62,7 +62,7 @@ export function describeAsk(progress: AskStatus): string {
  * 关与不可达是**硬状态**，压过一切：像素图标万一画不出来，角标要独自把三态撑住，
  * 所以前两个分支绝不能被等待中的阶段盖掉。开着且可达时，才轮到等待现场的头一个字。
  */
-export function badgeText(state: IconState, progress?: AskStatus | null): string {
+export function badgeText(state: IconState, progress?: SendStatus | null): string {
   if (state === "off") return "关";
   if (state === "on-unreachable") return "!";
   if (!progress) return "";
@@ -79,12 +79,12 @@ export function badgeText(state: IconState, progress?: AskStatus | null): string
 export function iconTitle(
   state: IconState,
   notice?: FailureNotice | null,
-  progress?: AskStatus | null,
+  progress?: SendStatus | null,
   lastFailure?: string | null,
 ): string {
   if (state === "off") return `ds-：总开关已关，扩展没有接管页面。${CLICK_HINT}`;
   // 等待现场只在「开着且可达」时才有意义：不可达时手里那份进度已经作废了。
-  const waiting = state === "on-reachable" && progress ? `${describeAsk(progress)}。` : "";
+  const waiting = state === "on-reachable" && progress ? `${describeSend(progress)}。` : "";
   if (state === "on-reachable") {
     const history = lastFailure ? `${lastFailure}。` : "";
     return `ds-：总开关已开，中继可达。${waiting}${history}${CLICK_HINT}`;

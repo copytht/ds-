@@ -1,6 +1,6 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 
-import { detectAskQuestion, extractAssistantAnswer } from "../src/lib/answer";
+import { detectSendQuestion, extractAssistantAnswer } from "../src/lib/answer";
 import { parseChainMessage, questionMessage, type ResultMessage } from "../src/lib/channel";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
 import { isOutgoingChatRequest, rewriteOutgoingBody } from "../src/lib/inject";
@@ -15,7 +15,7 @@ type XhrTarget = { readonly method: string; readonly url: string };
  * 页面世界这一侧有两件事（总开关关着时一件都不做：不接管、不注入、不检测、不回灌）：
  *
  * 1. **协议说明注入**：把 `fetch` 与 `XMLHttpRequest` 包一层，在请求体离开页面之前改写它。
- * 2. **回灌链**：同一次包下来的**响应体**就是检测点（模型回答的唯一来源）→ 认出 ```say 围栏 →
+ * 2. **回灌链**：同一次包下来的**响应体**就是检测点（模型回答的唯一来源）→ 认出 ```send 围栏 →
  *    问题交给隔离世界去打中继 → 结果进**唯一出站口**排队，出站窗口到点放行（ADR-0002）→
  *    回灌作为一条真实用户消息发进当前会话。
  *
@@ -90,20 +90,20 @@ export default defineContentScript({
     /** 检测：只从「发消息那条出站的响应体」里认围栏，认出就把问题交出去。 */
     function detect(raw: string): void {
       if (!enabled) return;
-      const question = detectAskQuestion(raw);
+      const question = detectSendQuestion(raw);
       // **围栏之外的话**一律报给协调者：有围栏时围栏转子 agent，围栏以外那些别的话不能被吞掉。
       // 回灌自己（首行是 `agent:`）不算：那是桥送回去的，再报就成了回声。
       const said = outsideFences(extractAssistantAnswer(raw));
       if (said !== "" && !hasReplyAnchor(said)) void reportSaid(said);
       if (question === null) {
-        // 静默分支曾让「围栏在、但形状认不出」无法定位，这里只在真有 say 字样时吭声。
-        if (raw.includes("```say")) {
-          console.log(`[ds-] 响应里有 \`\`\`say 字样却没认出围栏（${raw.length} 字）`);
+        // 静默分支曾让「围栏在、但形状认不出」无法定位，这里只在真有 send 字样时吭声。
+        if (raw.includes("```send")) {
+          console.log(`[ds-] 响应里有 \`\`\`send 字样却没认出围栏（${raw.length} 字）`);
         }
         return;
       }
-      const id = nextMessageId("ask");
-      console.log(`[ds-] 认出 say 围栏（${id}），问题交给中继`);
+      const id = nextMessageId("send");
+      console.log(`[ds-] 认出 send 围栏（${id}），问题交给中继`);
       window.postMessage(questionMessage(id, question), "*");
     }
 
