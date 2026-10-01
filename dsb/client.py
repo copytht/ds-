@@ -317,57 +317,70 @@ class OpencodeClient:
         self._wall_clock = wall_clock
         self._cached: Mapping[str, Any] | None = None
         self._progress = AskProgress()
-        # 可继续子级的三样现场状态：id（跨问复用）、这一轮是首问还是续问、
+        # 可继续子级的现场**按页面会话分表**（ADR-0005 的已知天花板）：
+        # 每条页面会话各有一份——子会话 id（跨问复用）、首问还是续问、
         # 以及「一个子会话同时只接一轮」的那把锁（后到的问句排队，见 ask）。
-        self._child_id: str | None = None
-        self._prompted = False
-        self._ask_lock = threading.Lock()
+        # key 是页面会话 id；认不出会话 id 的老调用（curl / 测试）落 "" 这一份，
+        # 行为与原先单会话一致。
+        self._children: dict[str, str] = {}
+        self._prompted: dict[str, bool] = {}
+        self._ask_locks: dict[str, threading.Lock] = {}
+        # 只管上面三张表的元操作（增删查、建锁）：与 key 级的 _ask_locks 不同层，
+        # 锁序永远是「先 key 锁、后这张表的锁」，不会死锁。
+        self._children_lock = threading.Lock()
 
     @property
     def progress(self) -> AskProgress:
-        """在途问句的现场进度（`GET /status` 就读它）。"""
+        """在途问句的现场进度（`GET /status` 就读它）。
+
+        **单份**：多页面会话并行时这里只能报其中一条（最近开始的），`/status`
+        也因此只能报一条。要按会话看现场得把 `/status` 也改成聚合，眼下用不着
+        ——验收只要求上下文不串、复用不错、收摊全删。
+        """
         return self._progress
+
+    def _lock_for(self, key: str) -> threading.Lock:
+        """一条页面会话一把锁：同一个 key 的轮次串行，不同 key 各走各的。
+
+        与 :mod:`dsb.actions` 里按 target 分锁同构——那把锁管「同标签页串行」，
+        这把锁管「同页面会话串行」；后到的问句在锁上等（串行才谈得上「接着往下答」）。
+        """
+        with self._children_lock:
+            lock = self._ask_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._ask_locks[key] = lock
+            return lock
 
     def warm_up(self) -> bool:
         """启动时现读一次端口与口令；读不到返回 False，之后按请求重试。"""
         return self._service() is not None
 
-    def ask(self, question: str) -> Mapping[str, Any]:
+    def ask(self, question: str, page_session_id: str | None = None) -> Mapping[str, Any]:
         """问一句 → outcome（``success`` 带消息体，其余是失败分支）。
 
-        主 agent 是**页面上的 DeepSeek 模型**——它排一个围栏就是一次调用；委派链上的
-        父级是它，历史也在它那边，所以子会话不带本机这条主对话的任何内容，本机主对话
-        全程不排队、不阻塞、也不参与。
+        ``page_session_id`` 是**页面会话 id**（``/a/chat/s/<id>`` 里那段）：每条页面
+        会话各起一个子会话、各自一把锁、各自的首问/续问框，上下文互不串（ADR-0005）。
+        传 ``None``（curl / 老调用）落到 ``""`` 那一份，与原先单会话行为一致。
 
-        子会话是**可继续**的：起一次，之后每问都往同一个 id 里送，上一轮的问答留给
-        下一轮当上下文（后期会被反复调用）。所以每问都得先办三件事——
-
-        1. **排队**：一个子会话同时只接一轮，后到的问句在锁上等（一个 id 上的轮次
-           串行，才谈得上「接着往下答」）；
-        2. **等空闲**：复用前先等上一轮收干净。忙时 prompt 不是排队而是 steer，新问题
-           会被插进没跑完的那一轮里（真机实测 ``delivery: "steer"``）；
-        3. **掐尾巴**：这一轮没答成，剩下的半个轮次就地掐掉，别拖到下一问。
-
-        三件事都只动**子会话**，主对话和页面谁都不碰。
+        每问先办三件事：**排队**（一条会话一把锁，锁上等）、**等空闲**（复用前
+        先等上一轮收干净——忙时 prompt 是 steer 不是排队）、**掐尾巴**（没答成
+        就掐掉这一轮，子会话留着）。三件事都只动子会话，主对话与页面谁都不碰。
         """
         if not self._session_id:
-            # 没有 sessionID：在线协议的错误码里没有专码，走非预期响应兜底。
             return {"kind": "unexpected"}
         service = self._service()
         if service is None:
             return {"kind": "not-running"}
-        with self._ask_lock:
+        key = page_session_id or ""
+        with self._lock_for(key):
             self._progress.begin()
-            # 只有一个界：**静默**超过 idle_timeout 才判超时；只要 opencode 还在动就一直等。
-            # 「能跑多久」不归中继管——那是 opencode 的 `agent.steps` / provider `timeout` 的事。
             started = self._now()
             child_id: str | None = None
             try:
-                child_id, reused = self._ensure_child(service)
+                child_id, reused = self._ensure_child(service, key)
                 if reused:
                     self._quiesce(service, child_id, started + self._idle_timeout)
-                # 事件流抢在 prompt 之前挂上：晚一步就吃不到 execution.started，
-                # 轮到「开工」那一步的现场就白瞎了。挂不上不是错，等待会退化成老的阻塞 wait。
                 stream = self._open_events(service)
                 try:
                     baseline_ms = int(self._wall_clock() * 1000)
@@ -375,49 +388,50 @@ class OpencodeClient:
                         service,
                         "POST",
                         f"/api/session/{child_id}/prompt",
-                        {"text": answer_prompt(question, followup=self._prompted)},
+                        {"text": answer_prompt(question, followup=self._prompted.get(key, False))},
                     )
-                    self._prompted = True  # 消息真送进去了，下一问才轮到续问那个框
+                    self._prompted[key] = True
                     outcome = self._await_answer(service, child_id, baseline_ms, started, stream)
                 finally:
                     if stream is not None:
                         stream.close()
                 if outcome["kind"] != "success":
-                    # 子会话留着复用，但**这一轮**不能留：超时/断流时它可能还在写，
-                    # 下一问会被 steer 进这半个轮次里。
                     self._interrupt(service, child_id)
                 return outcome
-            except Exception as exc:  # 任何现场都折成可识别分支，不往外抛裸堆栈
-                # 异常退出同样算没答成（等消息那个 GET 半路炸了也算）：掐一轮再折算。
+            except Exception as exc:
                 if child_id is not None:
                     self._interrupt(service, child_id)
                 outcome = outcome_from_exception(exc)
                 if outcome["kind"] == "not-running":
-                    self._cached = None  # 服务可能换了端口，下次请求现读
+                    self._cached = None
                 return outcome
             finally:
-                self._progress.finish()  # 无论成败，/status 都不能留个幽灵问句
+                self._progress.finish()
 
-    def _ensure_child(self, service: Mapping[str, Any]) -> tuple[str, bool]:
-        """这次要用的子会话，回 ``(id, 是不是复用)``
+    def _ensure_child(self, service: Mapping[str, Any], key: str) -> tuple[str, bool]:
+        """``key`` 这条页面会话这次要用的子会话，回 ``(id, 是不是复用)``
         ——缓存的那个还活着就接着用，没了或压根没有就新起一个。
 
         先 GET 一遍只为认出「会话没了」——被人删过、或 opencode 换过实例。**只有 4xx
         算没**（会话层面的否定）：5xx 与连不上照原样抛出去，由 ``ask`` 折成对应分支，
         别把「服务出故障」误判成「会话没了」而白起一个新子会话。
         """
-        if self._child_id is not None:
+        with self._children_lock:
+            child_id = self._children.get(key)
+        if child_id is not None:
             try:
-                self._call(service, "GET", f"/api/session/{self._child_id}")
-                return self._child_id, True
+                self._call(service, "GET", f"/api/session/{child_id}")
+                return child_id, True
             except urllib.error.HTTPError as exc:
                 if not 400 <= exc.code < 500:
                     raise
-                self._child_id = None  # 会话没了：下面重新起一个
-        # 新子会话空着出生：记账清零，下一问从首问那个框起。
-        self._child_id = self._spawn(service)
-        self._prompted = False
-        return self._child_id, False
+                with self._children_lock:
+                    self._children.pop(key, None)
+        spawned = self._spawn(service)
+        with self._children_lock:
+            self._children[key] = spawned
+            self._prompted[key] = False
+        return spawned, False
 
     def _quiesce(self, service: Mapping[str, Any], child_id: str, deadline: float) -> None:
         """等复用的子会话空闲，再把新问题送进去；等不到就掐掉那一轮继续。
@@ -452,13 +466,20 @@ class OpencodeClient:
             self._call(service, "POST", f"/api/session/{child_id}/interrupt")
 
     def dispose(self) -> None:
-        """收摊时删掉这次起的子会话（进程崩溃漏下的那些管不了，下次问会另起一个）。"""
+        """收摊时把这次起过的**所有**子会话逐个删掉。
+
+        进程崩溃漏下的那些管不了，下次问会另起一个。删之前先把表清空——即便某个
+        DELETE 失败，也不会拖着一条已经无主的 id 到下一轮去。
+        """
         service = self._service()
-        if service is None or self._child_id is None:
+        if service is None:
             return
-        self._dispose(service, self._child_id)
-        self._child_id = None
-        self._prompted = False
+        with self._children_lock:
+            children = list(self._children.values())
+            self._children.clear()
+            self._prompted.clear()
+        for child_id in children:
+            self._dispose(service, child_id)
 
     def _spawn(self, service: Mapping[str, Any]) -> str:
         """起一个**零消息**的子会话，返回它的 id（dsh 的 spawn：空对话起步）。

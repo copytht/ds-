@@ -1,6 +1,7 @@
 """按 id 复用的问句会话：一趟短轮询没等到就带同一个 id 再来；同一 id 只起一份活。
 
-长 fetch 会被浏览器连同 service worker 一起收走（答复就此丢掉），所以 ``/ask`` 拆成短轮询。
+页面会话 id（/a/chat/s/<id> 里那段）这一层只透传，分表与子会话复用全在
+dsb.client.OpencodeClient 那头（ADR-0005）。
 """
 
 from __future__ import annotations
@@ -13,21 +14,21 @@ from dsb.asks import AskSessions
 
 
 def test_without_an_id_it_blocks_like_before() -> None:
-    """curl / 测试那条老路：不带 id，一次问到底。"""
-    sessions = AskSessions(lambda question: {"kind": "success", "question": question})
+    sessions = AskSessions(lambda question, page: {"kind": "success", "question": question})
     assert sessions.ask("问") == {"kind": "success", "question": "问"}
 
 
 def test_a_quick_run_comes_back_in_the_same_poll() -> None:
-    sessions = AskSessions(lambda question: {"kind": "success", "question": question}, hold=5.0)
+    sessions = AskSessions(
+        lambda question, page: {"kind": "success", "question": question}, hold=5.0
+    )
     assert sessions.ask("问", "q-1") == {"kind": "success", "question": "问"}
 
 
 def test_a_slow_run_returns_pending_then_the_result() -> None:
-    """没出结果就回 pending（带 id），接着问同一 id 一定拿得到——结果留着，不重跑。"""
     release = threading.Event()
 
-    def slow(question: str) -> dict[str, Any]:
+    def slow(question: str, page: str | None) -> dict[str, Any]:
         release.wait(5)
         return {"kind": "success", "question": question}
 
@@ -48,7 +49,7 @@ def test_the_same_id_never_starts_a_second_run() -> None:
     runs: list[str] = []
     release = threading.Event()
 
-    def run(question: str) -> dict[str, Any]:
+    def run(question: str, page: str | None) -> dict[str, Any]:
         runs.append(question)
         release.wait(5)
         return {"kind": "success"}
@@ -63,7 +64,7 @@ def test_the_same_id_never_starts_a_second_run() -> None:
 
 
 def test_a_crashing_run_is_folded_into_an_unexpected_branch() -> None:
-    def boom(question: str) -> dict[str, Any]:
+    def boom(question: str, page: str | None) -> dict[str, Any]:
         raise RuntimeError("炸了")
 
     sessions = AskSessions(boom, hold=5.0)
@@ -73,12 +74,32 @@ def test_a_crashing_run_is_folded_into_an_unexpected_branch() -> None:
 def test_older_results_are_forgotten_once_the_keep_window_slides() -> None:
     runs: list[str] = []
 
-    def run(question: str) -> dict[str, Any]:
+    def run(question: str, page: str | None) -> dict[str, Any]:
         runs.append(question)
         return {"kind": "success", "question": question}
 
     sessions = AskSessions(run, hold=5.0, keep=1)
     sessions.ask("一", "a")
     sessions.ask("二", "b")
-    sessions.ask("三", "a")  # a 早被挤出去，重新起一份活
+    sessions.ask("三", "a")
     assert runs == ["一", "二", "三"]
+
+
+def test_page_session_id_is_passed_through_to_run() -> None:
+    got: list[tuple[str, str | None]] = []
+    release = threading.Event()
+
+    def run(question: str, page: str | None) -> dict[str, Any]:
+        got.append((question, page))
+        release.wait(5)
+        return {"kind": "success"}
+
+    sessions = AskSessions(run, hold=0.05)
+    sessions.ask("一问", "poll-1", "page-A")
+    sessions.ask("二问", "poll-2", "page-B")
+    sessions.ask("三问", "poll-3", None)
+    release.set()
+    time.sleep(0.1)
+    assert ("一问", "page-A") in got
+    assert ("二问", "page-B") in got
+    assert ("三问", None) in got

@@ -42,6 +42,8 @@ export type AskRequest = {
   readonly type: typeof ASK_MESSAGE_TYPE;
   readonly id: string;
   readonly question: string;
+  /** 页面会话 id（`/a/chat/s/<id>` 里那段）；认不出是 null，中继落到默认那一份（ADR-0005）。 */
+  readonly page: string | null;
 };
 
 export type AskResponse = {
@@ -81,8 +83,21 @@ export function resultMessage(id: string, payload: ReplyPayload): ResultMessage 
   return { source: CHAIN_MESSAGE_SOURCE, kind: "result", id, payload };
 }
 
-export function askRequestMessage(id: string, question: string): AskRequest {
-  return { type: ASK_MESSAGE_TYPE, id, question };
+/**
+ * 从页面地址里抠出页面会话 id（/a/chat/s/<id> 里那段）；认不出返回 null。
+ * 中继按它分表：每条页面会话各自一个子会话、各自的锁（ADR-0005）。
+ */
+export function pageSessionIdOf(url: string): string | null {
+  const match = /\/a\/chat\/s\/([^/?#]+)/.exec(url);
+  return match?.[1] ?? null;
+}
+
+export function askRequestMessage(
+  id: string,
+  question: string,
+  page: string | null = null,
+): AskRequest {
+  return { type: ASK_MESSAGE_TYPE, id, question, page };
 }
 
 export function askResponseMessage(id: string, payload: ReplyPayload): AskResponse {
@@ -124,7 +139,11 @@ export function parseAskRequest(data: unknown): AskRequest | null {
   const id = data["id"];
   const question = data["question"];
   if (!isValidId(id) || !isValidQuestion(question)) return null;
-  return askRequestMessage(id, question);
+  const raw = data["page"];
+  if (raw !== undefined && raw !== null && (typeof raw !== "string" || raw === "")) {
+    return null;
+  }
+  return askRequestMessage(id, question, typeof raw === "string" ? raw : null);
 }
 
 /** 认 background → 隔离世界的响应；响应丢了按中继没响应兜底交给调用方。 */

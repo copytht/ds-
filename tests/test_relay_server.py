@@ -46,10 +46,17 @@ class StubAsk:
         self.error = error
         self.questions: list[str] = []
         self.session_ids: list[str | None] = []
+        self.page_session_ids: list[str | None] = []
 
-    def __call__(self, question: str, session_id: str | None = None) -> Any:
+    def __call__(
+        self,
+        question: str,
+        session_id: str | None = None,
+        page_session_id: str | None = None,
+    ) -> Any:
         self.questions.append(question)
         self.session_ids.append(session_id)
+        self.page_session_ids.append(page_session_id)
         if self.error is not None:
             raise self.error
         return self.outcome
@@ -212,19 +219,35 @@ def test_parse_question_only_accepts_the_wire_shape() -> None:
     assert parse_question("中文不是 json".encode()) is None
 
 
-def test_parse_ask_request_takes_an_optional_poll_id() -> None:
-    """id 让一趟长问句能被拆成几趟短轮询；不合形状的 id 同罪于问题缺失。"""
-    assert parse_ask_request(json.dumps({"question": "问"}).encode()) == ("问", None)
-    assert parse_ask_request(json.dumps({"question": "问", "id": "q-1"}).encode()) == ("问", "q-1")
+def test_parse_ask_request_takes_an_optional_poll_id_and_page_id() -> None:
+    """id 让一趟长问句能被拆成几趟短轮询；page 让中继按页面会话分表（ADR-0005）。"""
+    assert parse_ask_request(json.dumps({"question": "问"}).encode()) == ("问", None, None)
+    assert parse_ask_request(json.dumps({"question": "问", "id": "q-1"}).encode()) == (
+        "问",
+        "q-1",
+        None,
+    )
+    assert parse_ask_request(json.dumps({"question": "问", "page": "abc"}).encode()) == (
+        "问",
+        None,
+        "abc",
+    )
+    assert parse_ask_request(
+        json.dumps({"question": "问", "id": "q-1", "page": "abc"}).encode()
+    ) == ("问", "q-1", "abc")
     assert parse_ask_request(json.dumps({"question": "问", "id": ""}).encode()) is None
     assert parse_ask_request(json.dumps({"question": "问", "id": 7}).encode()) is None
+    assert parse_ask_request(json.dumps({"question": "问", "page": ""}).encode()) is None
+    assert parse_ask_request(json.dumps({"question": "问", "page": 7}).encode()) is None
 
 
-def test_route_hands_the_poll_id_through() -> None:
+def test_route_hands_the_poll_id_and_page_id_through() -> None:
     ask = StubAsk()
-    status, _ = route("POST", "/ask", json.dumps({"question": "问", "id": "q-1"}).encode(), ask)
+    body = json.dumps({"question": "问", "id": "q-1", "page": "abc"}).encode()
+    status, _ = route("POST", "/ask", body, ask)
     assert status == 200
     assert ask.session_ids == ["q-1"]
+    assert ask.page_session_ids == ["abc"]
 
 
 def test_resolve_port_prefers_the_process_environment(

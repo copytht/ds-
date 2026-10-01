@@ -63,8 +63,8 @@ export function relayHealthUrl(): string {
  * 约 5 分钟，更长的问句一过线就被浏览器连人带连接一起收走——中继算完了也写不回来（真机日志
  * 里两次 `BrokenPipe`）。带同一个 id 接着问，中继把结果交出来。
  */
-export function relayAskBody(question: string, id: string): string {
-  return JSON.stringify({ question, id });
+export function relayAskBody(question: string, id: string, page: string | null = null): string {
+  return page === null ? JSON.stringify({ question, id }) : JSON.stringify({ question, id, page });
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

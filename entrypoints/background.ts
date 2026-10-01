@@ -339,10 +339,13 @@ export default defineBackground(() => {
    * 答复丢掉（真机撞过两次），页面永远等不到回灌、整条链就静默停摆。轮询的每一趟都是短的，
    * 后台线程一直有事做；结果留在中继手里，掉线也能再取。
    */
-  async function askRelay(question: string): Promise<ReplyPayload> {
+  async function askRelay(question: string, page: string | null = null): Promise<ReplyPayload> {
     const releaseKeepAlive = keepAliveWhileAsking();
     const stopStatusPolling = startStatusPolling();
-    const id = nextMessageId("poll");
+    // 轮询 id 必须**跨 SW 重载唯一**：中继按 id 缓存结果（同一 id 只起一份活），
+    // 而 nextMessageId 的计数器在 service worker 重启后从 0 重来——再用 `poll-1`
+    // 就会把上一轮的缓存结果当成这一轮的答复送回来（真机撞过：连发不同指令、回灌永远是同一条）。
+    const id = `poll-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     const deadline = Date.now() + RELAY_TIMEOUT_MS;
     let misses = 0;
     try {
@@ -352,7 +355,7 @@ export default defineBackground(() => {
           const response = await fetchWithTimeout(relayAskUrl(), RELAY_POLL_TIMEOUT_MS, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: relayAskBody(question, id),
+            body: relayAskBody(question, id, page),
           });
           try {
             outcome = parseRelayResponse(response.status, await response.text());
@@ -490,7 +493,7 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener((message) => {
     const request = parseAskRequest(message);
     if (request === null) return undefined;
-    return askRelay(request.question).then((payload) => {
+    return askRelay(request.question, request.page).then((payload) => {
       applyOutcome(payload);
       return askResponseMessage(request.id, payload);
     });

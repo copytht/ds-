@@ -4,6 +4,7 @@ import { defineContentScript } from "wxt/utils/define-content-script";
 import {
   actionListener,
   askRequestMessage,
+  pageSessionIdOf,
   parseAskResponse,
   parseChainMessage,
   resultMessage,
@@ -47,7 +48,7 @@ export default defineContentScript({
     const forwardToRelay = async (question: QuestionMessage): Promise<void> => {
       try {
         const response = await browser.runtime.sendMessage(
-          askRequestMessage(question.id, question.question),
+          askRequestMessage(question.id, question.question, pageSessionIdOf(location.href)),
         );
         const parsed = parseAskResponse(response);
         window.postMessage(

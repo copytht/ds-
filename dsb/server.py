@@ -60,7 +60,7 @@ PORT_ENV_KEY = "DSB_PORT"
 IDLE_TIMEOUT_ENV_KEY = "DSB_IDLE_TIMEOUT"
 MAX_BODY_BYTES = 64 * 1024
 
-AskFn = Callable[[str, str | None], Mapping[str, Any]]
+AskFn = Callable[[str, str | None, str | None], Mapping[str, Any]]
 ProbeFn = Callable[[], str]
 StatusFn = Callable[[], Mapping[str, Any]]
 Payload = dict[str, Any]
@@ -81,11 +81,13 @@ BROKE_EVENT: dict[str, str] = {
 }
 
 
-def parse_ask_request(body: bytes) -> tuple[str, str | None] | None:
-    """请求体 → ``(问题, id)``；``id`` 可选（扩展短轮询带它，curl 不带）。
+def parse_ask_request(body: bytes) -> tuple[str, str | None, str | None] | None:
+    """请求体 → ``(问题, 轮询 id, 页面会话 id)``；后两者都可选。
 
-    不合 ``{"question": "...", "id"?: "..."}`` 的一律 None。带 id 是为了让一趟长问句能被
-    拆成几趟短轮询（长 fetch 会被浏览器收走，见 :mod:`dsb.asks`）。
+    不合 ``{"question": "...", "id"?: "...", "page"?: "..."}`` 的一律 None。
+    - ``id``：短轮询 id（一趟长问句拆成几趟短 fetch，见 :mod:`dsb.asks`）；
+    - ``page``：**页面会话 id**（``/a/chat/s/<id>`` 里那段）。中继按它分表：每条页面会话
+      各自一个子会话、各自的锁、各自的首问/续问框（ADR-0005）。
     """
     try:
         data = json.loads(body.decode("utf-8"))
@@ -96,10 +98,15 @@ def parse_ask_request(body: bytes) -> tuple[str, str | None] | None:
     question = data.get("question")
     if not isinstance(question, str) or not question.strip():
         return None
-    session_id = data.get("id")
-    if session_id is not None and (not isinstance(session_id, str) or not session_id.strip()):
+    poll_id = data.get("id")
+    if poll_id is not None and (not isinstance(poll_id, str) or not poll_id.strip()):
         return None
-    return question, session_id
+    page_session_id = data.get("page")
+    if page_session_id is not None and (
+        not isinstance(page_session_id, str) or not page_session_id.strip()
+    ):
+        return None
+    return question, poll_id, page_session_id
 
 
 def parse_question(body: bytes) -> str | None:
@@ -150,9 +157,9 @@ def route(
         if parsed is None:
             # 请求本身不合线协议：错误码只在册的三个，这里落非预期响应兜底。
             return 400, error_payload(ERROR_UNEXPECTED)
-        question, session_id = parsed
+        question, poll_id, page_session_id = parsed
         # 不在这儿接异常：route 是纯接缝，谁出岔子谁留痕——接住就等于把现场销毁了。
-        return 200, payload_from_outcome(ask(question, session_id))
+        return 200, payload_from_outcome(ask(question, poll_id, page_session_id))
     if method == "POST" and path == ACTION_PATH:
         if action is None:
             return 404, error_payload(ERROR_UNEXPECTED)
