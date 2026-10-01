@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { reportSaid, SAID_URL } from "./said";
+import { outsideFences, reportSaid, SAID_URL } from "./said";
 
 describe("reportSaid", () => {
   it("把正文原样 POST 到收话端点", async () => {
@@ -21,5 +21,20 @@ describe("reportSaid", () => {
     }) as unknown as typeof fetch;
 
     await expect(reportSaid("x", boom)).resolves.toBeUndefined();
+  });
+});
+
+describe("outsideFences", () => {
+  it("摘掉围栏，留下围栏外的话", () => {
+    const text = "先说一句给人听的。\n\n```say\n帮我跑个东西\n```\n\n排完了，等它。";
+    expect(outsideFences(text)).toBe("先说一句给人听的。\n\n\n\n排完了，等它。");
+  });
+
+  it("没有围栏就原样", () => {
+    expect(outsideFences("只有一句普通回答。")).toBe("只有一句普通回答。");
+  });
+
+  it("全是围栏就空", () => {
+    expect(outsideFences("```say\n帮我跑个东西\n```")).toBe("");
   });
 });

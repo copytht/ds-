@@ -6,7 +6,7 @@ import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gat
 import { isOutgoingChatRequest, rewriteOutgoingBody } from "../src/lib/inject";
 import { nextMessageId } from "../src/lib/id";
 import { buildReply, hasReplyAnchor, isInjectableReply } from "../src/lib/reply";
-import { reportSaid } from "../src/lib/said";
+import { outsideFences, reportSaid } from "../src/lib/said";
 import { parseToggleMessage, wantStateMessage } from "../src/lib/toggle";
 
 type XhrTarget = { readonly method: string; readonly url: string };
@@ -91,15 +91,15 @@ export default defineContentScript({
     function detect(raw: string): void {
       if (!enabled) return;
       const question = detectAskQuestion(raw);
+      // **围栏之外的话**一律报给协调者：有围栏时围栏转子 agent，围栏以外那些别的话不能被吞掉。
+      // 回灌自己（首行是 `agent:`）不算：那是桥送回去的，再报就成了回声。
+      const said = outsideFences(extractAssistantAnswer(raw));
+      if (said !== "" && !hasReplyAnchor(said)) void reportSaid(said);
       if (question === null) {
         // 静默分支曾让「围栏在、但形状认不出」无法定位，这里只在真有 say 字样时吭声。
         if (raw.includes("```say")) {
           console.log(`[ds-] 响应里有 \`\`\`say 字样却没认出围栏（${raw.length} 字）`);
         }
-        // 没有围栏 = 这段是**说给人**的：报给中继，别无声无息丢掉。
-        // 回灌自己（首行是 `agent:`）不算：那是桥送回去的，再报就成了回声。
-        const said = extractAssistantAnswer(raw).trim();
-        if (said !== "" && !hasReplyAnchor(said)) void reportSaid(said);
         return;
       }
       const id = nextMessageId("ask");

@@ -19,3 +19,13 @@ export async function reportSaid(text: string, post: typeof fetch = fetch): Prom
     // 报不上就报不上：别把「让人看见」这件事变成链子上的一环。
   }
 }
+
+/**
+ * 一条消息里**围栏之外**的部分：所有 ```say 块摘掉，剩下的给协调者看。
+ *
+ * 一条消息可以既有围栏（转给子 agent）又有别的话（说给人）——那些别的话不能跟着围栏一起
+ * 被吞掉。摘完是空的就什么都不报。
+ */
+export function outsideFences(text: string): string {
+  return text.replace(/```say[\s\S]*?```/g, "").trim();
+}
