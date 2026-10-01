@@ -37,6 +37,9 @@ export default defineContentScript({
     let gate: Gate = newGate();
     let flushTimer: number | null = null;
 
+    /** 消息级锁定的身份表：围栏 id → 标签（无标签是 null），回灌时取走即删。 */
+    const pendingLabels = new Map<string, string | null>();
+
     const xhrTargets = new WeakMap<XMLHttpRequest, XhrTarget>();
     const watchingXhrs = new WeakSet<XMLHttpRequest>();
 
@@ -77,25 +80,27 @@ export default defineContentScript({
 
     /** 中继给了 status: ok 的载荷才排进队列；单来回，不重试、无兜底。 */
     function handleResult(result: ResultMessage): void {
+      const label = pendingLabels.get(result.id) ?? null;
+      pendingLabels.delete(result.id);
       if (!enabled) return;
       if (!isInjectableReply(result.payload)) {
         const error = result.payload.status === "error" ? result.payload.error : "unknown";
         console.log(`[ds-] 中继没问成（${error}），失败不进对话流`);
         return;
       }
-      gate = enqueue(gate, buildReply(result.payload), Date.now(), Math.random);
+      gate = enqueue(gate, buildReply(result.payload, label), Date.now(), Math.random);
       scheduleFlush();
     }
 
     /** 检测：只从「发消息那条出站的响应体」里认围栏，认出就把问题交出去。 */
     function detect(raw: string): void {
       if (!enabled) return;
-      const question = detectAskQuestion(raw);
+      const fence = detectAskQuestion(raw);
       // **围栏之外的话**一律报给协调者：有围栏时围栏转子 agent，围栏以外那些别的话不能被吞掉。
       // 回灌自己（首行是 `agent:`）不算：那是桥送回去的，再报就成了回声。
       const said = outsideFences(extractAssistantAnswer(raw));
       if (said !== "" && !hasReplyAnchor(said)) void reportSaid(said);
-      if (question === null) {
+      if (fence === null) {
         // 静默分支曾让「围栏在、但形状认不出」无法定位，这里只在真有 say 字样时吭声。
         if (raw.includes("```say")) {
           console.log(`[ds-] 响应里有 \`\`\`say 字样却没认出围栏（${raw.length} 字）`);
@@ -103,8 +108,10 @@ export default defineContentScript({
         return;
       }
       const id = nextMessageId("ask");
-      console.log(`[ds-] 认出 say 围栏（${id}），问题交给中继`);
-      window.postMessage(questionMessage(id, question), "*");
+      if (!pendingLabels.has(id)) pendingLabels.set(id, fence.label);
+      const tag = fence.label === null ? "" : ` #${fence.label}`;
+      console.log(`[ds-] 认出 say 围栏（${id}${tag}），问题交给中继`);
+      window.postMessage(questionMessage(id, fence.question), "*");
     }
 
     /** 读响应体；读不出来就这轮不检测，不猜。 */
@@ -214,6 +221,7 @@ export default defineContentScript({
           flushTimer = null;
         }
         gate = newGate();
+        pendingLabels.clear();
       }
       console.log(
         `[ds-] 总开关${next ? "打开" : "关闭"}，协议说明${next ? "开始注入" : "不再注入"}，回灌链${next ? "开始工作" : "整条不再工作"}`,

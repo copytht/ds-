@@ -16,7 +16,8 @@ export const REPLY_ANCHOR = "agent:";
  * 回灌要当真实用户消息发出去，协议说明不能插到它前面——首行锚必须留在第一行。
  */
 export function hasReplyAnchor(text: string): boolean {
-  return text.split("\n")[0] === REPLY_ANCHOR;
+  const first = text.split("\n")[0] ?? "";
+  return first === REPLY_ANCHOR || first.startsWith(`${REPLY_ANCHOR}#`);
 }
 
 /** 工具栏图标点击后给出的启动命令。 */
@@ -51,12 +52,13 @@ export function errorPayload(code: string): ErrorPayload {
  * 再把会冒充结构的正文行（`agent:`、`status: …`、`answer[N]: …`、`- …`、`# …`）
  * 封起来，所以正文里没有歧义边界。
  */
-export function buildReply(payload: ReplyPayload): string {
+export function buildReply(payload: ReplyPayload, label: string | null = null): string {
+  const anchor = label === null ? REPLY_ANCHOR : `${REPLY_ANCHOR}#${label}`;
   if (payload.status === "ok") {
     const answer = payload.answer.split("\n").map((text) => ({ text }));
-    return `${REPLY_ANCHOR}\n${encode({ status: "ok", answer })}`;
+    return `${anchor}\n${encode({ status: "ok", answer })}`;
   }
-  return `${REPLY_ANCHOR}\n${encode(payload)}`;
+  return `${anchor}\n${encode(payload)}`;
 }
 
 /** 失败不进对话流：只有 status: ok 的载荷才会被回灌进页面。 */

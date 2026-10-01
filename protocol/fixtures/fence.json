@@ -4,37 +4,62 @@
     {
       "name": "有效围栏",
       "input": "先等一下：\n```say\nrepo 里 dsb 的入口在哪？\n```\n然后继续。",
-      "expectedQuestion": "repo 里 dsb 的入口在哪？"
+      "expectedQuestion": "repo 里 dsb 的入口在哪？",
+      "expectedLabel": null
     },
     {
       "name": "多行问题正文",
       "input": "```say\n第一行问题\n第二行问题\n```",
-      "expectedQuestion": "第一行问题\n第二行问题"
+      "expectedQuestion": "第一行问题\n第二行问题",
+      "expectedLabel": null
     },
     {
       "name": "普通代码块不算围栏",
       "input": "```py\nprint('hi')\n```",
-      "expectedQuestion": null
+      "expectedQuestion": null,
+      "expectedLabel": null
     },
     {
       "name": "非 say 围栏不认",
       "input": "```note\n随手记\n```",
-      "expectedQuestion": null
+      "expectedQuestion": null,
+      "expectedLabel": null
     },
     {
       "name": "一次排多块只认第一块",
       "input": "```say\n第一个问题\n```\n中间的话\n```say\n第二个问题\n```",
-      "expectedQuestion": "第一个问题"
+      "expectedQuestion": "第一个问题",
+      "expectedLabel": null
     },
     {
       "name": "没有围栏",
       "input": "今天天气不错。",
-      "expectedQuestion": null
+      "expectedQuestion": null,
+      "expectedLabel": null
     },
     {
       "name": "围栏没闭合",
       "input": "```say\n问题还没写完",
-      "expectedQuestion": null
+      "expectedQuestion": null,
+      "expectedLabel": null
+    },
+    {
+      "name": "带标签的围栏",
+      "input": "```say#a3f7\n带标签的问题\n```",
+      "expectedQuestion": "带标签的问题",
+      "expectedLabel": "a3f7"
+    },
+    {
+      "name": "标签与问题同一行",
+      "input": "```say#x1 合在一行的问题\n```",
+      "expectedQuestion": "合在一行的问题",
+      "expectedLabel": "x1"
+    },
+    {
+      "name": "标签字符不合规就整段当正文",
+      "input": "```say#A3\n问题\n```",
+      "expectedQuestion": "#A3\n问题",
+      "expectedLabel": null
     }
   ]
 }

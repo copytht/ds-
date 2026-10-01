@@ -55,6 +55,9 @@ def test_fence_cases_are_coherent() -> None:
         assert isinstance(case["input"], str)
         question = case["expectedQuestion"]
         assert question is None or isinstance(question, str)
+        assert "expectedLabel" in case, case["name"]
+        label = case["expectedLabel"]
+        assert label is None or (isinstance(label, str) and label), case["name"]
         if question is not None:
             assert question
             assert "```say" in case["input"], case["name"]
@@ -67,9 +70,27 @@ def test_reply_payloads_follow_the_schema() -> None:
 
 def test_reply_message_starts_with_the_anchor() -> None:
     for case in raw_cases("reply.json"):
+        assert "label" in case, case["name"]
+        label = case["label"]
+        assert label is None or (isinstance(label, str) and label), case["name"]
         lines = case["expectedMessage"].split("\n")
-        assert lines[0] == REPLY_ANCHOR, case["name"]
+        expected_anchor = REPLY_ANCHOR if label is None else f"{REPLY_ANCHOR}#{label}"
+        assert lines[0] == expected_anchor, case["name"]
         assert "status:" in "\n".join(lines[1:]), case["name"]
+
+
+def test_fence_and_reply_share_the_label_shape() -> None:
+    """两半的标签必须同形：fence 抽得出的标签，reply 首行也必带上它。"""
+    fence_labels = {
+        case["expectedLabel"]
+        for case in raw_cases("fence.json")
+        if case["expectedLabel"] is not None
+    }
+    reply_labels = {case["label"] for case in raw_cases("reply.json") if case["label"] is not None}
+    assert fence_labels, "fence.json 里应至少有一条带标签的 case"
+    assert reply_labels, "reply.json 里应至少有一条带标签的 case"
+    for label in fence_labels | reply_labels:
+        assert isinstance(label, str) and label.islower() and label.isalnum(), label
 
 
 def test_reply_message_has_no_newline_escapes() -> None:

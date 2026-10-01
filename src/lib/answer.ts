@@ -14,7 +14,7 @@
  * 必须先把片段拼成正文，才谈得上认围栏。
  */
 
-import { parseAskFence } from "./fence";
+import { parseAskFence, type AskFence } from "./fence";
 
 /** 围栏起始的字面量：兜底路径要在原文里找到它，再交给 parseAskFence。 */
 const ASK_FENCE_OPENING = "```say";
@@ -226,7 +226,7 @@ function cutFencedBlock(block: string): string {
  * 响应原文 → 围栏里的问题；没排围栏、排的是普通代码块或非 say 围栏、
  * 一次排多块（只认第一块）、围栏没闭合，都返回 null。
  */
-export function detectAskQuestion(raw: string): string | null {
+export function detectAskQuestion(raw: string): AskFence | null {
   // OT 形状认得：只在拼好的正文里找围栏，认不出就是没排——不去原文里捞
   // （思考过程里常常举一个 ```say 的例子，捞了会把例子当真）。
   const ot = otAnswer(raw);
