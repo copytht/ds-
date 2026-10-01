@@ -14,11 +14,10 @@ import {
 } from "./reply";
 
 describe("buildReply · 共享 fixture", () => {
-  for (const { name, payload, label, expectedMessage } of fixtureCases<ReplyCase>("reply.json")) {
+  for (const { name, payload, expectedMessage } of fixtureCases<ReplyCase>("reply.json")) {
     it(name, () => {
-      expect(buildReply(payload, label)).toBe(expectedMessage);
-      const first = expectedMessage.split("\n")[0] ?? "";
-      expect(first === REPLY_ANCHOR || first.startsWith(`${REPLY_ANCHOR}#`)).toBe(true);
+      expect(buildReply(payload)).toBe(expectedMessage);
+      expect(expectedMessage.split("\n")[0]).toBe(REPLY_ANCHOR);
     });
   }
 });
@@ -28,12 +27,6 @@ describe("buildReply", () => {
     expect(buildReply(okPayload("答案")).split("\n")[0]).toBe(REPLY_ANCHOR);
     expect(buildReply(errorPayload("opencode-timeout")).split("\n")[0]).toBe(REPLY_ANCHOR);
     expect(buildReply(okPayload("答案")).startsWith(`agent:\n`)).toBe(true);
-  });
-
-  it("带标签时首行锚是 agent:#<label>", () => {
-    expect(buildReply(okPayload("答案"), "a3f7").split("\n")[0]).toBe("agent:#a3f7");
-    expect(buildReply(errorPayload("x"), "a3f7").split("\n")[0]).toBe("agent:#a3f7");
-    expect(buildReply(okPayload("答案"), null).split("\n")[0]).toBe("agent:");
   });
 
   it("载荷是 TOON，status 在第一行", () => {
@@ -86,8 +79,6 @@ describe("hasReplyAnchor · 首行锚认领", () => {
     expect(hasReplyAnchor(buildReply(okPayload("答复")))).toBe(true);
     expect(hasReplyAnchor("agent:")).toBe(true);
     expect(hasReplyAnchor("agent:\nstatus: ok\nanswer: x")).toBe(true);
-    expect(hasReplyAnchor("agent:#a3f7")).toBe(true);
-    expect(hasReplyAnchor("agent:#a3f7\nstatus: ok")).toBe(true);
   });
 
   it("第一行不是首行锚的不算", () => {

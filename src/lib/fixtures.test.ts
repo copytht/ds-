@@ -82,8 +82,7 @@ describe("回灌 fixture 自洽", () => {
   it("预期消息首行是首行锚，且带着载荷", () => {
     for (const { expectedMessage } of fixtureCases<ReplyCase>("reply.json")) {
       const lines = expectedMessage.split("\n");
-      const first = lines[0] ?? "";
-      expect(first === REPLY_ANCHOR || first.startsWith(`${REPLY_ANCHOR}#`)).toBe(true);
+      expect(lines[0]).toBe(REPLY_ANCHOR);
       expect(lines.slice(1).join("\n")).toContain("status:");
     }
   });

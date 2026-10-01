@@ -7,8 +7,7 @@
         "status": "ok",
         "answer": "入口在 dsb/server.py。"
       },
-      "expectedMessage": "agent:\nstatus: ok\nanswer[1]{text}:\n  入口在 dsb/server.py。",
-      "label": null
+      "expectedMessage": "agent:\nstatus: ok\nanswer[1]{text}:\n  入口在 dsb/server.py。"
     },
     {
       "name": "回灌成功载荷含多行答案",
@@ -16,8 +15,7 @@
         "status": "ok",
         "answer": "第一行\n第二行"
       },
-      "expectedMessage": "agent:\nstatus: ok\nanswer[2]{text}:\n  第一行\n  第二行",
-      "label": null
+      "expectedMessage": "agent:\nstatus: ok\nanswer[2]{text}:\n  第一行\n  第二行"
     },
     {
       "name": "回灌失败载荷",
@@ -25,26 +23,7 @@
         "status": "error",
         "error": "opencode-not-running"
       },
-      "expectedMessage": "agent:\nstatus: error\nerror: opencode-not-running",
-      "label": null
-    },
-    {
-      "name": "带标签的回灌成功载荷",
-      "payload": {
-        "status": "ok",
-        "answer": "入口在 dsb/server.py。"
-      },
-      "label": "a3f7",
-      "expectedMessage": "agent:#a3f7\nstatus: ok\nanswer[1]{text}:\n  入口在 dsb/server.py。"
-    },
-    {
-      "name": "带标签的回灌失败载荷",
-      "payload": {
-        "status": "error",
-        "error": "opencode-not-running"
-      },
-      "label": "x1",
-      "expectedMessage": "agent:#x1\nstatus: error\nerror: opencode-not-running"
+      "expectedMessage": "agent:\nstatus: error\nerror: opencode-not-running"
     }
   ]
 }

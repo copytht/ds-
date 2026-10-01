@@ -38,17 +38,14 @@ describe("extractAssistantAnswer", () => {
 describe("detectAskQuestion · 检测点", () => {
   it("流式回答里排了围栏就认出问题（多行问题也认）", () => {
     const raw = sse(["先说结论。\n```say ", "仓库里 dsb 的入口在哪？\n第二行补充\n```"]);
-    expect(detectAskQuestion(raw)).toEqual({
-      question: "仓库里 dsb 的入口在哪？\n第二行补充",
-      label: null,
-    });
+    expect(detectAskQuestion(raw)).toBe("仓库里 dsb 的入口在哪？\n第二行补充");
   });
 
   it("整块 JSON 回答里的围栏同样认得", () => {
     const raw = JSON.stringify({
       choices: [{ message: { content: "```say\n问题正文\n```" } }],
     });
-    expect(detectAskQuestion(raw)).toEqual({ question: "问题正文", label: null });
+    expect(detectAskQuestion(raw)).toBe("问题正文");
   });
 
   it("普通代码块不触发", () => {
@@ -66,14 +63,9 @@ describe("detectAskQuestion · 检测点", () => {
     expect(detectAskQuestion(raw)).toBeNull();
   });
 
-  it("围栏带标签时标签被带出来", () => {
-    const raw = sse(["```say#a3f7\n带标签的问题\n```"]);
-    expect(detectAskQuestion(raw)).toEqual({ question: "带标签的问题", label: "a3f7" });
-  });
-
   it("一次排多块只认第一块", () => {
     const raw = sse(["```say\n第一块\n```\n中间\n```say\n第二块\n```"]);
-    expect(detectAskQuestion(raw)).toEqual({ question: "第一块", label: null });
+    expect(detectAskQuestion(raw)).toBe("第一块");
   });
 
   it("围栏没闭合按无效输入处理", () => {
@@ -94,7 +86,7 @@ describe("detectAskQuestion · 检测点", () => {
   it("正文形状认不出时，兜底路径仍从转义原文里认出围栏", () => {
     const raw = `data: ${JSON.stringify({ unknown_shape: "看这里\n```say\n兜底问题\n```" })}\n`;
     expect(extractAssistantAnswer(raw)).toBe("");
-    expect(detectAskQuestion(raw)).toEqual({ question: "兜底问题", label: null });
+    expect(detectAskQuestion(raw)).toBe("兜底问题");
   });
 
   it("认不出的响应整段返回 null，不猜", () => {
@@ -149,10 +141,7 @@ describe("detectAskQuestion · 站点那条 OT 增量流", () => {
   });
 
   it("围栏被切成两个载荷也认得出问题", () => {
-    expect(detectAskQuestion(REAL_OT_STREAM)).toEqual({
-      question: "CONTEXT.md 这个文件是干什么的？",
-      label: null,
-    });
+    expect(detectAskQuestion(REAL_OT_STREAM)).toBe("CONTEXT.md 这个文件是干什么的？");
   });
 
   it("思考片里举的围栏例子不算回答", () => {

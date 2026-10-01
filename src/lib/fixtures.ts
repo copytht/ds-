@@ -15,14 +15,12 @@ export type FenceCase = {
   readonly name: string;
   readonly input: string;
   readonly expectedQuestion: string | null;
-  readonly expectedLabel: string | null;
 };
 
 /** 回灌组装对拍（`reply.json`）。 */
 export type ReplyCase = {
   readonly name: string;
   readonly payload: ReplyPayload;
-  readonly label: string | null;
   readonly expectedMessage: string;
 };
 
