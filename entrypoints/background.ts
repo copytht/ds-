@@ -1,9 +1,9 @@
 import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 
-import { postActionResult, runAction } from "../src/lib/action";
+import { postActionResult, runAction, sendMessageSendToTab } from "../src/lib/action";
 import { createActionStream, type ActionFrame } from "../src/lib/actionstream";
-import { askResponseMessage, parseAskRequest } from "../src/lib/channel";
+import { actionRequestMessage, askResponseMessage, parseAskRequest } from "../src/lib/channel";
 import {
   FAILURE_LOG_STORAGE_KEY,
   describeLastFailure,
@@ -398,18 +398,24 @@ export default defineBackground(() => {
     }
   }
 
-  /** 收到一件动作：现读总开关 → 执行 → 把结果交回中继（不执行就什么都不回，等它判超时）。 */
+  /** 收到一件动作：现读总开关 → 执行 → 把结果交回中继。**每条路都当场回一个册子里的码**
+   * （`disabled` / `unknown-action` / `tab-gone` / 成功的 `result`），只有回传本身失败
+   * 才留给中继按 timeout 收场。 */
   async function handleAction(frame: ActionFrame): Promise<void> {
     try {
       const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
       const outcome = await runAction(frame, {
         enabled: readToggle(stored[TOGGLE_STORAGE_KEY]),
         tabs: { query: (query) => browser.tabs.query(query) },
+        // 带 target 的动作投进那个标签页：帧裹一层 ds-/action 送过去；
+        // 标签页没了 / 内容脚本没注入（sendMessage 抛错）都折成 tab-gone，不冒泡。
+        sendToTab: sendMessageSendToTab((tabId, frameToTab) =>
+          browser.tabs.sendMessage(tabId, actionRequestMessage(frameToTab)),
+        ),
       });
-      if (outcome === null) return;
       await postActionResult((url, init) => fetch(url, init), frame.id, outcome);
     } catch (error) {
-      // 执行失败不冒泡：这条流上的失败由中继按 timeout 收场，不进对话流。
+      // 回传失败不冒泡：这条流上的失败由中继按 timeout 收场，不进对话流。
       console.log("[ds-] 动作没成", frame.action, error);
     }
   }

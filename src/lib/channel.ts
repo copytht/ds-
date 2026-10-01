@@ -5,9 +5,13 @@
  * 中间隔着隔离世界那一层；三段路各认各的信封，形状不对的一律不猜（返回 null）。
  *
  * - `question` / `result`：页面世界 ↔ 隔离世界，走 `window.postMessage`；
- * - `ask` 请求 / 响应：隔离世界 ↔ background，走 `browser.runtime`。
+ * - `ask` 请求 / 响应：隔离世界 ↔ background，走 `browser.runtime`；
+ * - `action` 请求与执行结果：background ↔ 内容脚本，走 `browser.tabs.sendMessage`，
+ *   认不出的信封一声不吭（`actionListener` 返回 undefined），不抢 ask 那条路的消息。
  */
 
+import { ACTION_ERROR_TAB_GONE, ACTION_ERROR_UNKNOWN, type ActionOutcome } from "./action";
+import type { ActionFrame } from "./actionstream";
 import { FAILURE_RELAY_UNREACHABLE } from "./relay";
 import { errorPayload, type ReplyPayload } from "./reply";
 
@@ -15,6 +19,8 @@ import { errorPayload, type ReplyPayload } from "./reply";
 export const CHAIN_MESSAGE_SOURCE = "ds-/chain";
 /** background 那条路的信封标记。 */
 export const ASK_MESSAGE_TYPE = "ds-/ask";
+/** background → 内容脚本的动作信封标记（照 ask 的套路，各认各的 type）。 */
+export const ACTION_MESSAGE_TYPE = "ds-/action";
 
 export type QuestionMessage = {
   readonly source: typeof CHAIN_MESSAGE_SOURCE;
@@ -42,6 +48,18 @@ export type AskResponse = {
   readonly id: string;
   readonly payload: ReplyPayload;
 };
+
+/** background → 内容脚本的一件动作：动作帧裹一层 `ds-/action`。 */
+export type ActionRequest = {
+  readonly type: typeof ACTION_MESSAGE_TYPE;
+  readonly frame: ActionFrame;
+};
+
+/**
+ * 内容脚本的本地名册：动作名 → 执行器。本轮空着（页面里的只读动作还没实现），
+ * 实现第一个就往里加一项——认不出的动作由收信那层当场回 `unknown-action`。
+ */
+export type ActionRoster = Readonly<Record<string, (frame: ActionFrame) => unknown>>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -116,6 +134,67 @@ export function parseAskResponse(data: unknown): AskResponse | null {
   const payload = data["payload"];
   if (!isValidId(id) || !isReplyPayload(payload)) return null;
   return askResponseMessage(id, payload);
+}
+
+/** background → 内容脚本：一件动作裹一层信封（照 ask 的套路，各认各的 type）。 */
+export function actionRequestMessage(frame: ActionFrame): ActionRequest {
+  return { type: ACTION_MESSAGE_TYPE, frame };
+}
+
+/**
+ * 认动作信封：type 对得上、帧的字段都合线协议才收。
+ * id / action 必须非空字符串，target 是字符串或 null，params 是对象（缺省当空，
+ * 与 dsb 的 `parse_action_request` 一个脾气）——认不出就 null，收信那层因此不响应。
+ */
+export function parseActionRequest(data: unknown): ActionRequest | null {
+  if (!isPlainObject(data)) return null;
+  if (data["type"] !== ACTION_MESSAGE_TYPE) return null;
+  const value = data["frame"];
+  if (!isPlainObject(value)) return null;
+  if (value["type"] !== "action") return null;
+  const id = value["id"];
+  const action = value["action"];
+  if (!isValidId(id) || !isValidId(action)) return null;
+  const target = value["target"];
+  if (target !== null && typeof target !== "string") return null;
+  const params = value["params"] ?? {};
+  if (!isPlainObject(params)) return null;
+  return actionRequestMessage({ type: "action", id, action, params, target });
+}
+
+/**
+ * 内容脚本收动作：认得出的动作帧当场回一个 `ActionOutcome`（同步返回 `true` 保住
+ * sendResponse 的通道，结果异步交回），认不出的消息返回 `undefined` 一声不吭——
+ * ask 那条路的信封也在这条 runtime 通道上，不能抢。
+ *
+ * 执行器在本地名册里查：没有就当场回 `unknown-action`，不让 background 白等 30s。
+ */
+export function actionListener(
+  roster: ActionRoster,
+): (
+  message: unknown,
+  sender: unknown,
+  sendResponse: (outcome: ActionOutcome) => void,
+) => true | undefined {
+  return (message, _sender, sendResponse) => {
+    const request = parseActionRequest(message);
+    if (request === null) return undefined;
+    // 执行器抛错也要回话：只挂 onFulfilled，一旦 handler reject，sendResponse 永不调用，
+    // port 一直挂着直到被 GC，background 那边又变回等满 timeout。
+    void executeRoster(request.frame, roster).then(sendResponse, () =>
+      sendResponse({ ok: false, error: ACTION_ERROR_TAB_GONE }),
+    );
+    return true;
+  };
+}
+
+async function executeRoster(frame: ActionFrame, roster: ActionRoster): Promise<ActionOutcome> {
+  // hasOwn 而不是下标直取：名册是普通对象，`"toString"` 这种键会捞到原型上的东西。
+  const handler = Object.prototype.hasOwnProperty.call(roster, frame.action)
+    ? roster[frame.action]
+    : undefined;
+  if (handler === undefined) return { ok: false, error: ACTION_ERROR_UNKNOWN };
+  return { ok: true, result: await handler(frame) };
 }
 
 /** background 没答上来时的兜底载荷：中继没有响应（同样不进对话流）。 */

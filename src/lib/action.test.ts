@@ -1,17 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ACTION_ERROR_DISABLED,
+  ACTION_ERROR_UNKNOWN,
   ACTION_RESULT_URL,
   listSessionTabs,
   postActionResult,
   runAction,
+  sendMessageSendToTab,
+  isActionOutcome,
   type ActionContext,
   type SessionTab,
   type TabCandidate,
   type TabsApi,
 } from "./action";
 import type { ActionFrame } from "./actionstream";
-import { fixtureCases, type ActionCase } from "./fixtures";
+import { fixtureCases, fixtureFile, type ActionCase, type ActionFixtureFile } from "./fixtures";
 
 function tabsApi(tabs: readonly TabCandidate[]): TabsApi & { calls: number } {
   const api = {
@@ -66,7 +70,7 @@ describe("tabs.list 执行器", () => {
     const outcome = await runAction(frame(), context({ tabs: tabsApi([DEEPSEEK_TAB]) }));
 
     expect(outcome).toEqual({ ok: true, result: { tabs: [DEEPSEEK_TAB] } });
-    if (outcome === null || !outcome.ok) throw new Error("tabs.list 没回结果");
+    if (!outcome.ok) throw new Error("tabs.list 没回结果");
     const result = outcome.result as { tabs: SessionTab[] };
     expect(Object.keys(result)).toEqual(Object.keys(fixture.response.result as object));
     expect(Object.keys(result.tabs[0] ?? {})).toEqual(
@@ -75,13 +79,25 @@ describe("tabs.list 执行器", () => {
   });
 });
 
-describe("总开关闸（关着不执行，与中继 disabled 同义）", () => {
-  it("关着时连 tabs.query 都不问，也不回传", async () => {
+describe("总开关闸（关着不执行，回 disabled 让中继别等满超时）", () => {
+  it("关着时连 tabs.query 都不问，但回一个册子里的 disabled", async () => {
     const tabs = tabsApi([DEEPSEEK_TAB]);
     const outcome = await runAction(frame(), context({ enabled: false, tabs }));
 
-    expect(outcome).toBeNull();
+    expect(outcome).toEqual({ ok: false, error: "disabled" });
     expect(tabs.calls).toBe(0);
+  });
+
+  it("disabled 与共享 fixture 的样例同一份（TS 与 Python 共读）", () => {
+    const book = (fixtureFile("action.json") as ActionFixtureFile).errorCodes.map(
+      ({ code }) => code,
+    );
+    expect(book).toContain(ACTION_ERROR_DISABLED);
+    const sample = fixtureCases<ActionCase>("action.json").find(
+      ({ name }) => name === "总开关关闭失败",
+    )?.response;
+    if (!sample || sample.ok) throw new Error("fixture 里没有关开关的失败样例");
+    expect(sample.error).toBe(ACTION_ERROR_DISABLED);
   });
 });
 
@@ -103,13 +119,75 @@ describe("按 target 路由", () => {
     expect(outcome).toEqual({ ok: true, result: { text: "页面上的字" } });
   });
 
-  it("target 认不出或没有执行口 → 不回传", async () => {
-    expect(await runAction(frame({ target: "不是数字" }), context())).toBeNull();
-    expect(await runAction(frame({ target: "42" }), context())).toBeNull();
+  it("target 不是纯数字串 → tab-gone（认不出的地址等于标签页不在）", async () => {
+    for (const bad of ["不是数字", "42.5", "", " ", "1e3", "0x10", "-1", "+1", "9".repeat(30)]) {
+      expect(await runAction(frame({ target: bad }), context())).toEqual({
+        ok: false,
+        error: "tab-gone",
+      });
+    }
   });
 
-  it("还没实现的动作不回传，让中继按 timeout 收场", async () => {
-    expect(await runAction(frame({ action: "page.state" }), context())).toBeNull();
+  it("没接执行口 → tab-gone（background 接上后不该出现，留作类型兜底）", async () => {
+    expect(await runAction(frame({ target: "42" }), context())).toEqual({
+      ok: false,
+      error: "tab-gone",
+    });
+  });
+});
+
+describe("sendToTab 接线（background 侧的 browser.tabs.sendMessage）", () => {
+  it("对端答的是同构载荷就原样透传", async () => {
+    const seen: Array<{ tabId: number; frame: ActionFrame }> = [];
+    const sendToTab = sendMessageSendToTab(async (tabId, frame) => {
+      seen.push({ tabId, frame });
+      return { ok: true, result: { text: "页面上的字" } };
+    });
+
+    const outcome = await sendToTab(42, frame({ target: "42" }));
+
+    expect(seen).toEqual([{ tabId: 42, frame: frame({ target: "42" }) }]);
+    expect(outcome).toEqual({ ok: true, result: { text: "页面上的字" } });
+  });
+
+  it("sendMessage 抛错（标签页没了 / 内容脚本没注入）→ tab-gone，不冒泡", async () => {
+    const sendToTab = sendMessageSendToTab(async () => {
+      throw new Error("Could not establish connection");
+    });
+
+    expect(await sendToTab(42, frame({ target: "42" }))).toEqual({
+      ok: false,
+      error: "tab-gone",
+    });
+  });
+
+  it("对端答的形状认不出 → tab-gone（不当成功收下）", async () => {
+    const sendToTab = sendMessageSendToTab(async () => ({ ok: "yes" }));
+
+    expect(await sendToTab(42, frame({ target: "42" }))).toEqual({
+      ok: false,
+      error: "tab-gone",
+    });
+  });
+});
+
+describe("名册有、扩展还没实现的动作", () => {
+  it("还没实现的动作当场回 unknown-action，别让中继等满 30s", async () => {
+    const outcome = await runAction(frame({ action: "page.state" }), context());
+
+    expect(outcome).toEqual({ ok: false, error: "unknown-action" });
+  });
+
+  it("unknown-action 与共享 fixture 的样例同一份（TS 与 Python 共读）", () => {
+    const book = (fixtureFile("action.json") as ActionFixtureFile).errorCodes.map(
+      ({ code }) => code,
+    );
+    expect(book).toContain(ACTION_ERROR_UNKNOWN);
+    const sample = fixtureCases<ActionCase>("action.json").find(
+      ({ name }) => name === "未知动作失败",
+    )?.response;
+    if (!sample || sample.ok) throw new Error("fixture 里没有未知动作的失败样例");
+    expect(sample.error).toBe(ACTION_ERROR_UNKNOWN);
   });
 });
 
@@ -132,5 +210,28 @@ describe("结果回传", () => {
       url: ACTION_RESULT_URL,
       body: { id: "7-x", ok: false, error: "tab-gone" },
     });
+  });
+});
+
+describe("isActionOutcome 形状", () => {
+  it("ok:true 必须有非 undefined 的 result", () => {
+    expect(isActionOutcome({ ok: true, result: null })).toBe(true);
+    expect(isActionOutcome({ ok: true, result: 0 })).toBe(true);
+    expect(isActionOutcome({ ok: true, result: undefined })).toBe(false);
+    expect(isActionOutcome({ ok: true })).toBe(false);
+  });
+
+  it("ok:false 必须有非空 error 字符串", () => {
+    expect(isActionOutcome({ ok: false, error: "x" })).toBe(true);
+    expect(isActionOutcome({ ok: false, error: "" })).toBe(false);
+    expect(isActionOutcome({ ok: false })).toBe(false);
+    expect(isActionOutcome({ ok: false, error: 42 })).toBe(false);
+  });
+
+  it("不是对象 / ok 非布尔一律不认", () => {
+    expect(isActionOutcome(null)).toBe(false);
+    expect(isActionOutcome(undefined)).toBe(false);
+    expect(isActionOutcome("yes")).toBe(false);
+    expect(isActionOutcome({ ok: "yes" })).toBe(false);
   });
 });

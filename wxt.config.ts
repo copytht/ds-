@@ -6,7 +6,16 @@ export default defineConfig({
     description: "Browser extension built with WXT",
     // 权限钉死：站点范围在申请权限的那一刻就固定为 chat.deepseek.com，
     // 运行期不接受任何切换或扩权；总开关不参与站点判定。
-    host_permissions: ["https://chat.deepseek.com/*"],
+    host_permissions: [
+      "https://chat.deepseek.com/*",
+      // ADR-0007：/actions（SSE）与 /action/result 是「读侧」，中继故意不下发 CORS 头
+      // （挡网页跨源读）。扩展走 host_permissions 直连，绕过 CORS，不靠中继放头。
+      // 不带端口的形式匹配所有端口，DSB_PORT 改了这里不用动；带端口那行是显式兜底，
+      // 免得个别 Chrome 版本不认省略写法。
+      "http://127.0.0.1/*",
+      "http://127.0.0.1:8787/*",
+      "http://localhost/*",
+    ],
     // 浏览器权限只有两个，都跟站点范围无关：storage 存总开关（默认关），
     // alarms 排周期探活（开关开着才排，30s 一次）。站点权限与浏览器权限分开，
     // 不靠任何浏览器权限去扩站点范围。

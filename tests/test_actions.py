@@ -117,6 +117,16 @@ class FakeSubscriber:
         outcome = self.on_action(frame)
         if outcome is None:
             return  # 拿到了故意不回传
+        # 带 "ok" 键的 dict = 假扩展直接回一个 ActionOutcome：原样透传 ok / result / error，
+        # 只补帧的 id（这是「扩展回失败码 → submit 原样拿到」那条环的入口）。
+        # 其余一律走老路：当成 result 塞进成功回传，既有用例（{"tabs": …} / {} / {"echo": …}）
+        # 零影响。
+        if isinstance(outcome, dict) and "ok" in outcome:
+            post_json(
+                f"{self.base}{ACTION_RESULT_PATH}",
+                {"id": frame["id"], **outcome},
+            )
+            return
         post_json(
             f"{self.base}{ACTION_RESULT_PATH}",
             {"id": frame["id"], "ok": True, "result": outcome},
@@ -390,6 +400,50 @@ def test_unknown_action_comes_back_as_unknown_action(
 
     assert status == 200
     assert payload == {"ok": False, "action": "page.nope", "error": "unknown-action"}
+
+
+def test_subscriber_replies_disabled_comes_back_disabled(
+    actions: tuple[str, ActionServer, str],
+) -> None:
+    base, _service, token = actions
+    with FakeSubscriber(base, lambda _frame: {"ok": False, "error": "disabled"}) as subscriber:
+        subscriber.wait_subscribed()
+        status, payload = submit(base, REQUEST, token)
+
+    assert status == 200
+    assert payload == {"ok": False, "action": "tabs.list", "error": "disabled"}
+
+
+def test_subscriber_replies_unknown_action_comes_back_unknown_action(
+    actions: tuple[str, ActionServer, str],
+) -> None:
+    base, _service, token = actions
+
+    def unknown(_frame: object) -> dict[str, object]:
+        return {"ok": False, "error": "unknown-action"}
+
+    with FakeSubscriber(base, unknown) as subscriber:
+        subscriber.wait_subscribed()
+        status, payload = submit(base, REQUEST, token)
+
+    assert status == 200
+    assert payload == {"ok": False, "action": "tabs.list", "error": "unknown-action"}
+
+
+def test_subscriber_replies_tab_gone_comes_back_tab_gone(
+    actions: tuple[str, ActionServer, str],
+) -> None:
+    base, _service, token = actions
+    with FakeSubscriber(base, lambda _frame: {"ok": False, "error": "tab-gone"}) as subscriber:
+        subscriber.wait_subscribed()
+        status, payload = submit(
+            base,
+            {"action": "tabs.list", "params": {}, "target": "42"},
+            token,
+        )
+
+    assert status == 200
+    assert payload == {"ok": False, "action": "tabs.list", "error": "tab-gone"}
 
 
 def test_no_result_within_the_budget_times_out(

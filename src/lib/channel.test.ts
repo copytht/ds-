@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  actionListener,
+  actionRequestMessage,
+  ACTION_MESSAGE_TYPE,
   askRequestMessage,
   askResponseMessage,
   CHAIN_MESSAGE_SOURCE,
   isReplyPayload,
+  parseActionRequest,
   parseAskRequest,
   parseAskResponse,
   parseChainMessage,
@@ -12,6 +16,7 @@ import {
   resultMessage,
   unreachableResult,
 } from "./channel";
+import type { ActionFrame } from "./actionstream";
 
 describe("页面世界 ↔ 隔离世界的信封", () => {
   it("问题信封原样过", () => {
@@ -129,5 +134,98 @@ describe("isReplyPayload · 载荷同构", () => {
     expect(isReplyPayload(null)).toBe(false);
     expect(isReplyPayload([])).toBe(false);
     expect(isReplyPayload({ status: "loading" })).toBe(false);
+  });
+});
+
+/** 一件带 target 的动作帧：background 打包、内容脚本拆包都用它对拍。 */
+const ACTION_FRAME: ActionFrame = {
+  type: "action",
+  id: "7-x",
+  action: "page.state",
+  params: { x: 1 },
+  target: "42",
+};
+
+describe("background ↔ 内容脚本的动作信封", () => {
+  it("请求原样过，响应是同构载荷", () => {
+    const request = actionRequestMessage(ACTION_FRAME);
+    expect(request.type).toBe(ACTION_MESSAGE_TYPE);
+    expect(parseActionRequest(request)?.frame).toEqual(ACTION_FRAME);
+  });
+
+  it("缺字段 / 错 type / 形状不对的一律 null", () => {
+    expect(parseActionRequest(undefined)).toBeNull();
+    expect(parseActionRequest({ type: "ds-/ask", id: "1", question: "q" })).toBeNull();
+    expect(parseActionRequest({ type: ACTION_MESSAGE_TYPE })).toBeNull();
+    expect(
+      parseActionRequest({ type: ACTION_MESSAGE_TYPE, frame: { ...ACTION_FRAME, id: "" } }),
+    ).toBeNull();
+    expect(
+      parseActionRequest({ type: ACTION_MESSAGE_TYPE, frame: { ...ACTION_FRAME, action: "" } }),
+    ).toBeNull();
+    expect(
+      parseActionRequest({ type: ACTION_MESSAGE_TYPE, frame: { ...ACTION_FRAME, target: 42 } }),
+    ).toBeNull();
+    expect(
+      parseActionRequest({ type: ACTION_MESSAGE_TYPE, frame: { ...ACTION_FRAME, params: [] } }),
+    ).toBeNull();
+    expect(
+      parseActionRequest({ type: ACTION_MESSAGE_TYPE, frame: { ...ACTION_FRAME, type: "nope" } }),
+    ).toBeNull();
+  });
+});
+
+describe("内容脚本的动作收信（entrypoints/content.ts 接的那一层）", () => {
+  /** listener 是同步返回、sendResponse 异步被调：等一轮微任务再断言。 */
+  async function respond(
+    roster: Parameters<typeof actionListener>[0],
+    message: unknown,
+  ): Promise<ReturnType<typeof vi.fn>> {
+    const sendResponse = vi.fn();
+    const kept = actionListener(roster)(message, undefined, sendResponse);
+    expect(kept).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    return sendResponse;
+  }
+
+  it("认得出的动作帧当场回一个 ActionOutcome（本轮名册空 → unknown-action）", async () => {
+    const sendResponse = await respond({}, { type: ACTION_MESSAGE_TYPE, frame: ACTION_FRAME });
+
+    expect(sendResponse).toHaveBeenCalledTimes(1);
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: "unknown-action" });
+  });
+
+  it("名册里有的动作走执行器，结果当 result 收下", async () => {
+    const handler = vi.fn(() => ({ state: "idle" }));
+    const sendResponse = await respond(
+      { "page.state": handler },
+      {
+        type: ACTION_MESSAGE_TYPE,
+        frame: ACTION_FRAME,
+      },
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true, result: { state: "idle" } });
+  });
+
+  it("认不出的消息不响应（不抢 ask 的消息、不回 undefined 当结果）", async () => {
+    const sendResponse = vi.fn();
+    expect(
+      actionListener({})(askRequestMessage("ask-1", "问题"), undefined, sendResponse),
+    ).toBeUndefined();
+    expect(actionListener({})({ hello: "world" }, undefined, sendResponse)).toBeUndefined();
+    expect(actionListener({})(undefined, undefined, sendResponse)).toBeUndefined();
+    expect(
+      actionListener({})(
+        { type: ACTION_MESSAGE_TYPE, frame: { ...ACTION_FRAME, id: "" } },
+        undefined,
+        sendResponse,
+      ),
+    ).toBeUndefined();
+
+    await Promise.resolve();
+    expect(sendResponse).not.toHaveBeenCalled();
   });
 });

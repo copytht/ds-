@@ -27,6 +27,19 @@
       }
     },
     {
+      "name": "page.state 成功",
+      "request": { "action": "page.state", "params": {}, "target": "42" },
+      "response": {
+        "ok": true,
+        "action": "page.state",
+        "result": {
+          "url": "https://chat.deepseek.com/a/chat/s/abc123",
+          "title": "DeepSeek - 深度求索",
+          "composerPresent": true
+        }
+      }
+    },
+    {
       "name": "composer.type 指定标签页成功",
       "request": { "action": "composer.type", "params": { "text": "你好" }, "target": "42" },
       "response": { "ok": true, "action": "composer.type", "result": {} }
@@ -45,6 +58,11 @@
       "name": "未知动作失败",
       "request": { "action": "page.nope", "params": {}, "target": null },
       "response": { "ok": false, "action": "page.nope", "error": "unknown-action" }
+    },
+    {
+      "name": "目标标签页不存在失败",
+      "request": { "action": "page.state", "params": {}, "target": "99999" },
+      "response": { "ok": false, "action": "page.state", "error": "tab-gone" }
     },
     {
       "name": "token 无效失败",

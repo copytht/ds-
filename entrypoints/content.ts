@@ -2,13 +2,16 @@ import { browser } from "wxt/browser";
 import { defineContentScript } from "wxt/utils/define-content-script";
 
 import {
+  actionListener,
   askRequestMessage,
   parseAskResponse,
   parseChainMessage,
   resultMessage,
   unreachableResult,
+  type ActionRoster,
   type QuestionMessage,
 } from "../src/lib/channel";
+import { readPageState } from "../src/lib/page";
 import {
   parseToggleMessage,
   readToggle,
@@ -64,6 +67,18 @@ export default defineContentScript({
       const message = parseToggleMessage(event.data);
       if (message?.kind === "want-state") void broadcast();
     });
+
+    /**
+     * 本地名册：动作名 → 执行器。实现的就往这里加一项，收信那层不用动。
+     * 没实现的动作由收信那层当场回 `unknown-action`（不白等中继的 30s）。
+     */
+    const ACTION_ROSTER: ActionRoster = {
+      "page.state": readPageState,
+    };
+
+    // background 打过来的动作帧（走 `tabs.sendMessage`）：当场交回一个 ActionOutcome；
+    // 认不出的信封一声不吭，不抢 ask 那条路的消息。
+    browser.runtime.onMessage.addListener(actionListener(ACTION_ROSTER));
 
     // 总开关改了立刻广播，刷新与重启靠 storage 自己保持。
     browser.storage.onChanged.addListener((changes, areaName) => {
