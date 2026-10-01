@@ -10,6 +10,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 SESSION_ID_ENV_KEY = "OPENSESS_ID"
+#: 协调者（与用户会话的 agent）的 opencode 会话 id：网页说给人听的话推到这里。
+COORD_SESS_ID_ENV_KEY = "COORD_SESS_ID"
 
 #: 动作写端点的 token 落点：固定路径、0600、不进版本库（调用方从这儿读，agent 不手工管）。
 ACTION_TOKEN_PATH = Path(__file__).resolve().parents[1] / ".dsb-token"
@@ -51,3 +53,9 @@ def parse_session_id(env_text: str, key: str = SESSION_ID_ENV_KEY) -> str | None
             value = value[1:-1]
         return value or None
     return None
+
+
+def parse_coord_session_id(env_text: str) -> str | None:
+    """`.env` 里的 ``COORD_SESS_ID``；缺了返回 None（没有就不推，只留在 /said 里等人取）。"""
+    value = parse_session_id(env_text, COORD_SESS_ID_ENV_KEY)
+    return value

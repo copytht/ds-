@@ -297,6 +297,7 @@ class OpencodeClient:
         *,
         service_reader: Callable[[], Mapping[str, Any]] = read_service,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
+        coordinator_id: str | None = None,
         idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         http_timeout: float = DEFAULT_HTTP_TIMEOUT,
@@ -307,6 +308,7 @@ class OpencodeClient:
         self._session_id = session_id
         self._service_reader = service_reader
         self._urlopen = urlopen
+        self._coordinator_id = coordinator_id
         self._idle_timeout = idle_timeout
         self._poll_interval = poll_interval
         self._http_timeout = http_timeout
@@ -537,6 +539,23 @@ class OpencodeClient:
         stream = EventStream(response, now=self._now)
         stream.start()  # 读挂到自己的线程上，主线程只管取
         return stream
+
+    def say(self, text: str) -> None:
+        """把网页说给人听的话**推进协调者的会话**（就是那条与用户对话的 opencode 会话）。
+
+        没有协调者 id 就什么都不做——话仍在 ``/said`` 里等人取。推失败只吞掉：让人看见
+        这件事不该改判任何结论。
+        """
+        service = self._service()
+        if service is None or not self._coordinator_id:
+            return
+        with contextlib.suppress(Exception):
+            self._call(
+                service,
+                "POST",
+                f"/api/session/{self._coordinator_id}/prompt",
+                {"text": f"【网页】{text}"},
+            )
 
     def probe(self) -> str:
         """opencode 还在不在：现打一条 ``/api/session/active``，回 ``up`` / ``down``。

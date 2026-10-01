@@ -46,7 +46,7 @@ from dsb.actions import (
 )
 from dsb.asks import AskSessions
 from dsb.client import DEFAULT_IDLE_TIMEOUT, OpencodeClient
-from dsb.config import parse_session_id
+from dsb.config import parse_coord_session_id, parse_session_id
 from dsb.log import SLOW_MS, log_event, setup_logging
 from dsb.opencode import ERROR_UNEXPECTED, error_payload, payload_from_outcome
 from dsb.said import SAID_PATH, SaidLog
@@ -396,13 +396,14 @@ def main() -> None:
     port = resolve_port(env_text)
     client = OpencodeClient(
         session_id,
+        coordinator_id=parse_coord_session_id(env_text),
         idle_timeout=resolve_idle_timeout(env_text),
     )
     ask = AskSessions(client.ask)  # 长问句拆成几趟短轮询，别让浏览器把后台线程连同答复一起收走
     warm = client.warm_up()  # 启动现读：端口与口令只进内存
     # 动作服务：token 启动现生成/复用（0600，固定路径），开关现读（DSB_ACTIONS_ENABLED）。
     actions = ActionServer(ensure_token(), enabled=resolve_enabled(env_text))
-    said = SaidLog()
+    said = SaidLog(notify=client.say)
     print(
         f"[dsb] 中继已启动：http://{DEFAULT_HOST}:{port}"
         f"（{ASK_PATH} / {STATUS_PATH} / {HEALTH_PATH} / {ACTION_PATH} / {ACTIONS_PATH}）",

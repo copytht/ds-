@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import time
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 SAID_PATH = "/said"
@@ -36,14 +36,19 @@ def parse_said(body: bytes) -> str | None:
 class SaidLog:
     """最近几条「说给人的话」，有界；线程安全交给 GIL 与 deque 的原子 append。"""
 
-    def __init__(self, limit: int = SAID_LIMIT) -> None:
+    def __init__(
+        self, limit: int = SAID_LIMIT, notify: Callable[[str], None] | None = None
+    ) -> None:
         self._items: deque[dict[str, Any]] = deque(maxlen=limit)
+        self._notify = notify
 
     def add(self, body: bytes) -> tuple[int, dict[str, Any]]:
         text = parse_said(body)
         if text is None:
             return 400, {"status": "error", "error": "unexpected-response"}
         self._items.append({"text": text, "at": time.time()})
+        if self._notify is not None:
+            self._notify(text)  # 推给协调者：不是我拉，是中继送过去
         return 200, {"status": "ok"}
 
     def read(self) -> tuple[int, dict[str, Any]]:
