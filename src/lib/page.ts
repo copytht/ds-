@@ -67,3 +67,33 @@ export function clearComposer(_frame: ActionFrame): Record<string, never> {
   writeComposer(el, "");
   return {};
 }
+
+/** 站点设计系统的发送键（圆箭头）；**禁用看 class**——它没有 `disabled` 属性。 */
+const SEND_SELECTOR = 'div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle';
+
+/** 点站点自己的发送键（走它的发送路径）。键不可用（空输入框等）就抛，别假装发过了。 */
+export function clickSend(_frame: ActionFrame): Record<string, never> {
+  const el = document.querySelector<HTMLElement>(SEND_SELECTOR);
+  if (el === null || el.classList.contains("ds-button--disabled")) {
+    throw new Error("发送键不可用");
+  }
+  el.click();
+  return {};
+}
+
+/** 在写作框上按回车（站点自己也接这条路）。 */
+export function pressEnter(_frame: ActionFrame): Record<string, never> {
+  const el = composerElement();
+  if (el === null) throw new Error("页面上没有写作框");
+  const opts = {
+    key: "Enter",
+    code: "Enter",
+    keyCode: 13,
+    which: 13,
+    bubbles: true,
+    cancelable: true,
+  };
+  el.dispatchEvent(new KeyboardEvent("keydown", opts));
+  el.dispatchEvent(new KeyboardEvent("keyup", opts));
+  return {};
+}

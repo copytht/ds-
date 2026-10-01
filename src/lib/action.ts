@@ -54,6 +54,8 @@ export const ACTION_ERROR_TAB_GONE = "tab-gone";
 export const SPEAK_GATED_ACTIONS: ReadonlySet<string> = new Set([
   "composer.type",
   "composer.clear",
+  "send.click",
+  "send.enter",
 ]);
 
 /** 执行结果的同构校验：对端答的形状不合线协议的一律不算成功（只有 ok/result、ok/error 两条）。 */

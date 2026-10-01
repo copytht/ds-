@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { fixtureCases, type ActionCase } from "./fixtures";
-import { clearComposer, readComposer, readPageState, typeComposer } from "./page";
+import {
+  clearComposer,
+  clickSend,
+  pressEnter,
+  readComposer,
+  readPageState,
+  typeComposer,
+} from "./page";
 
 const FRAME = {
   type: "action",
@@ -95,5 +102,43 @@ describe("composer.* 执行器", () => {
 
     expect(() => typeComposer(typeFrame("x"))).toThrow();
     expect(() => clearComposer(FRAME)).toThrow();
+  });
+});
+
+describe("send.* 执行器", () => {
+  const SEND = 'div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle';
+
+  it("点站点自己的发送键（设计系统那个圆按钮）", () => {
+    document.body.innerHTML = `<textarea></textarea><div role="button" class="${SEND.split(".").slice(1).join(" ")}"></div>`;
+    const el = document.querySelector(SEND) as HTMLElement;
+    let clicked = 0;
+    el.addEventListener("click", () => (clicked += 1));
+
+    clickSend(FRAME);
+
+    expect(clicked).toBe(1);
+  });
+
+  it("发送键禁用（class 带 ds-button--disabled）就抛，别假装发过了", () => {
+    document.body.innerHTML = `<div role="button" class="${SEND.split(".").slice(1).join(" ")} ds-button--disabled"></div>`;
+
+    expect(() => clickSend(FRAME)).toThrow();
+  });
+
+  it("找不到发送键也抛", () => {
+    document.body.innerHTML = "<div>什么都没有</div>";
+
+    expect(() => clickSend(FRAME)).toThrow();
+  });
+
+  it("回车：在写作框上派 keydown Enter", () => {
+    document.body.innerHTML = "<textarea></textarea>";
+    const el = document.querySelector("textarea") as HTMLTextAreaElement;
+    const keys: string[] = [];
+    el.addEventListener("keydown", (event) => keys.push((event as KeyboardEvent).key));
+
+    pressEnter(FRAME);
+
+    expect(keys).toEqual(["Enter"]);
   });
 });

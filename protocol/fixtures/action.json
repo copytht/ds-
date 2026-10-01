@@ -50,6 +50,16 @@
       "response": { "ok": true, "action": "composer.read", "result": { "text": "你好" } }
     },
     {
+      "name": "send.click 成功",
+      "request": { "action": "send.click", "params": {}, "target": "42" },
+      "response": { "ok": true, "action": "send.click", "result": {} }
+    },
+    {
+      "name": "send.enter 成功",
+      "request": { "action": "send.enter", "params": {}, "target": "42" },
+      "response": { "ok": true, "action": "send.enter", "result": {} }
+    },
+    {
       "name": "composer.clear 成功",
       "request": { "action": "composer.clear", "params": {}, "target": "42" },
       "response": { "ok": true, "action": "composer.clear", "result": {} }

@@ -490,11 +490,11 @@ def test_the_book_only_admits_actions_it_can_relay() -> None:
         "messages.list",
         "messages.last",
     } == READ_ACTIONS
-    assert READ_ACTIONS | {"composer.type", "composer.clear"} == KNOWN_ACTIONS
-    assert "send.click" not in KNOWN_ACTIONS  # 还是占位，实现后再并进来
+    assert READ_ACTIONS | {"composer.type", "composer.clear", "send.click", "send.enter"} == (
+        KNOWN_ACTIONS
+    )
+    assert "stop.click" not in KNOWN_ACTIONS  # 还是占位，实现后再并进来
     assert set(WRITE_ACTIONS) == {
-        "send.click",
-        "send.enter",
         "stop.click",
         "chat.new",
         "wait.reply",
