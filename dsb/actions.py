@@ -6,7 +6,7 @@
   原地返回 ``{"ok": true, "action", "result"}`` 或 ``{"ok": false, "action", "error"}``；
 - ``GET /actions``（动作流，SSE）：扩展订它收动作，帧形如
   ``data: {"type":"action","id","action","params","target"}``，连上先来一条
-  ``{"type":"subscribed"}``，空档每 15s 一行 ``: heartbeat`` 注释（形状照抄 dsb/events.py）；
+  ``{"type":"subscribed"}``，空档每 15s 一行 ``: heartbeat`` 注释；
 - ``POST /action/result``（扩展回传）：``{"id","ok","result"|"error"}``，**不验 token**——
   扩展给不到 token，读侧靠「不下发 CORS 头 + 只认扩展来源」兜（ADR-0007 分头认）。
 
@@ -84,7 +84,7 @@ KNOWN_ACTIONS = READ_ACTIONS | frozenset(
     }
 )
 
-#: 动作流的心跳：照抄 dsb/events.py 的标称间隔（事件流实测 15s 一拍）。
+#: 动作流的心跳：本机事件流实测 15s 一拍，照着定的标称间隔。
 HEARTBEAT_SECONDS = 15.0
 #: 推下去等回传的上限：到了没回就判 timeout，锁也放掉，别让同一 target 永远堵着。
 ACTION_TIMEOUT_SECONDS = 30.0

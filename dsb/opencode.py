@@ -3,10 +3,10 @@
 中继只产出结构化 dict，TOON 编码归扩展（spec #9：Python 侧不引任何 TOON 库）。
 HTTP 层（#11）把现场折成这里认的 outcome 分支：
 
-- ``success`` + 响应体：正常答复，响应体形如 ``GET /api/session/{id}/message`` 的消息列表；
-- ``not-running``：opencode 后台服务没起；
-- ``timeout``：等答复超时；
-- ``http-error`` + ``status``：中继自己收到了非 2xx。
+- ``success`` + 响应体：正常答复，正文是一句字符串（宿主回的），或旧链路的消息列表；
+- ``not-running``：子会话宿主没起来（进程没起、起崩了、或回应里 ``ok:false``）；
+- ``timeout``：这一轮到点被掐；
+- ``unexpected``：宿主答了，但答案不成样（空、或停在异常上）。
 """
 
 from __future__ import annotations
@@ -69,18 +69,6 @@ def _text_parts(message: Mapping[str, Any]) -> list[str]:
     return texts
 
 
-def has_assistant(body: Any) -> bool:
-    """消息列表里有没有 assistant 消息（哪怕正文还空着）。
-
-    与 :func:`extract_answer` 的区别是它只认「答复已经开写」这件事：正文空着
-    也算数。中继靠它把 `/status` 的阶段从「还在想」推进到「在写」
-    （见 :meth:`dsb.client.OpencodeClient._await_answer`）。
-    """
-    if not isinstance(body, list):
-        return False
-    return any(isinstance(m, Mapping) and m.get("role") == "assistant" for m in body)
-
-
 def extract_answer(body: Any) -> str | None:
     """答复正文。两种形状都认：宿主回的一句纯文本，或 opencode 的消息列表（旧链路）。"""
     if isinstance(body, str):
@@ -101,26 +89,6 @@ def extract_answer(body: Any) -> str | None:
 
     text = "\n".join(_text_parts(message))
     return text if text.strip() else None
-
-
-def answer_complete(body: Any) -> bool:
-    """最后一轮 assistant 的消息是否**已定稿**：正文非空，且 ``time.completed`` 已落。
-
-    实测：流式途中消息的 ``time`` 只有 ``created``，这一轮跑完才补上 ``streamed`` /
-    ``completed``。opencode 一轮里正文还会分几段（先「让我读一下文件」，末段才是答复），
-    只认 ``completed`` 落下的那条，免得把中途一句当答完、剩下的活没人看。
-    """
-    if extract_answer(body) is None:
-        return False
-    if not isinstance(body, list):
-        return True  # 单条消息形状（测试替身）：取得到正文就算数
-    messages = [m for m in body if isinstance(m, Mapping) and m.get("role") == "assistant"]
-    if not messages:
-        return False
-    time_field = messages[-1].get("time")
-    if not isinstance(time_field, Mapping):
-        return True  # 认不出时间：不拿它卡链子
-    return bool(time_field.get("completed"))
 
 
 def payload_from_outcome(outcome: Mapping[str, Any] | Any) -> SendPayload:
