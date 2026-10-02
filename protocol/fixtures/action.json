@@ -50,6 +50,29 @@
       "response": { "ok": true, "action": "composer.read", "result": { "text": "你好" } }
     },
     {
+      "name": "messages.list 成功",
+      "request": { "action": "messages.list", "params": {}, "target": "42" },
+      "response": {
+        "ok": true,
+        "action": "messages.list",
+        "result": {
+          "messages": [
+            { "role": "user", "text": "帮我看一眼这段代码" },
+            { "role": "assistant", "text": "答案是 4271。" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "messages.last 成功",
+      "request": { "action": "messages.last", "params": {}, "target": "42" },
+      "response": {
+        "ok": true,
+        "action": "messages.last",
+        "result": { "messages": [{ "role": "assistant", "text": "答案是 4271。" }] }
+      }
+    },
+    {
       "name": "chat.new 成功",
       "request": { "action": "chat.new", "params": {}, "target": "42" },
       "response": { "ok": true, "action": "chat.new", "result": {} }
