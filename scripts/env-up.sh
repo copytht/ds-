@@ -74,6 +74,18 @@ case "$t" in
   *) say 判据2 "探针异常：$t" ; exit 1 ;;
 esac
 
+# 总开关关着时，判据 3/4 读不了 —— action.ts:143 是总开关管一切、toggle.* 除外，
+# tabs.list 也在内。而开它就等于把页面世界的 fetch/XHR 钩子装上（inject.content.ts:209），
+# 那是 issue #31 那条。这笔账摆出来，开不开由人定。
+case "$t" in
+  *'"enabled": true'*) ;;
+  *)
+    say 提示 "总开关关着 → 判据 3/4 跳过（tabs.list 与 page.state 都会回 disabled）"
+    say 提示 "开它 = 装上页面世界的 fetch/XHR 钩子（#31）；要开说一声，一条命令的事"
+    exit 0
+    ;;
+esac
+
 # ---- 5) 会话标签页：没有就开一个（同 profile 二次调用 → 转给已在跑的实例，**不重启**）----
 tabs_now=$(probe '{"action":"tabs.list","params":{},"target":null}')
 case "$tabs_now" in
@@ -101,10 +113,15 @@ state=$(probe "{\"action\":\"page.state\",\"params\":{},\"target\":\"$tab_id\"}"
 case "$state" in
   *'"composerPresent": true'*) say 判据4 "写作框在，能写能发" ;;
   *'"composerPresent": false'*)
-    say 判据4 "无写作框 → 站点没渲染聊天界面，多半未登录；**只第一次，人做**"
+    say 判据4 "无写作框 → 站点没渲染聊天界面"
+    say 判据4 "三种分不开：未登录 / **禁言** / 页面没渲染 —— 扩展侧现在没这个判据"
+    say 判据4 "扩展要能自己说出来，就是 issue #2；在那之前这条只能报「不可用」"
     say 判据4 "读类动作仍可用，写类（composer.* / send.*）一律会失败"
     ;;
-  *) say 判据4 "读不到页面状态：$state" ;;
+  *) say 判据4 "读不到页面状态：$state"
+    say 判据4 "若是 disabled —— 总开关关着。判据 4 要读 DOM 就得开它，而开它同时"
+    say 判据4 "会把页面世界的 fetch/XHR 钩子装上（issue #31 那条）。开不开你定。"
+    ;;
 esac
 
 cat <<EOF
@@ -114,11 +131,14 @@ cat <<EOF
     先 tabs.list 拿 id。target:null 只有 tabs.list 和 toggle.* 答得出，其余落
     src/lib/action.ts:172 的 unknown-action——那是探针错了，不是链子坏了。
 
-  人做的两件（**都只第一次**，之后永久生效）：
-    1. 登录 DeepSeek —— 标签页脚本已开好，只差登录
-    2. 勾「替人开口」 —— 地址栏 chrome-extension://$EXT_ID/options.html
-       这一步故意没有动作口（agent 不能自授发言权，围栏别拆）；
-       不勾则 composer.type / send.* 回 disabled，属预期不是故障
+  人做的（只第一次，之后永久生效）：
+    登录 DeepSeek 与勾「替人开口」都在**独立 profile** 这个窗口里做（跟主浏览器
+    两套登录态）。勾「替人开口」那一步故意没有动作口（agent 不能自授发言权，
+    围栏别拆）；不勾则 composer.type / send.* 回 disabled，属预期不是故障。
+
+  **账号被禁言时（页面橙框「禁言至 …」，写作框不渲染）**：整条交流线是断的，
+  判据 4 会报无写作框。这是 issue #2 要解决的——扩展该显式停机并说明，
+  而不是空等一个不会出现的输入框。别去修选择器，那修不好。
 
   本脚本幂等：环境没坏就别重跑，重跑也不会动活着的浏览器。
 EOF
