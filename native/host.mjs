@@ -112,9 +112,20 @@ export async function startHost({ cwd = process.cwd(), model = "big-pickle" } = 
   ctx.on("subagent/end", (end) => turns.deliver(end));
 
   async function parentOf(pageId) {
+    if (typeof pageId !== "string" || pageId === "") {
+      // 空 id 会拼出坏的 session 落盘路径；报一句人看得懂的，别让它走进 dsh 的栈。
+      throw new Error("ask 缺 page");
+    }
     let handle = parents.get(pageId);
     if (!handle) {
-      handle = await ctx.agents.create({ sessionId: pageId, meta: { cwd }, agentOptions: route });
+      try {
+        handle = await ctx.agents.create({ sessionId: pageId, meta: { cwd }, agentOptions: route });
+      } catch (error) {
+        // 进程重启后同一个 page 还躺在盘上（jsonl 持久日志正是为这个留的）：**冷恢复它**，
+        // 不是重起——重起撞 SessionAlreadyExistsError，且会丢掉此前的上下文。
+        if (error?.name !== "SessionAlreadyExistsError") throw error;
+        handle = await ctx.agents.resume({ resumeSessionId: pageId, agentOptions: route });
+      }
       parents.set(pageId, handle);
     }
     return handle.agent;
@@ -175,6 +186,29 @@ export async function startHost({ cwd = process.cwd(), model = "big-pickle" } = 
 
 export async function serveStdio(host) {
   const write = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+  // 同一个 page 的问句串行，不同 page 各走各的：续问要排在上一轮后面才接得上上文。
+  const inflight = new Map();
+  async function dispatch(request) {
+    switch (request.op) {
+      case "ping":
+        return { ok: true, providers: [PROVIDER], ...host.stats() };
+      case "ask": {
+        const previous = inflight.get(request.page) ?? Promise.resolve();
+        const next = previous.then(() => host.ask(request));
+        // 串行链上只挂成功的一环：问句失败不该把后面的问句一起带走。
+        inflight.set(
+          request.page,
+          next.catch(() => undefined),
+        );
+        return { ok: true, ...(await next) };
+      }
+      case "interrupt":
+        return { ok: true, ...host.interrupt(request.page) };
+      default:
+        return { ok: false, error: `unknown op: ${request.op}` };
+    }
+  }
+
   for await (const line of createInterface({ input: process.stdin })) {
     if (!line.trim()) continue;
     let request;
@@ -184,23 +218,13 @@ export async function serveStdio(host) {
       write({ ok: false, error: "bad json" });
       continue;
     }
-    try {
-      switch (request.op) {
-        case "ping":
-          write({ ok: true, providers: [PROVIDER], ...host.stats() });
-          break;
-        case "ask":
-          write({ ok: true, ...(await host.ask(request)) });
-          break;
-        case "interrupt":
-          write({ ok: true, ...host.interrupt(request.page) });
-          break;
-        default:
-          write({ ok: false, error: `unknown op: ${request.op}` });
-      }
-    } catch (error) {
-      write({ ok: false, error: String(error?.message ?? error) });
-    }
+    // 不 await：读循环必须一直读得动，否则问句在途时 interrupt 根本递不进来。
+    // 回应按请求带的 id 回，中继那边按 id 认领（见 HostProcess.call）。
+    void dispatch(request)
+      .then((payload) => write({ ...payload, id: request.id }))
+      .catch((error) =>
+        write({ ok: false, error: String(error?.message ?? error), id: request.id }),
+      );
   }
 }
 

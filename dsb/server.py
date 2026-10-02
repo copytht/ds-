@@ -44,8 +44,8 @@ from dsb.actions import (
     ensure_token,
     resolve_enabled,
 )
-from dsb.client import DEFAULT_IDLE_TIMEOUT, OpencodeClient
-from dsb.config import parse_coord_session_id, parse_session_id
+from dsb.client import DEFAULT_IDLE_TIMEOUT, SubagentClient
+from dsb.config import parse_session_id
 from dsb.log import SLOW_MS, log_event, setup_logging
 from dsb.opencode import ERROR_UNEXPECTED, error_payload, payload_from_outcome
 from dsb.said import SAID_PATH, SaidLog
@@ -401,13 +401,12 @@ def main() -> None:
     env_text = read_env_text()
     session_id = parse_session_id(env_text)
     port = resolve_port(env_text)
-    client = OpencodeClient(
+    client = SubagentClient(
         session_id,
-        coordinator_id=parse_coord_session_id(env_text),
         idle_timeout=resolve_idle_timeout(env_text),
     )
     send = SendSessions(client.send)  # 长问句拆成几趟短轮询，别让浏览器把后台线程连同答复一起收走
-    warm = client.warm_up()  # 启动现读：端口与口令只进内存
+    warm = client.warm_up()  # 启动现起 dsh 子会话宿主
     # 动作服务：token 启动现生成/复用（0600，固定路径），开关现读（DSB_ACTIONS_ENABLED）。
     actions = ActionServer(ensure_token(), enabled=resolve_enabled(env_text))
     said = SaidLog(notify=client.say)
@@ -423,7 +422,7 @@ def main() -> None:
         )
     if not warm:
         print(
-            "[dsb] opencode 后台服务现读失败，按请求重试（没起就回 opencode-not-running）。",
+            "[dsb] dsh 子会话宿主现起失败，按请求重试（没起就回 opencode-not-running）。",
             file=sys.stderr,
         )
     with make_server(
@@ -434,7 +433,7 @@ def main() -> None:
         except KeyboardInterrupt:
             print("\n[dsb] 已停止")
         finally:
-            client.dispose()  # 活期间一直复用的子会话，收摊时删掉
+            client.dispose()  # 收摊：宿主进程退掉，child 随它一起没
 
 
 if __name__ == "__main__":

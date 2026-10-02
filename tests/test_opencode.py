@@ -72,7 +72,9 @@ def test_missing_assistant_text_is_none() -> None:
     assert extract_answer([{"role": "assistant", "parts": []}]) is None
     assert extract_answer([{"role": "user", "parts": [{"type": "text", "text": "只有问"}]}]) is None
     assert extract_answer({"note": "不认识的形状"}) is None
-    assert extract_answer("不是消息列表") is None
+    # 宿主这条线回的是一句纯文本——这是新形状，不再当「不认识」。
+    assert extract_answer("不是消息列表") == "不是消息列表"
+    assert extract_answer("   ") is None
 
 
 def test_has_assistant_counts_an_empty_answer_as_started() -> None:

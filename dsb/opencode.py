@@ -82,7 +82,9 @@ def has_assistant(body: Any) -> bool:
 
 
 def extract_answer(body: Any) -> str | None:
-    """从消息响应体里取最后一轮 assistant 的文本；取不到返回 None。"""
+    """答复正文。两种形状都认：宿主回的一句纯文本，或 opencode 的消息列表（旧链路）。"""
+    if isinstance(body, str):
+        return body if body.strip() else None
     if isinstance(body, list):
         messages = [
             message

@@ -5,7 +5,6 @@ from __future__ import annotations
 import threading
 import time
 
-from dsb.client import PHASE_QUEUED, PHASE_WRITING, SendProgress
 from dsb.events import (
     EVENT_HEARTBEAT,
     EVENT_QUEUE_CAP,
@@ -147,45 +146,3 @@ def test_pump_holds_at_most_the_queue_cap_when_nobody_is_draining() -> None:
     stream.pump()
     assert stream.dead is True  # 读到底了照样判死，上限只是不攒那么多
     assert len(stream.drain()) == EVENT_QUEUE_CAP
-
-
-def test_progress_is_idle_until_an_ask_begins() -> None:
-    progress = SendProgress()
-    assert progress.snapshot() is None  # 空档不留幽灵问句
-    progress.begin()
-    assert progress.snapshot() == {"phase": PHASE_QUEUED, "written": 0, "remaining": None}
-    progress.tick(120.0)
-    assert progress.snapshot()["remaining"] == 120.0
-    progress.finish()
-    assert progress.snapshot() is None
-
-
-def test_progress_counts_writing_from_its_own_session_only() -> None:
-    progress = SendProgress()
-    progress.begin()
-    progress.note(
-        [
-            {"type": "session.execution.started", "data": {"sessionID": "ses_别人家"}},
-            {"type": "session.execution.started", "data": {"sessionID": CHILD}},
-            {"type": "session.text.delta", "data": {"sessionID": CHILD, "delta": "两个字"}},
-            {"type": "session.text.delta", "data": {"sessionID": "ses_别人家", "delta": "x" * 99}},
-        ],
-        CHILD,
-    )
-    snapshot = progress.snapshot()
-    assert snapshot is not None
-    assert snapshot["phase"] == PHASE_WRITING
-    assert snapshot["written"] == 3  # 别人家那 99 个字不算我们的
-
-
-def test_progress_falls_back_to_the_message_side_without_an_event_stream() -> None:
-    """事件流缺席时，正文侧也能认出「开写了」，阶段照样往前走。"""
-    progress = SendProgress()
-    progress.begin()
-    assert progress.snapshot()["phase"] == PHASE_QUEUED
-    progress.writing()
-    assert progress.snapshot()["phase"] == PHASE_WRITING
-    progress.done()
-    assert progress.snapshot()["phase"] == "done"
-    progress.finish()
-    assert progress.snapshot() is None
