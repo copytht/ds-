@@ -46,6 +46,28 @@ export const ACTION_ERROR_DISABLED = "disabled";
 export const ACTION_ERROR_UNKNOWN = "unknown-action";
 /** 目标标签页不在 / 这一跳没走通（target 认不出、没接执行口、消息没送到内容脚本）。 */
 export const ACTION_ERROR_TAB_GONE = "tab-gone";
+/** 写作框不在：禁言 / 未登录 / 页面没渲染（`page.state` 的 `account` 能说清是哪一种）。 */
+export const ACTION_ERROR_COMPOSER_ABSENT = "composer-absent";
+/** 页面还在，但上面找不到认得的那个东西：发送键、「开启新对话」、消息列表。 */
+export const ACTION_ERROR_PAGE_CHANGED = "page-changed";
+/** 读到了也读不完：滚动层认错、或一趟扫不完（成本天花板，见 `messages.ts`）。 */
+export const ACTION_ERROR_READ_FAILED = "read-failed";
+
+/**
+ * 执行器在页面上「做不到」时抛这个，**抛错原文只进扩展侧日志**——回给中继的只有
+ * 上面那三个码。少了这一层，`tab-gone` 会把「标签页没了」「没有写作框」
+ * 「页面结构变了」「读不完」四件事说成同一句，agent 只能干瞪眼（2026-10-02 真机：
+ * 为了知道 messages.list 卡在哪一步，只好往产物里塞临时诊断表）。
+ */
+export class PageError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "PageError";
+  }
+}
 
 /** 不受总开关管的两件动作：开关本身的读写。关掉后还得能把开关翻回来。 */
 export const TOGGLE_ACTIONS: ReadonlySet<string> = new Set(["toggle.get", "toggle.set"]);

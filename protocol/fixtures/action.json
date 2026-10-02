@@ -6,7 +6,19 @@
     { "code": "disabled", "when": "总开关关着" },
     { "code": "unknown-action", "when": "动作名不在册" },
     { "code": "timeout", "when": "动作推给扩展后超时未回传" },
-    { "code": "tab-gone", "when": "目标标签页已不存在" }
+    {
+      "code": "tab-gone",
+      "when": "目标标签页已不存在，或这一跳没走通（执行口没接、载荷不合形状）"
+    },
+    {
+      "code": "composer-absent",
+      "when": "页面上没有写作框：禁言 / 未登录 / 页面没渲染（配 page.state 的 account 读得清是哪一种）"
+    },
+    {
+      "code": "page-changed",
+      "when": "页面还在，但上面找不到认得的那个东西：发送键、「开启新对话」、消息列表、滚动层"
+    },
+    { "code": "read-failed", "when": "读到了也读不完：一趟扫不完这个对话（成本天花板）" }
   ],
   "cases": [
     {

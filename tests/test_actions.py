@@ -557,6 +557,9 @@ def test_failure_codes_match_the_fixture_book() -> None:
         "unknown-action",
         "timeout",
         "tab-gone",
+        "composer-absent",
+        "page-changed",
+        "read-failed",
     }
 
 

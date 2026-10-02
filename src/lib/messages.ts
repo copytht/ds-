@@ -1,3 +1,4 @@
+import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_READ_FAILED, PageError } from "./action";
 import type { ActionFrame } from "./actionstream";
 
 /**
@@ -224,7 +225,7 @@ function conversation(root: ParentNode): ListViewport | null {
   const row = root.querySelector(ROW_SELECTOR);
   if (row === null) return null;
   const list = row.closest(LIST_SELECTOR);
-  if (list === null) throw new Error("找不到消息列表"); // 结构变了：当场说，别装作空对话
+  if (list === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "找不到消息列表"); // 结构变了：当场说，别装作空对话
   for (let element = row.parentElement; element !== null; element = element.parentElement) {
     if (scrollsVertically(element)) return element;
     if (element === list) break;
@@ -269,9 +270,10 @@ export async function readMessages(
     const was = keysOf(view);
     view.scrollTop += Math.max(1, view.clientHeight);
     await settleUntilMounted(view, was, settle);
-    if (view.scrollTop <= before) throw new Error("滚不动消息列表");
+    if (view.scrollTop <= before) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "滚不动消息列表");
     // 越往下内容越多（边滚边加载）就会一直不到底；到点收手，别让中继替我们报 timeout
-    if (Date.now() - startedAt > SWEEP_BUDGET_MS) throw new Error("扫不完这段对话");
+    if (Date.now() - startedAt > SWEEP_BUDGET_MS)
+      throw new PageError(ACTION_ERROR_READ_FAILED, "扫不完这段对话");
   }
   view.scrollTop = home;
   return [...seen.values()];
@@ -301,7 +303,7 @@ export async function listMessages(_frame: ActionFrame): Promise<MessageList> {
   if (view === null) return { messages: [] };
   const messages = await readMessages(view);
   // 进得来就说明挂着行（`conversation` 靠一行行找上来的），一条没读到 = 认不出结构。
-  if (messages.length === 0) throw new Error("认不出消息行");
+  if (messages.length === 0) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "认不出消息行");
   return { messages };
 }
 
@@ -310,6 +312,6 @@ export async function lastMessage(_frame: ActionFrame): Promise<MessageList> {
   const view = conversation(document);
   if (view === null) return { messages: [] };
   const message = await readLast(view);
-  if (message === null) throw new Error("认不出消息行");
+  if (message === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "认不出消息行");
   return { messages: [message] };
 }

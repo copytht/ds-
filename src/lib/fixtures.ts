@@ -91,3 +91,12 @@ export function fixtureFile(filename: string): FixtureFile<unknown> {
 export function fixtureCases<T>(filename: string): readonly T[] {
   return fixtureFile(filename).cases as readonly T[];
 }
+
+/**
+ * 页面动作的失败码册子（`action.json` 的 `errorCodes`）——与 `dsb/actions.py` 的
+ * `ACTION_ERRORS` 同一份。线上只认册子里的码。
+ */
+export function actionErrorCodes(): readonly string[] {
+  const file = fixtureFile("action.json") as ActionFixtureFile;
+  return file.errorCodes.map(({ code }) => code);
+}

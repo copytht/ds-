@@ -10,7 +10,13 @@
  *   认不出的信封一声不吭（`actionListener` 返回 undefined），不抢 send 那条路的消息。
  */
 
-import { ACTION_ERROR_TAB_GONE, ACTION_ERROR_UNKNOWN, type ActionOutcome } from "./action";
+import {
+  ACTION_ERROR_TAB_GONE,
+  ACTION_ERROR_UNKNOWN,
+  PageError,
+  type ActionOutcome,
+} from "./action";
+import { actionErrorCodes } from "./fixtures";
 import type { ActionFrame } from "./actionstream";
 import { FAILURE_RELAY_UNREACHABLE } from "./relay";
 import { errorPayload, type ReplyPayload } from "./reply";
@@ -200,11 +206,26 @@ export function actionListener(
     if (request === null) return undefined;
     // 执行器抛错也要回话：只挂 onFulfilled，一旦 handler reject，sendResponse 永不调用，
     // port 一直挂着直到被 GC，background 那边又变回等满 timeout。
-    void executeRoster(request.frame, roster).then(sendResponse, () =>
-      sendResponse({ ok: false, error: ACTION_ERROR_TAB_GONE }),
+    void executeRoster(request.frame, roster).then(sendResponse, (error: unknown) =>
+      sendResponse({ ok: false, error: failureCode(error) }),
     );
     return true;
   };
+}
+
+/**
+ * 执行器抛的错 → 一个在册失败码。`PageError` 自带码；其余一律折成 `tab-gone`
+ * （含没接执行口、载荷不合形状那些「这一跳走不通」的情形）。
+ * 抛错的原文只留在扩展侧日志里，不回页面、不进对话流。
+ */
+function failureCode(error: unknown): string {
+  // 码得在册里才认：执行器自己编一个码出来照样折成 tab-gone，别让册子外的词漏到线上。
+  if (error instanceof PageError && actionErrorCodes().includes(error.code)) {
+    console.warn("[ds] 动作做不到：", error.code, error.message);
+    return error.code;
+  }
+  console.warn("[ds] 动作这一跳走不通：", error);
+  return ACTION_ERROR_TAB_GONE;
 }
 
 async function executeRoster(frame: ActionFrame, roster: ActionRoster): Promise<ActionOutcome> {

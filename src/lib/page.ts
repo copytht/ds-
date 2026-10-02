@@ -1,3 +1,4 @@
+import { ACTION_ERROR_COMPOSER_ABSENT, ACTION_ERROR_PAGE_CHANGED, PageError } from "./action";
 import type { ActionFrame } from "./actionstream";
 
 /**
@@ -105,7 +106,7 @@ export function readComposer(_frame: ActionFrame): { text: string } {
 /** 往写作框写一段字（**不发送**）。`params.text` 不是字符串就写空。 */
 export function typeComposer(frame: ActionFrame): Record<string, never> {
   const el = composerElement();
-  if (el === null) throw new Error("页面上没有写作框");
+  if (el === null) throw new PageError(ACTION_ERROR_COMPOSER_ABSENT, "页面上没有写作框");
   const text = frame.params["text"];
   writeComposer(el, typeof text === "string" ? text : "");
   return {};
@@ -114,7 +115,7 @@ export function typeComposer(frame: ActionFrame): Record<string, never> {
 /** 清空写作框（**不发送**）。 */
 export function clearComposer(_frame: ActionFrame): Record<string, never> {
   const el = composerElement();
-  if (el === null) throw new Error("页面上没有写作框");
+  if (el === null) throw new PageError(ACTION_ERROR_COMPOSER_ABSENT, "页面上没有写作框");
   writeComposer(el, "");
   return {};
 }
@@ -138,7 +139,7 @@ export function findSendButton(): HTMLElement | null {
 /** 点站点自己的发送键（走它的发送路径）。键不可用（空输入框等）就抛，别假装发过了。 */
 export function clickSend(_frame: ActionFrame): Record<string, never> {
   const el = findSendButton();
-  if (el === null) throw new Error("发送键不可用");
+  if (el === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "发送键不可用");
   el.click();
   return {};
 }
@@ -146,7 +147,7 @@ export function clickSend(_frame: ActionFrame): Record<string, never> {
 /** 在写作框上按回车（站点自己也接这条路）。 */
 export function pressEnter(_frame: ActionFrame): Record<string, never> {
   const el = composerElement();
-  if (el === null) throw new Error("页面上没有写作框");
+  if (el === null) throw new PageError(ACTION_ERROR_COMPOSER_ABSENT, "页面上没有写作框");
   const opts = {
     key: "Enter",
     code: "Enter",
@@ -164,7 +165,7 @@ export function pressEnter(_frame: ActionFrame): Record<string, never> {
 export function newChat(_frame: ActionFrame): Record<string, never> {
   const entries = document.querySelectorAll<HTMLElement>('[tabindex="0"]');
   const el = [...entries].find((entry) => (entry.textContent || "").trim() === "开启新对话");
-  if (el === undefined) throw new Error("找不到「开启新对话」");
+  if (el === undefined) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "找不到「开启新对话」");
   el.click();
   return {};
 }

@@ -17,6 +17,13 @@ import {
   unreachableResult,
 } from "./channel";
 import type { ActionFrame } from "./actionstream";
+import { ACTION_ERROR_COMPOSER_ABSENT, PageError } from "./action";
+import { actionErrorCodes } from "./fixtures";
+
+/** 一个指向某动作的请求帧，`actionListener` 那层收的就是它。 */
+function requestFor(action: string): unknown {
+  return { type: ACTION_MESSAGE_TYPE, frame: { ...ACTION_FRAME, action } };
+}
 
 describe("页面世界 ↔ 隔离世界的信封", () => {
   it("问题信封原样过", () => {
@@ -208,6 +215,34 @@ describe("内容脚本的动作收信（entrypoints/content.ts 接的那一层�
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(sendResponse).toHaveBeenCalledWith({ ok: true, result: { state: "idle" } });
+  });
+
+  it("执行器抛 PageError → 回它自带的码，别一律 tab-gone", async () => {
+    const handler = vi.fn(() => {
+      throw new PageError(ACTION_ERROR_COMPOSER_ABSENT, "页面上没有写作框");
+    });
+    const sendResponse = await respond({ "composer.type": handler }, requestFor("composer.type"));
+
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: "composer-absent" });
+  });
+
+  it("执行器抛别的错 → 折成 tab-gone（这一跳走不通，不该猜是哪一种）", async () => {
+    const handler = vi.fn(() => {
+      throw new Error("undefined is not a function");
+    });
+    const sendResponse = await respond({ "composer.type": handler }, requestFor("composer.type"));
+
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: "tab-gone" });
+  });
+
+  it("PageError 的码必须在册——不在册的折成 tab-gone", async () => {
+    const handler = vi.fn(() => {
+      throw new PageError("随便编一个码", "x");
+    });
+    const sendResponse = await respond({ "composer.type": handler }, requestFor("composer.type"));
+
+    expect(actionErrorCodes()).toContain("composer-absent"); // 册子里确实有这三个
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: "tab-gone" });
   });
 
   it("认不出的消息不响应（不抢 send 的消息、不回 undefined 当结果）", async () => {

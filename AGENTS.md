@@ -36,6 +36,11 @@ agent 直接出手。
 登录 DeepSeek 与勾「替人开口」是人做的两件，脚本只打印不代劳；没勾闸则写动作回 `disabled`
 属预期，不是故障。
 
+**动作失败码分得开，别再让它们混成一个**：写动作撞禁言/未登录回 `composer-absent`
+（配 `page.state` 的 `account` 读得清是哪一种），页面上找不到认得的东西回
+`page-changed`，读不完回 `read-failed`；只有这一跳真的走不通才是 `tab-gone`。执行器要
+抛带码的 `PageError`，收信那层（`channel.ts` 的 `failureCode`）才认。
+
 ## Agent skills
 
 ### Issue tracker
