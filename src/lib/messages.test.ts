@@ -287,6 +287,20 @@ describe("虚拟列表：只有视口里的行在 DOM", () => {
     expect(itemWrites).toEqual([]); // 写它就是空操作，识破了
     expect(listWrites).toEqual([0, 100, 200, 0]);
   });
+
+  it("内层 clientHeight 为 0（height:0 + overflow:hidden 的包装层）→ 跳过它，用外层", async () => {
+    // 真机撞过：选中这种层，每轮只挪 1px，两千轮挪不完一屏 → 中继 30s 判 timeout，
+    // 真原因被吞成一句没头没脑的话。
+    document.body.innerHTML = conversationHtml();
+    const itemWrites = stubLayer(document.querySelector(".ds-virtual-list-items")!, "hidden", 0);
+    const listWrites = stubLayer(document.querySelector(".ds-virtual-list")!, "auto", 100);
+
+    const result = await listMessages(frameOf("messages.list"));
+
+    expect(result.messages).toHaveLength(2);
+    expect(itemWrites).toEqual([]); // 一屏都看不见，写它等于每轮挪 1px
+    expect(listWrites).toEqual([0, 100, 200, 0]);
+  });
 });
 
 /** 给某一层钉上「内容 300px、视口 client px」，并记下 `scrollTop` 被写过什么。 */

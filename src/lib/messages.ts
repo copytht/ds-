@@ -37,6 +37,12 @@ const MESSAGE_SELECTOR = ".ds-message";
 /** 一屏一屏往下扫的硬顶：`scrollHeight` 不涨时别白转（真机一屏约几条消息）。 */
 const MAX_SWEEPS = 2_000;
 
+/**
+ * 一趟扫完的墙钟硬顶：中继 `ACTION_TIMEOUT_SECONDS` 是 30s，转满 `MAX_SWEEPS` 恰好比它长，
+ * 于是真原因被吞成一句 `timeout`。到点就抛，页面那边留一行日志。
+ */
+const SWEEP_BUDGET_MS = 15_000;
+
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
 
@@ -155,8 +161,14 @@ export function readRow(row: Element): Message | null {
  * 这一层是不是**纵向真能滚**。光看 `scrollHeight > clientHeight` 不够：`overflow: visible`
  * 的元素内容溢出也报这个数（撑出去但不裁剪），它的 `scrollTop` 却是空操作，写下去
  * 对话一动不动，「超出首屏」那条验收照样不过。两样都得占。
+ *
+ * `clientHeight` 为 0 的层同样不认：看不见的一屏挪不动，扫的时候每轮只按
+ * `max(1, clientHeight)` 挪 **1px**，转满 `MAX_SWEEPS` 也扫不完一屏，正好被中继那个
+ * 30s 的 `timeout` 吞成一句没头没脑的话（真机撞过：`height:0` + `overflow:hidden`
+ * 的包装层把 `.ds-virtual-list-items` 裹在里面）。
  */
 function scrollsVertically(element: Element): boolean {
+  if (element.clientHeight <= 0) return false;
   if (element.scrollHeight <= element.clientHeight + 1) return false;
   const { overflowY } = getComputedStyle(element);
   return overflowY === "auto" || overflowY === "scroll" || overflowY === "hidden";
@@ -212,6 +224,7 @@ export async function readMessages(
 ): Promise<Message[]> {
   const seen = new Map<string, Message>();
   const home = view.scrollTop;
+  const startedAt = Date.now();
   view.scrollTop = 0;
   if (home !== 0) await settle();
   for (let guard = 0; guard < MAX_SWEEPS; guard += 1) {
@@ -221,6 +234,8 @@ export async function readMessages(
     view.scrollTop += Math.max(1, view.clientHeight);
     await settle();
     if (view.scrollTop <= before) throw new Error("滚不动消息列表");
+    // 越往下内容越多（边滚边加载）就会一直不到底；到点收手，别让中继替我们报 timeout
+    if (Date.now() - startedAt > SWEEP_BUDGET_MS) throw new Error("扫不完这段对话");
   }
   view.scrollTop = home;
   return [...seen.values()];
