@@ -74,10 +74,21 @@ case "$t" in
   *) say 判据2 "探针异常：$t" ; exit 1 ;;
 esac
 
+# ---- 5) 会话标签页：没有就开一个（同 profile 二次调用 → 转给已在跑的实例，**不重启**）----
+tabs_now=$(probe '{"action":"tabs.list","params":{},"target":null}')
+case "$tabs_now" in
+  *'"tabs": []'*)
+    "$CHROME" --user-data-dir="$PROFILE" --no-first-run \
+      "https://chat.deepseek.com/" >/tmp/dsb-open.log 2>&1
+    sleep 2
+    say 会话页 "已开 chat.deepseek.com（转给在跑的实例）"
+    ;;
+  *) say 会话页 "已有" ;;
+esac
+
 tabs=$(probe '{"action":"tabs.list","params":{},"target":null}')
 case "$tabs" in
-  *'"tabs": []'*)
-    say 判据3 "没有 DeepSeek 标签页 → 见下面人做的第 1 步" ;;
+  *'"tabs": []'*) say 判据3 "标签页没出来 → /tmp/dsb-open.log" ; exit 1 ;;
   *) say 判据3 "有会话标签页，可直接带 target 打动作" ;;
 esac
 
@@ -88,10 +99,11 @@ cat <<EOF
     先 tabs.list 拿 id。target:null 只有 tabs.list 和 toggle.* 答得出，其余落
     src/lib/action.ts:172 的 unknown-action——那是探针错了，不是链子坏了。
 
-  人做的两件（脚本做不了）：
-    1. 独立实例里开 https://chat.deepseek.com/ 并登录
-    2. 地址栏打开 chrome-extension://$EXT_ID/options.html，勾「替人开口」
-       （不勾则 composer.type / send.* 一律 disabled——这是闸，不是故障）
+  人做的两件（**都只第一次**，之后永久生效）：
+    1. 登录 DeepSeek —— 标签页脚本已开好，只差登录
+    2. 勾「替人开口」 —— 地址栏 chrome-extension://$EXT_ID/options.html
+       这一步故意没有动作口（agent 不能自授发言权，围栏别拆）；
+       不勾则 composer.type / send.* 回 disabled，属预期不是故障
 
   本脚本幂等：环境没坏就别重跑，重跑也不会动活着的浏览器。
 EOF
