@@ -81,8 +81,11 @@ class OpencodeAdapter extends LlmAdapter {
     return Promise.resolve([]);
   }
 
+  // dsh 会校验这份精确模型元数据：provider / id 必须与请求逐字相符，name 必填
+  // （`normalizeModelInfo`，否则报 INVALID_MODEL_INFO）。上下文窗口之类的能力字段
+  // 留空——opencode 自己管，我们不替它编。
   resolveModel(provider, model) {
-    return Promise.resolve({ providerID: provider, id: model });
+    return Promise.resolve({ provider, id: model, name: model });
   }
 
   async *stream(options) {
