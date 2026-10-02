@@ -40,8 +40,15 @@ const MAX_SWEEPS = 2_000;
 /**
  * 一趟扫完的墙钟硬顶：中继 `ACTION_TIMEOUT_SECONDS` 是 30s，转满 `MAX_SWEEPS` 恰好比它长，
  * 于是真原因被吞成一句 `timeout`。到点就抛，页面那边留一行日志。
+ *
+ * 取 25s 是量出来的：真机上虚拟列表挂载一屏新行要 ~190ms（≈12 帧，不是 1 帧），
+ * 一个 385 条 / 59049px 的对话要扫 80 屏 ≈ 15s。留 25s 让它扫得完，又留 5s 余量
+ * 让真失败报得出来。
+ *
+ * ponytail: 这是 O(消息条数) 的成本，一屏一屏等挂载，天花板就在这儿。真嫌慢就得上
+ * 别的取法（比如只回摘要、或分页扫），那是另一个设计决定。
  */
-const SWEEP_BUDGET_MS = 15_000;
+const SWEEP_BUDGET_MS = 25_000;
 
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
@@ -102,7 +109,35 @@ export type ListViewport = {
   readonly scrollHeight: number;
 };
 
-/** 等一帧：虚拟列表靠滚动事件挂载行，读早了拿到的还是上一屏。 */
+/** 视口里此刻挂着的行的 key 序列：拿它当「这一屏换没换」的凭据。 */
+function keysOf(view: ListViewport): string {
+  const rows = view.querySelectorAll(ROW_SELECTOR);
+  let out = "";
+  for (let index = 0; index < rows.length; index += 1) {
+    out += `${rows[index]?.getAttribute("data-virtual-list-item-key") ?? ""},`;
+  }
+  return out;
+}
+
+/**
+ * 等到挂载的行**真的换了**才算这一屏到了。
+ *
+ * 一帧是不够的：真机上虚拟列表跟手要好几帧才挂上新的窗口（2026-10-02 实测——
+ * 一帧一步地扫 80 屏只收到 50 条，而对话有 385 条）。`nextFrame` 一等就往下滚，
+ * 后面几十屏看到的还是已经收过的行，于是「超出首屏」那条验收静悄悄过不去。
+ * `maxFrames` 是上限：到底那一屏换不换都一样，不能白等到天荒地老。
+ */
+export async function settleUntilMounted(
+  view: ListViewport,
+  was: string,
+  settle: () => Promise<void>,
+  maxFrames = 30,
+): Promise<void> {
+  for (let frame = 0; frame < maxFrames; frame += 1) {
+    await settle();
+    if (keysOf(view) !== was) return;
+  }
+}
 export function nextFrame(): Promise<void> {
   return new Promise((resolve) => {
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
@@ -163,9 +198,9 @@ export function readRow(row: Element): Message | null {
  * 对话一动不动，「超出首屏」那条验收照样不过。两样都得占。
  *
  * `clientHeight` 为 0 的层同样不认：看不见的一屏挪不动，扫的时候每轮只按
- * `max(1, clientHeight)` 挪 **1px**，转满 `MAX_SWEEPS` 也扫不完一屏，正好被中继那个
- * 30s 的 `timeout` 吞成一句没头没脑的话（真机撞过：`height:0` + `overflow:hidden`
- * 的包装层把 `.ds-virtual-list-items` 裹在里面）。
+ * `max(1, clientHeight)` 挪 **1px**，转满 `MAX_SWEEPS` 也扫不完。留着这条是防这种层
+ * 混进来——**它不是真机那次超时的原因**（那次的决定性因素是下面 `settleUntilMounted`
+ * 那一头），别拿它当已验过的结论。
  */
 function scrollsVertically(element: Element): boolean {
   if (element.clientHeight <= 0) return false;
@@ -231,8 +266,9 @@ export async function readMessages(
     sweepInto(view, seen);
     if (view.scrollTop + view.clientHeight >= view.scrollHeight - 1) break;
     const before = view.scrollTop;
+    const was = keysOf(view);
     view.scrollTop += Math.max(1, view.clientHeight);
-    await settle();
+    await settleUntilMounted(view, was, settle);
     if (view.scrollTop <= before) throw new Error("滚不动消息列表");
     // 越往下内容越多（边滚边加载）就会一直不到底；到点收手，别让中继替我们报 timeout
     if (Date.now() - startedAt > SWEEP_BUDGET_MS) throw new Error("扫不完这段对话");
@@ -250,8 +286,9 @@ export async function readLast(
   settle: () => Promise<void> = nextFrame,
 ): Promise<Message | null> {
   const home = view.scrollTop;
+  const was = keysOf(view);
   view.scrollTop = view.scrollHeight;
-  await settle();
+  await settleUntilMounted(view, was, settle);
   const seen = new Map<string, Message>();
   sweepInto(view, seen);
   view.scrollTop = home;

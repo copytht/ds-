@@ -198,6 +198,57 @@ function keyRow(key: number, role: "user" | "assistant"): string {
   return `<div data-virtual-list-item-key="${key}"><div class="ds-message">${body}</div></div>`;
 }
 
+/**
+ * 挂载要迟几帧才跟上的假虚拟列表——**这才是真机那次超时的根因**（2026-10-02）：
+ * 一帧一步地扫 80 屏只收到 50 条，而对话有 385 条。中间那些屏就这么被跳过去了，
+ * 不是扫得慢，是读的时候那一屏还没挂上。
+ *
+ * `lag` 是挂载要等几帧；期间再被叫去别的位置，前面那一屏就永远看不到了。
+ */
+function laggingScreens(
+  screens: string[][],
+  lag: number,
+): {
+  view: ListViewport;
+  settle: () => Promise<void>;
+} {
+  const HEIGHT = 100;
+  const host = document.createElement("div");
+  let index = 0;
+  let target = 0;
+  let left = 0;
+  const paint = (): void => {
+    host.innerHTML = screens[index]?.join("") ?? "";
+  };
+  paint();
+  const clamp = (value: number): number =>
+    Math.min(screens.length - 1, Math.max(0, Math.round(value / HEIGHT)));
+  const view: ListViewport = {
+    get scrollTop(): number {
+      return index * HEIGHT;
+    },
+    set scrollTop(value: number) {
+      target = clamp(value);
+      left = lag;
+    },
+    get clientHeight(): number {
+      return HEIGHT;
+    },
+    get scrollHeight(): number {
+      return screens.length * HEIGHT;
+    },
+    querySelectorAll: (selector: string) => host.querySelectorAll(selector),
+  };
+  const settle = async (): Promise<void> => {
+    if (left > 0) left -= 1;
+    if (left === 0 && target !== index) {
+      index = target;
+      paint();
+    }
+  };
+  return { view, settle };
+}
+
 const settleNow = async (): Promise<void> => {};
 
 describe("虚拟列表：只有视口里的行在 DOM", () => {
@@ -264,6 +315,27 @@ describe("虚拟列表：只有视口里的行在 DOM", () => {
     expect(view.scrollTop).toBe(0);
   });
 
+  it("挂载迟到的屏也要收得到——一帧一步会把中间的屏跳过去（真机那次超时的根因）", async () => {
+    const screens = [
+      [keyRow(0, "user")],
+      [keyRow(1, "assistant")],
+      [keyRow(2, "user")],
+      [keyRow(3, "assistant")],
+      [keyRow(4, "user")],
+    ];
+    const { view, settle } = laggingScreens(screens, 3);
+
+    const result = await readMessages(view, settle);
+
+    expect(result.map((m) => m.text)).toEqual([
+      "第 0 问",
+      "第 1 答",
+      "第 2 问",
+      "第 3 答",
+      "第 4 问",
+    ]);
+  });
+
   it("scrollTop 写在真的会滚那一层——两层都能滚时用最里层", async () => {
     document.body.innerHTML = conversationHtml();
     const itemWrites = stubLayer(document.querySelector(".ds-virtual-list-items")!, "auto", 100);
@@ -289,8 +361,7 @@ describe("虚拟列表：只有视口里的行在 DOM", () => {
   });
 
   it("内层 clientHeight 为 0（height:0 + overflow:hidden 的包装层）→ 跳过它，用外层", async () => {
-    // 真机撞过：选中这种层，每轮只挪 1px，两千轮挪不完一屏 → 中继 30s 判 timeout，
-    // 真原因被吞成一句没头没脑的话。
+    // 看不见的一屏扫不动：每轮只挪 1px。留着这条是防这种层混进来。
     document.body.innerHTML = conversationHtml();
     const itemWrites = stubLayer(document.querySelector(".ds-virtual-list-items")!, "hidden", 0);
     const listWrites = stubLayer(document.querySelector(".ds-virtual-list")!, "auto", 100);
