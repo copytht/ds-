@@ -3,23 +3,74 @@ import type { ActionFrame } from "./actionstream";
 /**
  * 当前页面的最小状态。这个执行器跑在目标标签页的内容脚本（ISOLATED 世界）里，
  * 读到的是那个标签页的 DOM；只返回结构稳定、不随 DeepSeek 前端改版一夜崩掉的东西——
- * 地址、标题、写作框在不在。要读 React 状态 / webpack 模块再另开一跳。
+ * 地址、标题、写作框在不在、账号在什么处境上。要读 React 状态 / webpack 模块再另开一跳。
  */
 export type PageState = {
   readonly url: string;
   readonly title: string;
   readonly composerPresent: boolean;
+  readonly account: AccountState;
 };
+
+/**
+ * 账号处境（#2）：**写作框不在的时候，页面自己知道为什么，扩展要认出来**。
+ * 禁言期间 DeepSeek 干脆不渲染写作框，此前扩展一声不吭地空等一个永远不会出现的
+ * 输入框，人在页面上看得见橙条、agent 什么都看不见。
+ *
+ * - `ready`：写作框在；
+ * - `muted`：站点给了处罚句，`until` 是它写着的解封时刻（认不出时刻就是 `null`，
+ *   仍然算禁言——认不出时间不等于没禁）；
+ * - `signed-out`：站点把没登录的人导到了登录页；
+ * - `unknown`：写作框不在、又认不出上面任何一种。**不猜**——分不清就说分不清。
+ */
+export type AccountState =
+  | { readonly kind: "ready" }
+  | { readonly kind: "muted"; readonly until: string | null }
+  | { readonly kind: "signed-out" }
+  | { readonly kind: "unknown" };
 
 /** 写作框的认定放宽到两类容器：`<textarea>` 与 contenteditable（DeepSeek 前端两代都用过）。 */
 const COMPOSER_SELECTOR = "textarea, [contenteditable='true']";
 
+/**
+ * 处罚句只从警示条里认。会话正文里出现「禁言」是常事（#2 的原话），拿全文去搜
+ * 等于把用户聊天里的话当成处罚——所以两头都收：容器是警示条，句子还得同时提到
+ * 「账号/你」与「禁言/封禁」。
+ */
+const ALERT_SELECTOR = ".ds-alert__content";
+/** 解封时刻是纯文本（真机 2026-10-02 抄的：页面上既没有 `<time>` 也没有 `datetime`）。 */
+const MUTE_UNTIL = /禁言至\s*(\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日\s*\d{1,2}:\d{2})/;
+/** 登录页路径（真机实测过：没登录时站点把人导到这儿）。 */
+const SIGNED_OUT_PATH = /\/sign_in$/;
+
+/** 警示条里的文本认不认得处罚句；认得出就把站上写的解封时刻一起带出来。 */
+export function readMute(root: ParentNode): { readonly until: string | null } | null {
+  for (const index of Array.from(root.querySelectorAll(ALERT_SELECTOR)).values()) {
+    const text = index.textContent ?? "";
+    if (!/(账号|你)/.test(text)) continue;
+    if (!/(禁言|封禁)/.test(text)) continue;
+    return { until: MUTE_UNTIL.exec(text)?.[1] ?? null };
+  }
+  return null;
+}
+
+/** 写作框在不在 + 账号在什么处境上。写作框不在时才去认处境。 */
+export function readAccount(composerPresent: boolean): AccountState {
+  if (composerPresent) return { kind: "ready" };
+  const mute = readMute(document);
+  if (mute !== null) return { kind: "muted", until: mute.until };
+  if (SIGNED_OUT_PATH.test(location.pathname)) return { kind: "signed-out" };
+  return { kind: "unknown" };
+}
+
 /** 名字对齐 dsb 名册里的 `page.state`（`dsb/actions.py:59-61`）。`frame` 不用：读的就是本标签页。 */
 export function readPageState(_frame: ActionFrame): PageState {
+  const composerPresent = document.querySelector(COMPOSER_SELECTOR) !== null;
   return {
     url: location.href,
     title: document.title,
-    composerPresent: document.querySelector(COMPOSER_SELECTOR) !== null,
+    composerPresent,
+    account: readAccount(composerPresent),
   };
 }
 

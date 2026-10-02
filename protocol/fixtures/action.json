@@ -35,7 +35,8 @@
         "result": {
           "url": "https://chat.deepseek.com/a/chat/s/abc123",
           "title": "DeepSeek - 深度求索",
-          "composerPresent": true
+          "composerPresent": true,
+          "account": { "kind": "ready" }
         }
       }
     },

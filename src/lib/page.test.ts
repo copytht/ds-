@@ -45,6 +45,63 @@ describe("page.state 执行器", () => {
     expect(readPageState(FRAME).composerPresent).toBe(true);
   });
 
+  // 下面这组是 #2：写作框不在的时候页面自己知道为什么，扩展要认出来，不能空等。
+  // 判据的结构与文案是 2026-10-02 从真机页面抄的（`.output/web.html`）。
+  const MUTE_ALERT =
+    '<div class="ds-alert ds-alert--warning ds-alert--bordered">' +
+    '<div class="ds-alert__content">由于违反用户使用规范，你的账号已被禁言至 ' +
+    '2026 年 10 月 10 日 20:21，如有疑问请 <div role="button">联系我们。</div></div></div>';
+
+  it("写作框在 → 处境 ready", () => {
+    document.body.innerHTML = `<textarea></textarea>${MUTE_ALERT}`;
+
+    expect(readPageState(FRAME).account).toEqual({ kind: "ready" });
+  });
+
+  it("没有写作框 + 警示条里有处罚句 → muted，解封时刻按站上写的原样带出来", () => {
+    document.body.innerHTML = MUTE_ALERT;
+
+    expect(readPageState(FRAME).account).toEqual({
+      kind: "muted",
+      until: "2026 年 10 月 10 日 20:21",
+    });
+  });
+
+  it("会话正文里出现「禁言」不算处罚（那是常事）——只在警示条里认", () => {
+    document.body.innerHTML = '<div class="_871cbca">你被禁言了吗</div>';
+
+    expect(readPageState(FRAME).account).toEqual({ kind: "unknown" });
+  });
+
+  it("警示条里只提「禁言」不提账号/你 → 不算处罚句", () => {
+    document.body.innerHTML = '<div class="ds-alert__content">本周禁言赛制调整，详情见公告</div>';
+
+    expect(readPageState(FRAME).account).toEqual({ kind: "unknown" });
+  });
+
+  it("是处罚句但认不出时刻 → 仍算 muted，until 交 null（认不出时间≠没禁）", () => {
+    document.body.innerHTML =
+      '<div class="ds-alert__content">你的账号已被封禁，解除时间另行通知</div>';
+
+    expect(readPageState(FRAME).account).toEqual({ kind: "muted", until: null });
+  });
+
+  it("没有写作框、没处罚句、又在登录页 → signed-out", () => {
+    window.history.replaceState(null, "", "/sign_in");
+    document.body.innerHTML = "<div>登录</div>";
+
+    expect(readPageState(FRAME).account).toEqual({ kind: "signed-out" });
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("没有写作框、没处罚句、也不在登录页 → unknown，不猜", () => {
+    window.history.replaceState(null, "", "/a/chat/s/abc123");
+    document.body.innerHTML = "<div>无框</div>";
+
+    expect(readPageState(FRAME).account).toEqual({ kind: "unknown" });
+    window.history.replaceState(null, "", "/");
+  });
+
   it("result 的键与共享 fixture 的 page.state 样例一致（TS 与 Python 共读）", () => {
     const sample = fixtureCases<ActionCase>("action.json").find(
       ({ name }) => name === "page.state 成功",
