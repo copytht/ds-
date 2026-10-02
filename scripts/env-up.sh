@@ -87,9 +87,24 @@ case "$tabs_now" in
 esac
 
 tabs=$(probe '{"action":"tabs.list","params":{},"target":null}')
+# JSON 里冒号后有空格（python 出的），模式必须留空，否则抠出空串 → target="" → tab-gone
+tab_id=$(printf '%s' "$tabs" | sed -n 's/.*"id":[[:space:]]*\([0-9]\{1,\}\).*/\1/p')
+# 抠空了就响着退出：静默的空串会变成 target=""，下游只回 tab-gone，看不出是哪一步坏了
+[ -n "$tab_id" ] || { say 判据3 "从 tabs.list 抠不出标签页 id：$tabs" ; exit 1; }
 case "$tabs" in
   *'"tabs": []'*) say 判据3 "标签页没出来 → /tmp/dsb-open.log" ; exit 1 ;;
-  *) say 判据3 "有会话标签页，可直接带 target 打动作" ;;
+  *) say 判据3 "有会话标签页 id=${tab_id}，可直接带 target 打动作" ;;
+esac
+
+# 判据4：写作框在不在 —— 这是**能不能开工**的那一条，没有它队列里的活全都只能干瞪眼
+state=$(probe "{\"action\":\"page.state\",\"params\":{},\"target\":\"$tab_id\"}")
+case "$state" in
+  *'"composerPresent": true'*) say 判据4 "写作框在，能写能发" ;;
+  *'"composerPresent": false'*)
+    say 判据4 "无写作框 → 站点没渲染聊天界面，多半未登录；**只第一次，人做**"
+    say 判据4 "读类动作仍可用，写类（composer.* / send.*）一律会失败"
+    ;;
+  *) say 判据4 "读不到页面状态：$state" ;;
 esac
 
 cat <<EOF
