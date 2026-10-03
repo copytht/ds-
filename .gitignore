@@ -19,6 +19,10 @@ __pycache__/
 screenshots/
 *.log
 .DS_Store
+# 本机装出来的东西，不进库（守则钉死）
+opencode.json
+pnpm-workspace.yaml
+vendor/
 
 # dsh 子会话的持久日志
 .dsh-state/
