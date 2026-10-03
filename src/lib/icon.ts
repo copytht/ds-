@@ -31,7 +31,19 @@ const GLYPHS: Readonly<Record<IconState, readonly string[]>> = {
   "on-unreachable": ["..###..", "..###..", "..###..", "..###..", ".......", "..###..", "......."],
 };
 
-const CLICK_HINT = "点击切换总开关。";
+/** 角标转速帧（#28）：问句在途时按这个顺序循环转，读法同 `scripts/watch-status.py`。 */
+export const SPIN_FRAMES = ["|", "/", "-", "\\"] as const;
+
+/**
+ * 第 `tick` 帧的转速字符（`tick` 从 0 递增）。纯函数，帧序与转速都可单测。
+ */
+export function spinFrame(tick: number): string {
+  const frame = SPIN_FRAMES[tick % SPIN_FRAMES.length];
+  if (frame === undefined) throw new Error("转速帧还没到场");
+  return frame;
+}
+
+const CLICK_HINT = "点击打开开关面板。";
 
 /** 等待期各阶段的一句话：角标只取头一个字，悬停说全。 */
 function phaseText(phase: SendPhase): string {
@@ -63,17 +75,21 @@ export function describeSend(progress: SendStatus): string {
  * 关与不可达是**硬状态**，压过一切：像素图标万一画不出来，角标要独自把三态撑住，
  * 所以前两个分支绝不能被等待中的阶段盖掉。开着且可达时，才轮到「等人回」与等待
  * 现场；等人回压过在途进度——进度是暂时的，人等着是定住的，不看到「人」就没人回。
+ *
+ * 问句在途时（给了转速帧）角标转起来；没传帧的调用方仍拿到阶段字作回退。
  */
 export function badgeText(
   state: IconState,
   progress?: SendStatus | null,
   pendingAsk = false,
+  spin?: number,
 ): string {
   if (state === "off") return "关";
   if (state === "on-unreachable") return "!";
   if (pendingAsk) return ASK_BADGE_TEXT;
-  if (!progress) return "";
-  return { queued: "等", running: "想", writing: "写", done: "" }[progress.phase];
+  if (!progress || progress.phase === "done") return "";
+  if (spin !== undefined) return spinFrame(spin);
+  return { queued: "等", running: "想", writing: "写" }[progress.phase];
 }
 
 /**

@@ -88,13 +88,14 @@ import {
  *
  * 1. 打中继（`POST /send`）——网络层的失败也折成同构载荷，解析只有一条路径；
  * 2. 工具栏图标即状态位：关 / 开且中继可达 / 开但中继不可达，悬停给原因与启动命令；
- * 3. 点击图标切换总开关（总开关本身还是只存在 `storage.local`，默认关）；
+ * 3. 点图标开开关面板（popup）——总开关在面板里改，本身还是只存在
+ *    `storage.local`，默认关；
  * 4. 问句在途时轮询 `GET /status`，把等待现场（阶段 / 字数 / 剩余时间）摆上角标与悬停，
  *    中继答不上来当场翻红——进度只走图标，**不进对话流**；
  * 5. 每次翻红都留一笔（时刻 / 环节 / 原因）进 `storage.local`，自己绿了再补上恢复时刻，
  *    悬停回看——否则红过就蒸发，事后没人答得出「为什么红」。
  *
- * 不建 options 页、不建 popup、不建面板（spec #9 Out of Scope）。
+ * 不建面板；popup 只放总开关（#28），选项页管「代你发言」闸。
  */
 export default defineBackground(() => {
   /** 周期探活的闹钟名与周期：30s 是 alarms 的下限，再密浏览器也不认。 */
@@ -103,6 +104,9 @@ export default defineBackground(() => {
 
   /** 订阅期间的保活间隔：MV3 的 service worker 空闲约 30s 就被收走，挂着的流也跟着没。 */
   const KEEPALIVE_INTERVAL_MS = 20_000;
+
+  /** 角标转速帧的间隔（#28）：够看出在转，又不狂刷。 */
+  const SPIN_INTERVAL_MS = 250;
 
   /**
    * 一趟轮询没打上时，最多重试几次、每次隔多久。
@@ -119,6 +123,9 @@ export default defineBackground(() => {
   let notice: FailureNotice | null = null;
   /** 问句在途时的现场（阶段/字数/剩余时间），由 `/status` 轮询喂；空档恒为 null。 */
   let sendProgress: SendStatus | null = null;
+  /** 角标转速（#28）：在途期间 250ms 一帧，问完即停；timer 只在在途时排。 */
+  let spinTick = 0;
+  let spinTimer: ReturnType<typeof setInterval> | undefined;
   /**
    * 失败留痕，新的在最前。启动时从 `storage.local` 载入，所以 service worker 被收走、
    * 浏览器重启都丢不了——只放内存的话，红过一次就再没人答得出「为什么红」。
@@ -205,6 +212,20 @@ export default defineBackground(() => {
    * 等待现场（等 / 想 / 写），这是「等着的时候什么都不知道」那个缺口的出口。
    */
   async function paintIcon(): Promise<void> {
+    // 角标转速（#28）：在途期间才转。paintIcon 是所有状态变化的漏斗，
+    // 排/清都在这儿，转速的生死不用每个调用点各自管。
+    const spinInFlight =
+      state === "on-reachable" && sendProgress !== null && sendProgress.phase !== "done";
+    if (spinInFlight) {
+      spinTimer ??= setInterval(() => {
+        spinTick += 1;
+        void paintIcon();
+      }, SPIN_INTERVAL_MS);
+    } else if (spinTimer !== undefined) {
+      clearInterval(spinTimer);
+      spinTimer = undefined;
+      spinTick = 0;
+    }
     await browser.action.setTitle({
       title: iconTitle(
         state,
@@ -215,7 +236,7 @@ export default defineBackground(() => {
       ),
     });
     await browser.action.setBadgeText({
-      text: badgeText(state, sendProgress, hasPendingAsk(pendingAsks)),
+      text: badgeText(state, sendProgress, hasPendingAsk(pendingAsks), spinTick),
     });
     try {
       await browser.action.setIcon({
@@ -679,16 +700,6 @@ export default defineBackground(() => {
     // 探到了就说明上一次的红到此为止（包括关着浏览器时留下的那笔），补一句再画。
     if (state === "on-reachable" && recoverFailure()) await paintIcon();
   }
-
-  // 点击图标 = 切换总开关（启动命令走悬停文案，见 #13 补充要求）。
-  browser.action.onClicked.addListener(() => {
-    void (async () => {
-      const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
-      const next = !readToggle(stored[TOGGLE_STORAGE_KEY]);
-      await browser.storage.local.set({ [TOGGLE_STORAGE_KEY]: next });
-      console.log(`[ds-] 图标被点，总开关切到${next ? "开" : "关"}`);
-    })();
-  });
 
   browser.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;

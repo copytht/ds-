@@ -21,7 +21,8 @@ export default defineConfig({
     // 不靠任何浏览器权限去扩站点范围。
     permissions: ["storage", "alarms"],
     // 工具栏图标即状态位（三态像素与悬停文案由 background 现算）；
-    // 不建 popup、不建 options 页，这里只给个默认标题把 action 声明出来。
+    // popup（entrypoints/popup/index.html，WXT 自动注册为 default_popup）
+    // 只放总开关——点图标开它，不再直接切开关。
     // 静态图标是 background 还没 setIcon 前的兜底，画的是 "off" 态（默认关）。
     action: {
       default_title: "ds-",

@@ -4,11 +4,13 @@ import {
   ICON_COLORS,
   ICON_SIZE,
   ICON_STATES,
+  SPIN_FRAMES,
   afterHealthProbe,
   badgeText,
   describeSend,
   iconTitle,
   renderIcon,
+  spinFrame,
 } from "./icon";
 import { SEND_PHASES, type SendStatus } from "./relay";
 import { failureNotice, RELAY_START_COMMAND } from "./reply";
@@ -79,13 +81,13 @@ describe("iconTitle · 悬停文案", () => {
   it("关着的时候说清楚没接管页面、点一下能开", () => {
     const title = iconTitle("off");
     expect(title).toContain("总开关已关");
-    expect(title).toContain("点击切换总开关");
+    expect(title).toContain("点击打开开关面板");
   });
 
   it("开着且中继可达时说清楚可达", () => {
     const title = iconTitle("on-reachable");
     expect(title).toContain("中继可达");
-    expect(title).toContain("点击切换总开关");
+    expect(title).toContain("点击打开开关面板");
   });
 
   it("开着但中继不可达：原因与启动命令同框（补充要求）", () => {
@@ -94,7 +96,7 @@ describe("iconTitle · 悬停文案", () => {
     expect(title).toContain("opencode");
     expect(title).toContain(RELAY_START_COMMAND);
     expect(RELAY_START_COMMAND).toBe("uv run dsb");
-    expect(title).toContain("点击切换总开关");
+    expect(title).toContain("点击打开开关面板");
   });
 
   it("超时与响应异常也带原因和启动命令", () => {
@@ -255,7 +257,7 @@ describe("iconTitle · 等待现场进悬停", () => {
     expect(title).toContain("正在写答复");
     expect(title).toContain("已写 128 字");
     expect(title).toContain("还剩 52 秒");
-    expect(title).toContain("点击切换总开关");
+    expect(title).toContain("点击打开开关面板");
   });
 
   it("没问句在途就还是原来那一句", () => {
@@ -309,5 +311,35 @@ describe("iconTitle · 上次故障回看", () => {
 
   it("关着的时候历史更不相干", () => {
     expect(iconTitle("off", null, null, history)).not.toContain("上次故障");
+  });
+});
+
+describe("角标转速（#28）", () => {
+  it("帧按 | / - \\ 循环", () => {
+    expect(SPIN_FRAMES).toEqual(["|", "/", "-", "\\"]);
+    expect([0, 1, 2, 3, 4, 5].map(spinFrame)).toEqual(["|", "/", "-", "\\", "|", "/"]);
+  });
+
+  it("在途时角标显示转速字符，阶段字退场（详情在悬停）", () => {
+    expect(badgeText("on-reachable", send("queued"), false, 0)).toBe("|");
+    expect(badgeText("on-reachable", send("running"), false, 2)).toBe("-");
+    expect(badgeText("on-reachable", send("writing"), false, 3)).toBe("\\");
+  });
+
+  it("没传帧的调用方仍拿到阶段字作回退", () => {
+    expect(badgeText("on-reachable", send("queued"))).toBe("等");
+    expect(badgeText("on-reachable", send("running"))).toBe("想");
+    expect(badgeText("on-reachable", send("writing"))).toBe("写");
+  });
+
+  it("硬状态与「人」压过转速帧", () => {
+    expect(badgeText("off", send("queued"), false, 2)).toBe("关");
+    expect(badgeText("on-unreachable", send("queued"), false, 2)).toBe("!");
+    expect(badgeText("on-reachable", send("queued"), true, 2)).toBe("人");
+  });
+
+  it("答复写完（done）与不在途：不转、清空", () => {
+    expect(badgeText("on-reachable", send("done"), false, 2)).toBe("");
+    expect(badgeText("on-reachable", null, false, 2)).toBe("");
   });
 });
