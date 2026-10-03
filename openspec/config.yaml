@@ -17,7 +17,6 @@ context: |
 
   代码由网页（强模型）写，agent 只做落地与验证；见 AGENTS.md。
 
-
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
 # Example:
