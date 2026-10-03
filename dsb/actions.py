@@ -46,6 +46,7 @@ TOGGLE_ACTIONS = frozenset({"toggle.get", "toggle.set"})
 ERROR_UNKNOWN_ACTION = "unknown-action"
 ERROR_TIMEOUT = "timeout"
 ERROR_TAB_GONE = "tab-gone"
+ERROR_BACKING_OFF = "backing-off"
 #: 页面侧「做不到」的三个码（2026-10-02 起，#2 第 3 项）：扩展执行器抛 PageError 带的。
 #: 它们与 tab-gone 分开，是因为「标签页没了」和「没有写作框」「页面结构变了」
 #: 「读不完」该让 agent 做完全不同的事——后者多数重试没用，该报给人。
@@ -62,6 +63,7 @@ ACTION_ERRORS = frozenset(
         ERROR_UNKNOWN_ACTION,
         ERROR_TIMEOUT,
         ERROR_TAB_GONE,
+        ERROR_BACKING_OFF,
         ERROR_COMPOSER_ABSENT,
         ERROR_PAGE_CHANGED,
         ERROR_READ_FAILED,

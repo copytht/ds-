@@ -10,6 +10,8 @@
  * 有信息量的原因吞成一个没有信息量的码。
  */
 
+import { gateBackoff, type BackoffState } from "./backoff";
+import { isAccountState, type AccountState } from "./page";
 import type { ActionFrame } from "./actionstream";
 
 /** 回传端点：不验 token（扩展给不到），形状按 dsb/actions.py 的 `record_result`。 */
@@ -46,6 +48,8 @@ export const ACTION_ERROR_DISABLED = "disabled";
 export const ACTION_ERROR_UNKNOWN = "unknown-action";
 /** 目标标签页不在 / 这一跳没走通（target 认不出、没接执行口、消息没送到内容脚本）。 */
 export const ACTION_ERROR_TAB_GONE = "tab-gone";
+/** 账号在站点处罚区（禁言 / 退避中）：写动作没推给页面（见 `backoff.ts`）。 */
+export const ACTION_ERROR_BACKING_OFF = "backing-off";
 /** 写作框不在：禁言 / 未登录 / 页面没渲染（`page.state` 的 `account` 能说清是哪一种）。 */
 export const ACTION_ERROR_COMPOSER_ABSENT = "composer-absent";
 /** 页面还在，但上面找不到认得的那个东西：发送键、「开启新对话」、消息列表。 */
@@ -83,6 +87,18 @@ export const SPEAK_GATED_ACTIONS: ReadonlySet<string> = new Set([
   "send.enter",
 ]);
 
+/**
+ * 「退避」闸下的动作：会改变页面状态的那些（写动作 + 开启新对话）。
+ * 只读动作（`composer.read` / `messages.*` / `page.state` / `tabs.list`）
+ * **不受退避影响**——账号在处罚区时人与 agent 仍要能读处境。
+ * 名单是显式的（与 `SPEAK_GATED_ACTIONS` 同一规矩），新增写动作要
+ * 记进来；`chat.new` 虽不动写作框，但它开新对话，也是写。
+ */
+export const BACKOFF_GATED_ACTIONS: ReadonlySet<string> = new Set([
+  ...SPEAK_GATED_ACTIONS,
+  "chat.new",
+]);
+
 /** 执行结果的同构校验：对端答的形状不合线协议的一律不算成功（只有 ok/result、ok/error 两条）。 */
 export function isActionOutcome(value: unknown): value is ActionOutcome {
   if (typeof value !== "object" || value === null) return false;
@@ -107,6 +123,10 @@ export type ActionContext = {
   readonly enabled: boolean;
   /** 「代你发言」闸：关着时动写作框的动作回 `disabled`（见 `SPEAK_GATED_ACTIONS`）。 */
   readonly speak: boolean;
+  /** 退避的持久状态（`backoff.ts`）：账号在处罚区时写动作回 `backing-off`。 */
+  readonly backoff: BackoffState;
+  /** 退避状态写回口：判定后由 `runAction` 落盘（重启后仍记得）。 */
+  readonly setBackoff: (next: BackoffState) => Promise<void>;
   readonly tabs: TabsApi;
   /** 总开关读写口；没接上时 `toggle.get/set` 落 `unknown-action`。 */
   readonly toggle?: ToggleApi;
@@ -148,6 +168,32 @@ export async function listSessionTabs(tabs: TabsApi): Promise<SessionTab[]> {
 }
 
 /**
+ * 退避闸的探针：向 target 标签页问一次 `page.state`，拿账号处境。
+ * 问不到（标签页没了 / 回话不合形状）回 null——调用方当场报
+ * `tab-gone`（这一跳走不通），不放行：放行在处罚区是往处罚区
+ * 堆活，还会把探针自身的故障藏成执行器的错（实测撞过：放行后
+ * 执行撞写作框，报成 composer-absent）。
+ */
+async function probeAccount(
+  tabId: number,
+  frame: ActionFrame,
+  sendToTab: (tabId: number, frame: ActionFrame) => Promise<ActionOutcome>,
+): Promise<AccountState | null> {
+  const outcome = await sendToTab(tabId, {
+    type: "action",
+    id: `${frame.id}:backoff`,
+    action: "page.state",
+    params: {},
+    target: frame.target,
+  });
+  if (!outcome.ok) return null;
+  const { result } = outcome;
+  if (typeof result !== "object" || result === null) return null;
+  const account = (result as Record<string, unknown>)["account"];
+  return isAccountState(account) ? account : null;
+}
+
+/**
  * 一件动作 → 回传什么。**每条路都当场回一个册子里的码，没有「不回」这一说**：
  * 中继那边 `wait(timeout)` 一直没人接账，就会等满 30s 判 `timeout`，把真正的原因吞掉。
  *
@@ -175,6 +221,23 @@ export async function runAction(
     const tabId = /^\d+$/.test(frame.target) ? Number(frame.target) : Number.NaN;
     if (!Number.isSafeInteger(tabId) || context.sendToTab === undefined) {
       return { ok: false, error: ACTION_ERROR_TAB_GONE };
+    }
+    // 退避闸（写动作）：账号在处罚区就拦下，只读不受影响。在 speak 闸
+    // 之后——开关关着、闸关着先回 `disabled`，次序不翻。
+    if (BACKOFF_GATED_ACTIONS.has(frame.action)) {
+      const account = await probeAccount(tabId, frame, context.sendToTab);
+      // 问不到账号处境 = 这一跳走不通，当场报 **tab-gone**，不放行——
+      // 放行在处罚区是往处罚区堆活，而且会把「探针坏了」藏成执行器的错
+      // （实测撞过：放行后执行撞写作框，报成 composer-absent）。
+      if (account === null) {
+        return { ok: false, error: ACTION_ERROR_TAB_GONE };
+      }
+      const verdict = gateBackoff(context.backoff, account, Date.now());
+      // 判定后的状态要落盘：到期放行时清掉终点，重启后退避仍记得。
+      await context.setBackoff(verdict.next);
+      if (!verdict.proceed) {
+        return { ok: false, error: ACTION_ERROR_BACKING_OFF };
+      }
     }
     return context.sendToTab(tabId, frame);
   }

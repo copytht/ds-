@@ -242,6 +242,7 @@ describe("内容脚本的动作收信（entrypoints/content.ts 接的那一层�
     const sendResponse = await respond({ "composer.type": handler }, requestFor("composer.type"));
 
     expect(actionErrorCodes()).toContain("composer-absent"); // 册子里确实有这三个
+    expect(actionErrorCodes()).toContain("backing-off"); // 退避闸的码也在册
     expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: "tab-gone" });
   });
 

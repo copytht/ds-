@@ -64,6 +64,29 @@ export function readAccount(composerPresent: boolean): AccountState {
   return { kind: "unknown" };
 }
 
+/**
+ * `AccountState` 的校验：background 侧从标签页回话里读到的是
+ * `unknown`，过一遍这个再拿去喂退避判定——形状不对就当认不出
+ * （退避闸不猜，放行后由真正的执行去报它该报的码）。
+ */
+export function isAccountState(value: unknown): value is AccountState {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  switch (record["kind"]) {
+    case "ready":
+    case "signed-out":
+    case "unknown":
+      return Object.keys(record).length === 1;
+    case "muted":
+      return (
+        Object.keys(record).length === 2 &&
+        (record["until"] === null || typeof record["until"] === "string")
+      );
+    default:
+      return false;
+  }
+}
+
 /** 名字对齐 dsb 名册里的 `page.state`（`dsb/actions.py:59-61`）。`frame` 不用：读的就是本标签页。 */
 export function readPageState(_frame: ActionFrame): PageState {
   const composerPresent = document.querySelector(COMPOSER_SELECTOR) !== null;

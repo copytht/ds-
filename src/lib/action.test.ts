@@ -10,6 +10,7 @@ import {
   sendMessageSendToTab,
   isActionOutcome,
   type ActionContext,
+  type ActionOutcome,
   type SessionTab,
   type TabCandidate,
   type TabsApi,
@@ -30,7 +31,14 @@ function tabsApi(tabs: readonly TabCandidate[]): TabsApi & { calls: number } {
 }
 
 function context(overrides: Partial<ActionContext> = {}): ActionContext {
-  return { enabled: true, speak: true, tabs: tabsApi([]), ...overrides };
+  return {
+    enabled: true,
+    speak: true,
+    backoff: { until: null, round: 0 },
+    setBackoff: async () => undefined,
+    tabs: tabsApi([]),
+    ...overrides,
+  };
 }
 
 function frame(overrides: Partial<ActionFrame> = {}): ActionFrame {
@@ -345,10 +353,150 @@ describe("「代你发言」闸", () => {
   });
 
   it("闸开着时照常走", async () => {
-    const ctx = context({ speak: true, sendToTab: ok });
+    // 退避闸会先探一次 page.state：答一个 ready 账号，执行帧照常回。
+    const sendToTab = async (_tabId: number, received: ActionFrame) =>
+      received.action === "page.state"
+        ? ({ ok: true, result: { account: { kind: "ready" } } } as const)
+        : ({ ok: true, result: {} } as const);
+    const ctx = context({ speak: true, sendToTab });
     expect(await runAction(frame({ action: "composer.type", target: "42" }), ctx)).toEqual({
       ok: true,
       result: {},
     });
+  });
+});
+
+describe("退避闸（账号在处罚区，写动作停发）", () => {
+  /** 记下送到标签页的每一帧，断言「探针问了、执行没送」。 */
+  function recordingSendToTab(account: unknown): {
+    send: (tabId: number, frame: ActionFrame) => Promise<ActionOutcome>;
+    sent: ActionFrame[];
+  } {
+    const sent: ActionFrame[] = [];
+    return {
+      sent,
+      send: async (_tabId, received) => {
+        sent.push(received);
+        if (received.action === "page.state") {
+          return { ok: true, result: { account } } as const;
+        }
+        return { ok: true, result: {} } as const;
+      },
+    };
+  }
+
+  const MUTED = { kind: "muted", until: "2099 年 1 月 1 日 00:00" };
+
+  it("禁言中：写动作回 backing-off，执行帧不送到标签页", async () => {
+    const { send, sent } = recordingSendToTab(MUTED);
+    const writes: string[] = [];
+    const ctx = context({
+      sendToTab: send,
+      setBackoff: async (next) => {
+        writes.push(JSON.stringify(next));
+      },
+    });
+
+    const outcome = await runAction(
+      frame({ action: "composer.type", params: { text: "hi" }, target: "42" }),
+      ctx,
+    );
+
+    expect(outcome).toEqual({ ok: false, error: "backing-off" });
+    // 只问过 page.state（探针），composer.type 没送过去。
+    expect(sent.map((f) => f.action)).toEqual(["page.state"]);
+    // 判定落盘：长休到站点写的时刻。
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0] ?? "{}").until).toBeGreaterThan(Date.now());
+  });
+
+  it("只读动作不受退避影响：照常送到标签页", async () => {
+    const { send, sent } = recordingSendToTab(MUTED);
+    const ctx = context({ sendToTab: send });
+
+    const outcome = await runAction(frame({ action: "messages.list", target: "42" }), ctx);
+
+    expect(outcome).toEqual({ ok: true, result: {} });
+    // 读动作不探针、不拦。
+    expect(sent.map((f) => f.action)).toEqual(["messages.list"]);
+  });
+
+  it("退避到期且账号正常：放行并清掉终点（探活就是刚读的这一次）", async () => {
+    const { send, sent } = recordingSendToTab({ kind: "ready" });
+    const cleared: string[] = [];
+    const ctx = context({
+      backoff: { until: Date.now() - 1, round: 2 },
+      sendToTab: send,
+      setBackoff: async (next) => {
+        cleared.push(JSON.stringify(next));
+      },
+    });
+
+    const outcome = await runAction(frame({ action: "send.enter", target: "42" }), ctx);
+
+    expect(outcome).toEqual({ ok: true, result: {} });
+    // 先探针再执行，两帧都送了。
+    expect(sent.map((f) => f.action)).toEqual(["page.state", "send.enter"]);
+    // 终点清掉，回次留着——下次再进处罚区阶梯才乘得上去。
+    expect(JSON.parse(cleared[0] ?? "{}")).toEqual({ until: null, round: 2 });
+  });
+
+  it("退避没到期：继续拦，不把终点越推越远", async () => {
+    const { send } = recordingSendToTab({ kind: "ready" });
+    const until = Date.now() + 60_000;
+    const writes: string[] = [];
+    const ctx = context({
+      backoff: { until, round: 3 },
+      sendToTab: send,
+      setBackoff: async (next) => {
+        writes.push(JSON.stringify(next));
+      },
+    });
+
+    const outcome = await runAction(frame({ action: "chat.new", target: "42" }), ctx);
+
+    expect(outcome).toEqual({ ok: false, error: "backing-off" });
+    // 终点原样保留——频繁判定不会重算。
+    expect(JSON.parse(writes[0] ?? "{}")).toEqual({ until, round: 3 });
+  });
+
+  it("开关关着先回 disabled：次序不翻（退避闸在 speak 闸之后）", async () => {
+    const { send } = recordingSendToTab(MUTED);
+    const ctx = context({ enabled: false, speak: false, sendToTab: send });
+
+    expect(await runAction(frame({ action: "composer.type", target: "42" }), ctx)).toEqual({
+      ok: false,
+      error: "disabled",
+    });
+  });
+
+  it("探针问不到：当场报 tab-gone，执行帧不送（不放行往处罚区堆活）", async () => {
+    const sent: ActionFrame[] = [];
+    const ctx = context({
+      sendToTab: async (_tabId, received) => {
+        sent.push(received);
+        if (received.action === "page.state") {
+          return { ok: false, error: "tab-gone" } as const;
+        }
+        return { ok: true, result: {} } as const;
+      },
+    });
+
+    const outcome = await runAction(frame({ action: "composer.type", target: "42" }), ctx);
+
+    expect(outcome).toEqual({ ok: false, error: "tab-gone" });
+    // 只送了探针，执行帧没送。
+    expect(sent.map((f) => f.action)).toEqual(["page.state"]);
+  });
+
+  it("chat.new 也在退避闸下（开新对话也是写）", async () => {
+    const { send, sent } = recordingSendToTab(MUTED);
+    const ctx = context({ sendToTab: send });
+
+    expect(await runAction(frame({ action: "chat.new", target: "42" }), ctx)).toEqual({
+      ok: false,
+      error: "backing-off",
+    });
+    expect(sent.map((f) => f.action)).toEqual(["page.state"]);
   });
 });

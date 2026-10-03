@@ -2,6 +2,7 @@ import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 
 import { postActionResult, runAction, sendMessageSendToTab } from "../src/lib/action";
+import { readBackoff, BACKOFF_STORAGE_KEY } from "../src/lib/backoff";
 import { createActionStream, type ActionFrame } from "../src/lib/actionstream";
 import { actionRequestMessage, sendResponseMessage, parseSendRequest } from "../src/lib/channel";
 import {
@@ -422,10 +423,19 @@ export default defineBackground(() => {
    * 才留给中继按 timeout 收场。 */
   async function handleAction(frame: ActionFrame): Promise<void> {
     try {
-      const stored = await browser.storage.local.get([TOGGLE_STORAGE_KEY, SPEAK_STORAGE_KEY]);
+      const stored = await browser.storage.local.get([
+        TOGGLE_STORAGE_KEY,
+        SPEAK_STORAGE_KEY,
+        BACKOFF_STORAGE_KEY,
+      ]);
       const outcome = await runAction(frame, {
         enabled: readToggle(stored[TOGGLE_STORAGE_KEY]),
         speak: readSpeak(stored[SPEAK_STORAGE_KEY]),
+        // 退避：现读持久状态；判定后由 runAction 写回（重启后仍记得）。
+        backoff: readBackoff(stored[BACKOFF_STORAGE_KEY]),
+        setBackoff: async (next) => {
+          await browser.storage.local.set({ [BACKOFF_STORAGE_KEY]: next });
+        },
         tabs: { query: (query) => browser.tabs.query(query) },
         // 总开关读写口：真源就是 storage.local（同一条真源，图标与武装都跟着它走）。
         // 写入触发 storage.onChanged → syncFromStorage，武装/断流随之生效。
