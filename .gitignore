@@ -22,3 +22,4 @@ screenshots/
 
 # dsh 子会话的持久日志
 .dsh-state/
+.agents/skills/.openspec-target

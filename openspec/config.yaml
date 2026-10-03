@@ -4,10 +4,19 @@ schema: spec-driven
 # Add only constraints that should guide OpenSpec artifacts and workflows.
 # Include constraints an agent cannot infer by reading the code.
 # Keep general project documentation and discoverable codebase facts out.
-# Example:
-#   context: |
-#     Designs and tasks must cover Windows, macOS, and Linux
-#     Write all artifacts in Spanish
+context: |
+  本仓库由 openspec 驱动开发；此前另一套技能体系（访谈 / 词汇表 / ADR）
+  已删除，这三条纪律迁移到这里，是每个 change 的产物都要守的约束：
+
+  - 访谈要留痕：提案前若有拿不准的决定，访谈结论写进 proposal.md，
+    别只留在会话里——会话一关就没了（承接已删的 grill-with-docs）。
+  - 词汇表归 CONTEXT.md：新词先查根 CONTEXT.md，有了就用、没有就
+    先加词再写规格；规格里的名词必须与之一致（承接已删的 domain-modeling）。
+  - 不可逆的决定先落 ADR 再写规格：改协议、围栏、契约这类决定，
+    docs/adr/ 里先有记录，规格才引用它（ADR-0001 起）。
+
+  代码由网页（强模型）写，agent 只做落地与验证；见 AGENTS.md。
+
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
