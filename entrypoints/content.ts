@@ -22,6 +22,7 @@ import {
   typeComposer,
 } from "../src/lib/page";
 import { lastMessage, listMessages } from "../src/lib/messages";
+import { waitFence, waitReply } from "../src/lib/wait";
 import {
   parseToggleMessage,
   readToggle,
@@ -93,6 +94,9 @@ export default defineContentScript({
       // 只读那批：读对话走 DOM（#20 口径），不碰站点的响应体。
       "messages.list": listMessages,
       "messages.last": lastMessage,
+      // 等动作（#22）：等围栏、等回灌——只读，不动写作框。
+      "wait.fence": waitFence,
+      "wait.reply": waitReply,
     };
 
     // background 打过来的动作帧（走 `tabs.sendMessage`）：当场交回一个 ActionOutcome；

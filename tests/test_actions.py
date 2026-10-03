@@ -536,14 +536,14 @@ def test_the_book_only_admits_actions_it_can_relay() -> None:
             "chat.new",
             "toggle.get",
             "toggle.set",
+            "wait.reply",
+            "wait.fence",
         }
         == KNOWN_ACTIONS
     )
     assert "stop.click" not in KNOWN_ACTIONS  # 还是占位，实现后再并进来
     assert set(WRITE_ACTIONS) == {
         "stop.click",
-        "wait.reply",
-        "wait.fence",
     }
 
 

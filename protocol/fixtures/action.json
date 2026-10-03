@@ -110,6 +110,29 @@
       "response": { "ok": true, "action": "composer.clear", "result": {} }
     },
     {
+      "name": "wait.fence 成功",
+      "request": { "action": "wait.fence", "params": {}, "target": "42" },
+      "response": {
+        "ok": true,
+        "action": "wait.fence",
+        "result": { "question": "查一下今天的天气" }
+      }
+    },
+    {
+      "name": "wait.reply 成功",
+      "request": { "action": "wait.reply", "params": {}, "target": "42" },
+      "response": {
+        "ok": true,
+        "action": "wait.reply",
+        "result": { "text": "agent:\nstatus: ok\nanswer[1]{text}:\n  查到了" }
+      }
+    },
+    {
+      "name": "wait.fence 超时失败",
+      "request": { "action": "wait.fence", "params": { "timeout": 1 }, "target": "42" },
+      "response": { "ok": false, "action": "wait.fence", "error": "timeout" }
+    },
+    {
       "name": "未订阅失败",
       "request": { "action": "tabs.list", "params": {}, "target": null },
       "response": { "ok": false, "action": "tabs.list", "error": "no-subscriber" }

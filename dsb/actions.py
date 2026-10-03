@@ -76,13 +76,9 @@ READ_ACTIONS = frozenset(
 )
 
 #: 写动作占位：还没实现，**不进名册**——提交它们会落 unknown-action，实现后再并进 KNOWN_ACTIONS。
-WRITE_ACTIONS = (
-    "stop.click",
-    "wait.reply",
-    "wait.fence",
-)
+WRITE_ACTIONS = ("stop.click",)
 
-#: 名册：只读那批 + 已落地的写动作（`composer.*` 已实现，进名册）。
+#: 名册：只读那批 + 已落地的写动作（`composer.*` 与 `wait.*` 已实现，进名册）。
 KNOWN_ACTIONS = READ_ACTIONS | frozenset(
     {
         "composer.type",
@@ -92,6 +88,8 @@ KNOWN_ACTIONS = READ_ACTIONS | frozenset(
         "chat.new",
         "toggle.get",
         "toggle.set",
+        "wait.reply",
+        "wait.fence",
     }
 )
 

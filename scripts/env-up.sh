@@ -27,6 +27,23 @@ fi
 # ---- 2) 中继 ----
 if curl -sf -m 3 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
   say 中继 "已在跑"
+  # dsb 是长驻进程、不重载代码：源码比进程新时跑的是旧代码
+  # （实测撞过：名册加了动作，提交还落 unknown-action）。
+  # 只提示、不擅自动——重启中继会断动作流，子会话的跨问
+  # 上下文也丢（「起一次、跨问复用」）。
+  RELAY_PID=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1)
+  NEWEST_PY=$(find dsb -name '*.py' -exec stat -f %m {} + 2>/dev/null | sort -rn | head -1)
+  STARTED_AT=$(ps -p "${RELAY_PID:-0}" -o lstart= 2>/dev/null | python3 -c '
+import sys
+from datetime import datetime
+raw = " ".join(sys.stdin.read().split())  # ps 的 lstart 日是空格填充的
+try:
+    print(int(datetime.strptime(raw, "%a %b %d %H:%M:%S %Y").timestamp()))
+except ValueError:
+    print("")')
+  if [ -n "$NEWEST_PY" ] && [ -n "$STARTED_AT" ] && [ "$NEWEST_PY" -gt "$STARTED_AT" ]; then
+    say 提示 "dsb 源码比中继进程新——跑的是旧代码：kill $RELAY_PID 后重跑本脚本才生效"
+  fi
 else
   nohup pnpm relay:dev >/tmp/dsb-relay.log 2>&1 &
   disown

@@ -26,8 +26,8 @@ import type { ActionFrame } from "./actionstream";
 
 /** 消息列表那层；认行、以及滚不动时的兜底都落它身上（滚动那层另找，见 `conversation`）。 */
 const LIST_SELECTOR = ".ds-virtual-list";
-/** 行：挂着虚拟列表的行 key，视口里挂载出来的才有。 */
-const ROW_SELECTOR = "[data-virtual-list-item-key]";
+/** 行：挂着虚拟列表的行 key，视口里挂载出来的才有。`wait.*` 扫新行也认它。 */
+export const ROW_SELECTOR = "[data-virtual-list-item-key]";
 /** 助手正文（设计系统类）。有它就是助手，没有再看用户那条路。 */
 const ASSISTANT_BODY_SELECTOR = ".ds-assistant-message-main-content";
 /** 用户正文（设计系统类）。 */
@@ -111,7 +111,7 @@ export type ListViewport = {
 };
 
 /** 视口里此刻挂着的行的 key 序列：拿它当「这一屏换没换」的凭据。 */
-function keysOf(view: ListViewport): string {
+export function keysOf(view: ListViewport): string {
   const rows = view.querySelectorAll(ROW_SELECTOR);
   let out = "";
   for (let index = 0; index < rows.length; index += 1) {
@@ -220,8 +220,10 @@ function scrollsVertically(element: Element): boolean {
  *
  * 只在行的**真祖先**里找，不进到行里面去：消息正文自己那截（长代码块之类）也会滚，
  * 拿它当列表就废了。
+ *
+ * `wait.*` 也要从文档里认出这一层（`wait.ts`），导出让它复用同一套判据。
  */
-function conversation(root: ParentNode): ListViewport | null {
+export function conversation(root: ParentNode): ListViewport | null {
   const row = root.querySelector(ROW_SELECTOR);
   if (row === null) return null;
   const list = row.closest(LIST_SELECTOR);

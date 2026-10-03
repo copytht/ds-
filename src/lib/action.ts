@@ -56,6 +56,8 @@ export const ACTION_ERROR_COMPOSER_ABSENT = "composer-absent";
 export const ACTION_ERROR_PAGE_CHANGED = "page-changed";
 /** 读到了也读不完：滚动层认错、或一趟扫不完（成本天花板，见 `messages.ts`）。 */
 export const ACTION_ERROR_READ_FAILED = "read-failed";
+/** 等动作（`wait.*`）等到预算耗尽也没等到：目标没来，不是这一跳坏掉。 */
+export const ACTION_ERROR_TIMEOUT = "timeout";
 
 /**
  * 执行器在页面上「做不到」时抛这个，**抛错原文只进扩展侧日志**——回给中继的只有
