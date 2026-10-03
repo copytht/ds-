@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { detectAskQuestion, detectSendQuestion, extractAssistantAnswer } from "./answer";
+import { outsideFences } from "./said";
 
 /** 拼一个流式响应：每块一行 `data:` 载荷，形状对齐站点的发消息接口。 */
 function sse(chunks: string[]): string {
@@ -99,6 +100,31 @@ describe("detectSendQuestion · 检测点", () => {
       unknown_shape: "看这里\n```send\n问题没收尾\n```js\nconst a = 1;",
     })}\n`;
     expect(detectSendQuestion(raw)).toBeNull();
+  });
+});
+
+describe("出完才判（#29）", () => {
+  /**
+   * 「边收边判」漏检的缩形：正文在前、围栏靠后。前半截（围栏
+   * 还没跟到）判不出围栏——检测点只拿「出完的整条」（响应体
+   * 读到底）来判，半截不判正是这层契约。
+   */
+  it("流式半截不判，整条出完才判出靠后的围栏", () => {
+    const head = sse(["长回答的正文第一段。\n", "第二段。\n", "第三段。\n"]);
+    const opening = sse(["\n```send\n靠后的围栏问题"]); // 围栏开了，还没闭
+    const closing = sse(["\n```\n"]);
+    expect(detectSendQuestion(head)).toBeNull();
+    // 边收边判正是这里漏：围栏没闭合时整段看着像「无围栏的正文」。
+    expect(detectSendQuestion(head + opening)).toBeNull();
+    expect(detectSendQuestion(head + opening + closing)).toBe("靠后的围栏问题");
+  });
+
+  it("无围栏的长回答：整条出完也判不出（那条正文走 reportSaid 报协调者）", () => {
+    const whole = sse(["长回答的正文第一段，", "第二段，", "第三段。"]);
+    expect(detectSendQuestion(whole)).toBeNull();
+    expect(outsideFences(extractAssistantAnswer(whole))).toBe(
+      "长回答的正文第一段，第二段，第三段。",
+    );
   });
 });
 
