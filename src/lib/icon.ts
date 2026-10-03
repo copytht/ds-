@@ -8,6 +8,7 @@
 
 import { FAILURE_RELAY_UNREACHABLE, type SendPhase, type SendStatus } from "./relay";
 import { failureNotice, RELAY_START_COMMAND, type FailureNotice } from "./reply";
+import { ASK_BADGE_TEXT } from "./ask";
 
 export type IconState = "off" | "on-reachable" | "on-unreachable";
 
@@ -60,11 +61,17 @@ export function describeSend(progress: SendStatus): string {
  * 角标文字。
  *
  * 关与不可达是**硬状态**，压过一切：像素图标万一画不出来，角标要独自把三态撑住，
- * 所以前两个分支绝不能被等待中的阶段盖掉。开着且可达时，才轮到等待现场的头一个字。
+ * 所以前两个分支绝不能被等待中的阶段盖掉。开着且可达时，才轮到「等人回」与等待
+ * 现场；等人回压过在途进度——进度是暂时的，人等着是定住的，不看到「人」就没人回。
  */
-export function badgeText(state: IconState, progress?: SendStatus | null): string {
+export function badgeText(
+  state: IconState,
+  progress?: SendStatus | null,
+  pendingAsk = false,
+): string {
   if (state === "off") return "关";
   if (state === "on-unreachable") return "!";
+  if (pendingAsk) return ASK_BADGE_TEXT;
   if (!progress) return "";
   return { queued: "等", running: "想", writing: "写", done: "" }[progress.phase];
 }
@@ -75,19 +82,24 @@ export function badgeText(state: IconState, progress?: SendStatus | null): strin
  * 第四个参数是**上次故障的一句话**（`describeLastFailure` 产出）：红过又自己绿了之后，
  * 原因就不再写在标题里了，只有把历史摆出来，「为什么红过」才查得到。当前正红着时
  * 不摆——那时候第一句就是原因，重复一遍只是噪音。
+ *
+ * 第五个参数是**等人回的一句话**（`describePendingAsks` 产出，#26）：
+ * 网页排了 ask 围栏问人，挂在这里，人悬停才知道要回。
  */
 export function iconTitle(
   state: IconState,
   notice?: FailureNotice | null,
   progress?: SendStatus | null,
   lastFailure?: string | null,
+  pendingAsk?: string | null,
 ): string {
   if (state === "off") return `ds-：总开关已关，扩展没有接管页面。${CLICK_HINT}`;
-  // 等待现场只在「开着且可达」时才有意义：不可达时手里那份进度已经作废了。
+  // 等待现场与等人回只在「开着且可达」时才有意义：不可达时手里那份进度已经作废了。
   const waiting = state === "on-reachable" && progress ? `${describeSend(progress)}。` : "";
+  const ask = state === "on-reachable" && pendingAsk ? `${pendingAsk}。` : "";
   if (state === "on-reachable") {
     const history = lastFailure ? `${lastFailure}。` : "";
-    return `ds-：总开关已开，中继可达。${waiting}${history}${CLICK_HINT}`;
+    return `ds-：总开关已开，中继可达。${waiting}${ask}${history}${CLICK_HINT}`;
   }
   const shown =
     notice ??

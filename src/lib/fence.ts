@@ -1,27 +1,30 @@
 /**
- * 围栏解析：从模型输出里认出 ```send 围栏，取出问题正文（页面 → agent 的线协议）。
+ * 围栏解析：从模型输出里认出协议围栏，取出问题正文。
+ * 页面 → agent 的线协议是 ```send（spec #9）；页面向人举手是
+ * ```ask（#26）——认出但不转给中继，见 `inject.content.ts`。
  *
- * 规则（spec #9）：普通代码块与非 send 围栏一律不认；一次回答最多一块，只认第一块；
- * 正文可多行，用单独一行 ``` 结束。
+ * 规则（spec #9）：普通代码块与非协议围栏一律不认；一次回答最多一块，只认
+ * 第一块；正文可多行，用单独一行 ``` 结束。
  */
 
-const OPENING = "```send";
+const SEND_OPENING = "```send";
+const ASK_OPENING = "```ask";
 const CLOSING = "```";
 
-/** 一行是不是围栏起始行：```send 后面只能是行尾或空白，```sendfoo 不算。 */
-function isOpeningLine(line: string): boolean {
-  if (!line.startsWith(OPENING)) return false;
-  const rest = line.slice(OPENING.length);
+/** 一行是不是某种围栏的起始行：```<opening> 后面只能是行尾或空白，```sendfoo 不算。 */
+function isOpeningLine(line: string, opening: string): boolean {
+  if (!line.startsWith(opening)) return false;
+  const rest = line.slice(opening.length);
   return rest === "" || /^\s/.test(rest);
 }
 
-/** 找出第一个 send 围栏的问题正文；找不到、问空了或围栏没闭合都返回 null。 */
-export function parseSendFence(text: string): string | null {
+/** 找出第一个指定围栏的正文；找不到、问空了或围栏没闭合都返回 null。 */
+function parseFence(text: string, opening: string): string | null {
   const lines = text.split("\n");
-  const start = lines.findIndex(isOpeningLine);
+  const start = lines.findIndex((line) => isOpeningLine(line, opening));
   if (start === -1) return null;
 
-  const rest = (lines[start] ?? "").slice(OPENING.length).trim();
+  const rest = (lines[start] ?? "").slice(opening.length).trim();
   const body: string[] = rest === "" ? [] : [rest];
 
   for (let i = start + 1; i < lines.length; i += 1) {
@@ -35,4 +38,14 @@ export function parseSendFence(text: string): string | null {
 
   // 围栏没闭合：按无效输入处理，不猜后半截。
   return null;
+}
+
+/** 找出第一个 send 围栏的问题正文（转给中继的那条）。 */
+export function parseSendFence(text: string): string | null {
+  return parseFence(text, SEND_OPENING);
+}
+
+/** 找出第一个 ask 围栏的问题正文（网页向人举手，不转给中继）。 */
+export function parseAskFence(text: string): string | null {
+  return parseFence(text, ASK_OPENING);
 }

@@ -1,5 +1,6 @@
 /**
- * 检测点：模型回答里的 ```send 围栏（回灌链的第一环）。
+ * 检测点：模型回答里的协议围栏（回灌链的第一环）。```send 是页面 →
+ * agent 的线协议；```ask（#26）是页面向人举手，认出后不转给中继。
  *
  * 取回答的地方固定是「发消息那条出站的响应体」——模型的回答只有这一个来源，
  * 用户自己在页面里敲的围栏在请求侧，进不到这里（spec #9 user story 9）。
@@ -14,10 +15,11 @@
  * 必须先把片段拼成正文，才谈得上认围栏。
  */
 
-import { parseSendFence } from "./fence";
+import { parseAskFence, parseSendFence } from "./fence";
 
-/** 围栏起始的字面量：兜底路径要在原文里找到它，再交给 parseSendFence。 */
+/** 围栏起始的字面量：兜底路径要在原文里找到它，再交给围栏解析。 */
 const SEND_FENCE_OPENING = "```send";
+const ASK_FENCE_OPENING = "```ask";
 
 /** 只认「正文」类的字符串键；reasoning 之类的过程文本不当成回答。 */
 const TEXT_KEYS = new Set(["content", "text"]);
@@ -208,8 +210,8 @@ const CLOSING_RESIDUE = /^["}\],\s]/;
  * 兜底块里找收尾的 ```：必须独占一行，且后面要么是行尾，
  * 要么是原文明末拖出来的 JSON 残渣；认不出就不硬切。
  */
-function cutFencedBlock(block: string): string {
-  let from = SEND_FENCE_OPENING.length;
+function cutFencedBlock(block: string, opening: string): string {
+  let from = opening.length;
   for (;;) {
     const index = block.indexOf("```", from);
     if (index === -1) return block;
@@ -223,23 +225,40 @@ function cutFencedBlock(block: string): string {
 }
 
 /**
- * 响应原文 → 围栏里的问题；没排围栏、排的是普通代码块或非 send 围栏、
- * 一次排多块（只认第一块）、围栏没闭合，都返回 null。
+ * 响应原文 → 指定围栏里的正文；没排围栏、排的是普通代码块或非协议
+ * 围栏、一次排多块（只认第一块）、围栏没闭合，都返回 null。
+ *
+ * 三条路共用：OT 增量流先拼正文再认；直出的 JSON 响应从回答正文里认；
+ * 都认不出才走兜底——把原文转义还原一层、从围栏起始处切进来，仍然
+ * 只用围栏解析这一条路径（`parse`）。
  */
-export function detectSendQuestion(raw: string): string | null {
+function detectFence(
+  raw: string,
+  opening: string,
+  parse: (text: string) => string | null,
+): string | null {
   // OT 形状认得：只在拼好的正文里找围栏，认不出就是没排——不去原文里捞
   // （思考过程里常常举一个 ```send 的例子，捞了会把例子当真）。
   const ot = otAnswer(raw);
-  if (ot !== null) return parseSendFence(ot);
+  if (ot !== null) return parse(ot);
 
-  const direct = parseSendFence(extractAssistantAnswer(raw));
+  const direct = parse(extractAssistantAnswer(raw));
   if (direct !== null) return direct;
 
-  // 兜底：正文形状认不出时，把原文转义还原一层、从 ```send 处切进来，
-  // 仍然只用 parseSendFence 这一条解析路径。
+  // 兜底：正文形状认不出时，把原文转义还原一层、从围栏起始处切进来，
+  // 切不出围栏块就整段交，让围栏解析自己判没闭合。
   const restored = unescapeOnce(raw);
-  const start = restored.indexOf(SEND_FENCE_OPENING);
+  const start = restored.indexOf(opening);
   if (start === -1) return null;
-  // 切出围栏块（原文明末会拖着 JSON 残渣）再交给 parseSendFence；切不出就整段交，让围栏解析自己判没闭合。
-  return parseSendFence(cutFencedBlock(restored.slice(start)));
+  return parse(cutFencedBlock(restored.slice(start), opening));
+}
+
+/** 响应原文 → send 围栏里的问题（转给中继的那条）。 */
+export function detectSendQuestion(raw: string): string | null {
+  return detectFence(raw, SEND_FENCE_OPENING, parseSendFence);
+}
+
+/** 响应原文 → ask 围栏里的问题（网页向人举手，不转给中继）。 */
+export function detectAskQuestion(raw: string): string | null {
+  return detectFence(raw, ASK_FENCE_OPENING, parseAskFence);
 }

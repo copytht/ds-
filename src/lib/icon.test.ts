@@ -176,6 +176,56 @@ describe("badgeText · 角标", () => {
   });
 });
 
+describe("等人回（#26）", () => {
+  it("有人等着：角标亮「人」，压过在途进度", () => {
+    expect(badgeText("on-reachable", null, true)).toBe("人");
+    expect(badgeText("on-reachable", send("writing", 128, 52), true)).toBe("人");
+  });
+
+  it("关与不可达仍是硬状态，「人」压不过", () => {
+    expect(badgeText("off", null, true)).toBe("关");
+    expect(badgeText("on-unreachable", null, true)).toBe("!");
+  });
+
+  it("没人等着：角标照常", () => {
+    expect(badgeText("on-reachable", null, false)).toBe("");
+    expect(badgeText("on-reachable", send("running", 1, 1), false)).toBe("想");
+  });
+
+  it("悬停里摆出「等人回」的一句话", () => {
+    const title = iconTitle("on-reachable", null, null, null, "网页在等人回：选 A 还是 B？");
+    expect(title).toContain("网页在等人回：选 A 还是 B？");
+  });
+
+  it("悬停里等待现场与等人回都在", () => {
+    const title = iconTitle(
+      "on-reachable",
+      null,
+      send("writing", 128, 52),
+      null,
+      "网页在等人回：选 A 还是 B？",
+    );
+    expect(title).toContain("正在写答复");
+    expect(title).toContain("网页在等人回：选 A 还是 B？");
+  });
+
+  it("不可达时手里那句等人回作废，不进悬停", () => {
+    const title = iconTitle(
+      "on-unreachable",
+      failureNotice("relay-unreachable"),
+      send("writing", 128, 52),
+      null,
+      "网页在等人回：选 A 还是 B？",
+    );
+    expect(title).not.toContain("等人回");
+  });
+
+  it("关着时也没有等人回", () => {
+    const title = iconTitle("off", null, null, null, "网页在等人回：选 A 还是 B？");
+    expect(title).not.toContain("等人回");
+  });
+});
+
 describe("describeSend · 等待现场的一句话", () => {
   it("阶段各有说法", () => {
     expect(describeSend(send("queued"))).toContain("等模型开工");

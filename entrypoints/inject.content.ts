@@ -1,7 +1,13 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 
-import { detectSendQuestion, extractAssistantAnswer } from "../src/lib/answer";
-import { parseChainMessage, questionMessage, type ResultMessage } from "../src/lib/channel";
+import { detectAskQuestion, detectSendQuestion, extractAssistantAnswer } from "../src/lib/answer";
+import {
+  askClearedMessage,
+  askMessage,
+  parseChainMessage,
+  questionMessage,
+  type ResultMessage,
+} from "../src/lib/channel";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
 import { isOutgoingChatRequest, rewriteOutgoingBody } from "../src/lib/inject";
 import { findSendButton } from "../src/lib/page";
@@ -37,6 +43,9 @@ export default defineContentScript({
     /** 唯一出站口：回灌内容在这里排队，出站窗口到点才放行。 */
     let gate: Gate = newGate();
     let flushTimer: number | null = null;
+
+    /** 网页排了 ask 围栏问人（#26）：挂着等「对话继续」来清。 */
+    let pendingAsk = false;
 
     const xhrTargets = new WeakMap<XMLHttpRequest, XhrTarget>();
     const watchingXhrs = new WeakSet<XMLHttpRequest>();
@@ -88,7 +97,15 @@ export default defineContentScript({
       scheduleFlush();
     }
 
-    /** 检测：只从「发消息那条出站的响应体」里认围栏，认出就把问题交出去。 */
+    /**
+     * 检测：只从「发消息那条出站的响应体」里认围栏，认出就把问题交出去。
+     *
+     * send 围栏照旧转给中继；ask 围栏（#26）**不转**——它是网页向人
+     * 举手，交给隔离世界上报 background 挂「等人回」。同一回答里两种
+     * 围栏都排了以 send 为准（一次最多一块的口径）；本轮没有任何围栏、
+     * 而此前挂着 ask，说明对话继续了（人答了或模型自己往下走了），
+     * 「等人回」自己清掉。
+     */
     function detect(raw: string): void {
       if (!enabled) return;
       const question = detectSendQuestion(raw);
@@ -96,16 +113,31 @@ export default defineContentScript({
       // 回灌自己（首行是 `agent:`）不算：那是桥送回去的，再报就成了回声。
       const said = outsideFences(extractAssistantAnswer(raw));
       if (said !== "" && !hasReplyAnchor(said)) void reportSaid(said);
-      if (question === null) {
-        // 静默分支曾让「围栏在、但形状认不出」无法定位，这里只在真有 send 字样时吭声。
-        if (raw.includes("```send")) {
-          console.log(`[ds-] 响应里有 \`\`\`send 字样却没认出围栏（${raw.length} 字）`);
-        }
+      if (question !== null) {
+        const id = nextMessageId("send");
+        console.log(`[ds-] 认出 send 围栏（${id}），问题交给中继`);
+        window.postMessage(questionMessage(id, question), "*");
+        pendingAsk = false;
         return;
       }
-      const id = nextMessageId("send");
-      console.log(`[ds-] 认出 send 围栏（${id}），问题交给中继`);
-      window.postMessage(questionMessage(id, question), "*");
+      const ask = detectAskQuestion(raw);
+      if (ask !== null) {
+        pendingAsk = true;
+        const id = nextMessageId("ask");
+        console.log(`[ds-] 认出 ask 围栏（${id}），网页在等人回`);
+        window.postMessage(askMessage(id, ask), "*");
+        return;
+      }
+      if (pendingAsk) {
+        pendingAsk = false;
+        const id = nextMessageId("ask");
+        console.log(`[ds-] 对话继续了，ask（${id}）作废`);
+        window.postMessage(askClearedMessage(id), "*");
+      }
+      // 静默分支曾让「围栏在、但形状认不出」无法定位，这里只在真有 send 字样时吭声。
+      if (raw.includes("```send")) {
+        console.log(`[ds-] 响应里有 \`\`\`send 字样却没认出围栏（${raw.length} 字）`);
+      }
     }
 
     /** 读响应体；读不出来就这轮不检测，不猜。 */

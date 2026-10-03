@@ -10,7 +10,15 @@ import {
 } from "../src/lib/action";
 import { readBackoff, BACKOFF_STORAGE_KEY } from "../src/lib/backoff";
 import { createActionStream, type ActionFrame } from "../src/lib/actionstream";
-import { actionRequestMessage, sendResponseMessage, parseSendRequest } from "../src/lib/channel";
+import {
+  actionRequestMessage,
+  parseAskClearedReport,
+  parseAskReport,
+  parseSendRequest,
+  sendResponseMessage,
+  type AskClearedReport,
+  type AskReport,
+} from "../src/lib/channel";
 import {
   FAILURE_LOG_STORAGE_KEY,
   describeLastFailure,
@@ -57,6 +65,15 @@ import {
   type ReplyPayload,
 } from "../src/lib/reply";
 import { readSpeak, readToggle, SPEAK_STORAGE_KEY, TOGGLE_STORAGE_KEY } from "../src/lib/toggle";
+import {
+  ASKS_STORAGE_KEY,
+  clearPendingAsk,
+  describePendingAsks,
+  hasPendingAsk,
+  readPendingAsks,
+  recordPendingAsk,
+  type PendingAsks,
+} from "../src/lib/ask";
 import {
   INITIAL_WATCHDOG_STATE,
   WATCHDOG_CONFIG_STORAGE_KEY,
@@ -107,8 +124,16 @@ export default defineBackground(() => {
    * 浏览器重启都丢不了——只放内存的话，红过一次就再没人答得出「为什么红」。
    */
   let failureLog: FailureRecord[] = [];
+  /**
+   * 网页挂着「等人回」的分表（#26）：页面会话 id → 问题。启动时从
+   * `storage.local` 载入——挂着的「等人回」可能等几小时，只放内存的话，
+   * service worker 一收走就没人知道网页在等谁。
+   */
+  let pendingAsks: PendingAsks = {};
   /** 往 storage 写留痕的串行队列：轮询每 3s 失败一次，并发的读改写会互相踩。 */
   let persistQueue: Promise<unknown> = Promise.resolve();
+  /** 往 storage 写「等人回」分表的串行队列：并发上报的读改写会互相踩。 */
+  let persistAsksQueue: Promise<unknown> = Promise.resolve();
   /**
    * 看门狗的在册状态：一条被武装的 DeepSeek 标签页一份。
    * 只在内存里——service worker 有 20s 保活与 30s 探活闹钟按着，
@@ -120,6 +145,33 @@ export default defineBackground(() => {
     persistQueue = persistQueue
       .then(() => browser.storage.local.set({ [FAILURE_LOG_STORAGE_KEY]: failureLog }))
       .catch(() => undefined); // 留痕写不进去不该把图标也拖死
+  }
+
+  function persistPendingAsks(): void {
+    persistAsksQueue = persistAsksQueue
+      .then(() => browser.storage.local.set({ [ASKS_STORAGE_KEY]: pendingAsks }))
+      .catch(() => undefined); // 写不进去不该把图标也拖死
+  }
+
+  /**
+   * 挂一笔「等人回」（#26）：内存改完即上屏，storage 排队跟写。
+   * 纯函数对重复上报原样返回，不白写一次、也不白画一次图标。
+   */
+  async function handleAskReport(report: AskReport): Promise<void> {
+    const next = recordPendingAsk(pendingAsks, report.page, report.question, Date.now());
+    if (next === pendingAsks) return;
+    pendingAsks = next;
+    persistPendingAsks();
+    await paintIcon();
+  }
+
+  /** 对话继续了（人答了或模型自己往下走了）：清掉这笔并上屏。 */
+  async function handleAskCleared(report: AskClearedReport): Promise<void> {
+    const next = clearPendingAsk(pendingAsks, report.page);
+    if (next === pendingAsks) return;
+    pendingAsks = next;
+    persistPendingAsks();
+    await paintIcon();
   }
 
   /**
@@ -154,9 +206,17 @@ export default defineBackground(() => {
    */
   async function paintIcon(): Promise<void> {
     await browser.action.setTitle({
-      title: iconTitle(state, notice, sendProgress, describeLastFailure(failureLog, Date.now())),
+      title: iconTitle(
+        state,
+        notice,
+        sendProgress,
+        describeLastFailure(failureLog, Date.now()),
+        describePendingAsks(pendingAsks),
+      ),
     });
-    await browser.action.setBadgeText({ text: badgeText(state, sendProgress) });
+    await browser.action.setBadgeText({
+      text: badgeText(state, sendProgress, hasPendingAsk(pendingAsks)),
+    });
     try {
       await browser.action.setIcon({
         imageData: new ImageData(renderIcon(state), ICON_SIZE, ICON_SIZE),
@@ -584,9 +644,14 @@ export default defineBackground(() => {
 
   /** 总开关变了就跟图标：关了即「关」，开了先按可达摆、再探一次中继。 */
   async function syncFromStorage(): Promise<void> {
-    const stored = await browser.storage.local.get([TOGGLE_STORAGE_KEY, FAILURE_LOG_STORAGE_KEY]);
+    const stored = await browser.storage.local.get([
+      TOGGLE_STORAGE_KEY,
+      FAILURE_LOG_STORAGE_KEY,
+      ASKS_STORAGE_KEY,
+    ]);
     const enabled = readToggle(stored[TOGGLE_STORAGE_KEY]);
     failureLog = readFailureLog(stored[FAILURE_LOG_STORAGE_KEY]); // 留痕先上手，标题才拼得出历史
+    pendingAsks = readPendingAsks(stored[ASKS_STORAGE_KEY]); // 等人回先上手，角标与悬停才拼得出
     syncActionStream(); // 动作流常开（关了总开关也留着，好把开关翻回来）；图标跟着探测结果走
     await syncHealthAlarm(enabled); // 排班先跟着开关走，图标再跟着探测结果走
     if (!enabled) {
@@ -634,16 +699,29 @@ export default defineBackground(() => {
   // 隔离世界送来的问句：打中继，把同构载荷原路交回。
   browser.runtime.onMessage.addListener((message, sender) => {
     const request = parseSendRequest(message);
-    if (request === null) return undefined;
-    // 问句进了中继 = 页面模型排出了围栏：这是一条动静。
-    const tabId = sender.tab?.id;
-    if (tabId !== undefined) watchdogSeen(tabId);
-    return sendRelay(request.question, request.page).then((payload) => {
-      applyOutcome(payload);
-      // 答复送回内容脚本 = 回灌落地（送进作框由页面世界自己完成）。
+    if (request !== null) {
+      // 问句进了中继 = 页面模型排出了围栏：这是一条动静。
+      const tabId = sender.tab?.id;
       if (tabId !== undefined) watchdogSeen(tabId);
-      return sendResponseMessage(request.id, payload);
-    });
+      return sendRelay(request.question, request.page).then((payload) => {
+        applyOutcome(payload);
+        // 答复送回内容脚本 = 回灌落地（送进作框由页面世界自己完成）。
+        if (tabId !== undefined) watchdogSeen(tabId);
+        return sendResponseMessage(request.id, payload);
+      });
+    }
+    // ask 上报与清除（#26）：都是通知、不等回话，挂「等人回」或清掉它。
+    const ask = parseAskReport(message);
+    if (ask !== null) {
+      void handleAskReport(ask);
+      return undefined;
+    }
+    const cleared = parseAskClearedReport(message);
+    if (cleared !== null) {
+      void handleAskCleared(cleared);
+      return undefined;
+    }
+    return undefined;
   });
 
   browser.runtime.onInstalled.addListener(() => {

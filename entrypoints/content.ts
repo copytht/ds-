@@ -3,6 +3,8 @@ import { defineContentScript } from "wxt/utils/define-content-script";
 
 import {
   actionListener,
+  askClearedReportMessage,
+  askReportMessage,
   sendRequestMessage,
   pageSessionIdOf,
   parseSendResponse,
@@ -10,6 +12,8 @@ import {
   resultMessage,
   unreachableResult,
   type ActionRoster,
+  type AskClearedMessage,
+  type AskMessage,
   type QuestionMessage,
 } from "../src/lib/channel";
 import {
@@ -65,6 +69,29 @@ export default defineContentScript({
       }
     };
 
+    /** 网页排了 ask 围栏问人（#26）：报给 background 挂「等人回」。
+     * 不等回话——上报是通知，不是请求。 */
+    const reportAsk = async (ask: AskMessage): Promise<void> => {
+      try {
+        await browser.runtime.sendMessage(
+          askReportMessage(ask.id, ask.question, pageSessionIdOf(location.href)),
+        );
+      } catch (error) {
+        console.log("[ds-] ask 上报没有送出去", error);
+      }
+    };
+
+    /** 对话继续了（人答了或模型自己往下走了）：通知 background 清掉「等人回」。 */
+    const reportAskCleared = async (cleared: AskClearedMessage): Promise<void> => {
+      try {
+        await browser.runtime.sendMessage(
+          askClearedReportMessage(cleared.id, pageSessionIdOf(location.href)),
+        );
+      } catch (error) {
+        console.log("[ds-] ask 清除没有送出去", error);
+      }
+    };
+
     // 两个内容脚本谁先谁后都可能：页面世界开口要就答一次，这边自己上来也报一次。
     window.addEventListener("message", (event) => {
       if (event.source !== window) return;
@@ -72,6 +99,14 @@ export default defineContentScript({
       const chain = parseChainMessage(event.data);
       if (chain?.kind === "question") {
         void forwardToRelay(chain);
+        return;
+      }
+      if (chain?.kind === "ask") {
+        void reportAsk(chain);
+        return;
+      }
+      if (chain?.kind === "ask-cleared") {
+        void reportAskCleared(chain);
         return;
       }
 

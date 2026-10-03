@@ -42,7 +42,22 @@ export type ResultMessage = {
   readonly payload: ReplyPayload;
 };
 
-export type ChainMessage = QuestionMessage | ResultMessage;
+/** 页面世界认出 ```ask 围栏：网页在等人回（#26），不进中继。 */
+export type AskMessage = {
+  readonly source: typeof CHAIN_MESSAGE_SOURCE;
+  readonly kind: "ask";
+  readonly id: string;
+  readonly question: string;
+};
+
+/** 页面世界看见对话继续了：此前挂着的「等人回」作废（#26）。 */
+export type AskClearedMessage = {
+  readonly source: typeof CHAIN_MESSAGE_SOURCE;
+  readonly kind: "ask-cleared";
+  readonly id: string;
+};
+
+export type ChainMessage = QuestionMessage | ResultMessage | AskMessage | AskClearedMessage;
 
 export type SendRequest = {
   readonly type: typeof SEND_MESSAGE_TYPE;
@@ -55,6 +70,27 @@ export type SendRequest = {
 export type SendResponse = {
   readonly id: string;
   readonly payload: ReplyPayload;
+};
+
+/** 隔离世界 → background 的 ask 上报信封标记（照 send 的套路，各认各的 type）。 */
+export const ASK_MESSAGE_TYPE = "ds-/ask";
+/** 隔离世界 → background 的 ask 清除信封标记。 */
+export const ASK_CLEARED_MESSAGE_TYPE = "ds-/ask-cleared";
+
+/** 网页排了 ask 围栏问人：记下来，扩展侧露出「在等人回」。 */
+export type AskReport = {
+  readonly type: typeof ASK_MESSAGE_TYPE;
+  readonly id: string;
+  readonly question: string;
+  /** 页面会话 id；认不出是 null（与 send 的口径一致）。 */
+  readonly page: string | null;
+};
+
+/** 对话继续了（人答了或模型自己往下走了）：挂着的问题作废。 */
+export type AskClearedReport = {
+  readonly type: typeof ASK_CLEARED_MESSAGE_TYPE;
+  readonly id: string;
+  readonly page: string | null;
 };
 
 /** background → 内容脚本的一件动作：动作帧裹一层 `ds-/action`。 */
@@ -89,6 +125,16 @@ export function resultMessage(id: string, payload: ReplyPayload): ResultMessage 
   return { source: CHAIN_MESSAGE_SOURCE, kind: "result", id, payload };
 }
 
+/** 页面世界认出 ask 围栏 → 隔离世界 → background。 */
+export function askMessage(id: string, question: string): AskMessage {
+  return { source: CHAIN_MESSAGE_SOURCE, kind: "ask", id, question };
+}
+
+/** 页面世界看见对话继续 → 此前挂着的「等人回」作废。 */
+export function askClearedMessage(id: string): AskClearedMessage {
+  return { source: CHAIN_MESSAGE_SOURCE, kind: "ask-cleared", id };
+}
+
 /**
  * 从页面地址里抠出页面会话 id（/a/chat/s/<id> 里那段）；认不出返回 null。
  * 中继按它分表：每条页面会话各自一个子会话、各自的锁（ADR-0005）。
@@ -110,12 +156,35 @@ export function sendResponseMessage(id: string, payload: ReplyPayload): SendResp
   return { id, payload };
 }
 
+export function askReportMessage(
+  id: string,
+  question: string,
+  page: string | null = null,
+): AskReport {
+  return { type: ASK_MESSAGE_TYPE, id, question, page };
+}
+
+export function askClearedReportMessage(id: string, page: string | null = null): AskClearedReport {
+  return { type: ASK_CLEARED_MESSAGE_TYPE, id, page };
+}
+
 function isValidId(id: unknown): id is string {
   return typeof id === "string" && id !== "";
 }
 
 function isValidQuestion(question: unknown): question is string {
   return typeof question === "string" && question.trim() !== "";
+}
+
+/**
+ * 信封里的页面会话 id：缺省是 null；非空字符串以外的一律作废
+ * （空串、数值都不收）——三条上报共用的判据。
+ */
+function pageSessionOf(data: Record<string, unknown>): string | null | undefined {
+  const raw = data["page"];
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw === "string" && raw !== "") return raw;
+  return undefined;
 }
 
 /** 认页面世界 ↔ 隔离世界的信封：标记、字段、载荷都对上才收。 */
@@ -135,6 +204,14 @@ export function parseChainMessage(data: unknown): ChainMessage | null {
     if (!isReplyPayload(payload)) return null;
     return resultMessage(id, payload);
   }
+  if (data["kind"] === "ask") {
+    const question = data["question"];
+    if (!isValidQuestion(question)) return null;
+    return askMessage(id, question);
+  }
+  if (data["kind"] === "ask-cleared") {
+    return askClearedMessage(id);
+  }
   return null;
 }
 
@@ -145,11 +222,32 @@ export function parseSendRequest(data: unknown): SendRequest | null {
   const id = data["id"];
   const question = data["question"];
   if (!isValidId(id) || !isValidQuestion(question)) return null;
-  const raw = data["page"];
-  if (raw !== undefined && raw !== null && (typeof raw !== "string" || raw === "")) {
-    return null;
-  }
-  return sendRequestMessage(id, question, typeof raw === "string" ? raw : null);
+  const page = pageSessionOf(data);
+  if (page === undefined) return null;
+  return sendRequestMessage(id, question, page);
+}
+
+/** 认隔离世界 → background 的 ask 上报（#26）。 */
+export function parseAskReport(data: unknown): AskReport | null {
+  if (!isPlainObject(data)) return null;
+  if (data["type"] !== ASK_MESSAGE_TYPE) return null;
+  const id = data["id"];
+  const question = data["question"];
+  if (!isValidId(id) || !isValidQuestion(question)) return null;
+  const page = pageSessionOf(data);
+  if (page === undefined) return null;
+  return askReportMessage(id, question, page);
+}
+
+/** 认隔离世界 → background 的 ask 清除（#26）。 */
+export function parseAskClearedReport(data: unknown): AskClearedReport | null {
+  if (!isPlainObject(data)) return null;
+  if (data["type"] !== ASK_CLEARED_MESSAGE_TYPE) return null;
+  const id = data["id"];
+  if (!isValidId(id)) return null;
+  const page = pageSessionOf(data);
+  if (page === undefined) return null;
+  return askClearedReportMessage(id, page);
 }
 
 /** 认 background → 隔离世界的响应；响应丢了按中继没响应兜底交给调用方。 */

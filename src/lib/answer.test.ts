@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { detectSendQuestion, extractAssistantAnswer } from "./answer";
+import { detectAskQuestion, detectSendQuestion, extractAssistantAnswer } from "./answer";
 
 /** 拼一个流式响应：每块一行 `data:` 载荷，形状对齐站点的发消息接口。 */
 function sse(chunks: string[]): string {
@@ -168,5 +168,51 @@ describe("detectSendQuestion · 站点那条 OT 增量流", () => {
     ].join("\n");
     expect(extractAssistantAnswer(onlyOps)).toBe("");
     expect(detectSendQuestion(onlyOps)).toBeNull();
+  });
+});
+
+describe("detectAskQuestion · 检测点（#26）", () => {
+  it("流式回答里排了 ask 围栏就认出问题", () => {
+    const raw = sse(["想一下。\n```ask ", "选 A 还是 B？\n```"]);
+    expect(detectAskQuestion(raw)).toBe("选 A 还是 B？");
+  });
+
+  it("整块 JSON 回答里的 ask 围栏同样认得", () => {
+    const raw = JSON.stringify({
+      choices: [{ message: { content: "```ask\n问题正文\n```" } }],
+    });
+    expect(detectAskQuestion(raw)).toBe("问题正文");
+  });
+
+  it("正文形状认不出时，兜底路径仍从转义原文里认出 ask 围栏", () => {
+    const raw = `data: ${JSON.stringify({ unknown_shape: "看这里\n```ask\n兜底问题\n```" })}\n`;
+    expect(extractAssistantAnswer(raw)).toBe("");
+    expect(detectAskQuestion(raw)).toBe("兜底问题");
+  });
+
+  it("send 围栏不被 ask 检测器认（别误伤现有路径）", () => {
+    const raw = sse(["```send\n仓库入口在哪？\n```"]);
+    expect(detectAskQuestion(raw)).toBeNull();
+    expect(detectSendQuestion(raw)).toBe("仓库入口在哪？");
+  });
+
+  it("ask 围栏不被 send 检测器认", () => {
+    const raw = sse(["```ask\n选哪个？\n```"]);
+    expect(detectSendQuestion(raw)).toBeNull();
+  });
+
+  it("```askfoo 不是围栏起始行", () => {
+    const raw = sse(["```askfoo\n问题\n```"]);
+    expect(detectAskQuestion(raw)).toBeNull();
+  });
+
+  it("围栏没闭合按无效输入处理", () => {
+    const raw = sse(["```ask\n问题还没有收尾"]);
+    expect(detectAskQuestion(raw)).toBeNull();
+  });
+
+  it("没排 ask 围栏的正常回答不触发", () => {
+    const raw = sse(["这是不带围栏的回答。"]);
+    expect(detectAskQuestion(raw)).toBeNull();
   });
 });

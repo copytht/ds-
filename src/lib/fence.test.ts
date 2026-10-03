@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { fixtureCases, type FenceCase } from "./fixtures";
-import { parseSendFence } from "./fence";
+import { parseAskFence, parseSendFence } from "./fence";
 
 describe("parseSendFence · 共享 fixture", () => {
   for (const { name, input, expectedQuestion } of fixtureCases<FenceCase>("fence.json")) {
@@ -45,5 +45,42 @@ describe("parseSendFence · 边界", () => {
   it("只认第一块：后面再排也不追加", () => {
     const text = "```send\n第一个\n```\n```send\n第二个\n```";
     expect(parseSendFence(text)).toBe("第一个");
+  });
+});
+
+describe("parseAskFence · 边界（#26）", () => {
+  it("有效 ask 围栏", () => {
+    expect(parseAskFence("```ask\n选 A 还是 B？\n```")).toBe("选 A 还是 B？");
+  });
+
+  it("问题与围栏起始同一行也算有效围栏", () => {
+    expect(parseAskFence("```ask 合在一行的问题\n```")).toBe("合在一行的问题");
+  });
+
+  it("```askfoo 不是围栏", () => {
+    expect(parseAskFence("```askfoo\n问题\n```")).toBeNull();
+  });
+
+  it("两种围栏各认各的：send 不被 ask 认、ask 不被 send 认", () => {
+    expect(parseAskFence("```send\n问题\n```")).toBeNull();
+    expect(parseSendFence("```ask\n问题\n```")).toBeNull();
+  });
+
+  it("围栏没闭合返回 null", () => {
+    expect(parseAskFence("```ask\n问题还没写完")).toBeNull();
+  });
+
+  it("围栏里问空了返回 null", () => {
+    expect(parseAskFence("```ask   \n```")).toBeNull();
+    expect(parseAskFence("```ask\n   \n   \n```")).toBeNull();
+  });
+
+  it("普通代码块不是围栏", () => {
+    expect(parseAskFence("```py\nprint('hi')\n```")).toBeNull();
+  });
+
+  it("只认第一块：后面再排也不追加", () => {
+    const text = "```ask\n第一个\n```\n```ask\n第二个\n```";
+    expect(parseAskFence(text)).toBe("第一个");
   });
 });

@@ -4,6 +4,14 @@ import {
   actionListener,
   actionRequestMessage,
   ACTION_MESSAGE_TYPE,
+  askClearedMessage,
+  askClearedReportMessage,
+  ASK_CLEARED_MESSAGE_TYPE,
+  askMessage,
+  askReportMessage,
+  ASK_MESSAGE_TYPE,
+  parseAskClearedReport,
+  parseAskReport,
   sendRequestMessage,
   sendResponseMessage,
   CHAIN_MESSAGE_SOURCE,
@@ -122,6 +130,56 @@ describe("隔离世界 ↔ background 的信封", () => {
     const result = unreachableResult("send-2");
     expect(result.payload).toEqual({ status: "error", error: "relay-unreachable" });
     expect(parseChainMessage(result)).toEqual(result);
+  });
+});
+
+describe("ask 信封（#26）", () => {
+  it("ask 链消息原样过", () => {
+    const message = askMessage("ask-1", "选 A 还是 B？");
+    expect(message).toEqual({
+      source: CHAIN_MESSAGE_SOURCE,
+      kind: "ask",
+      id: "ask-1",
+      question: "选 A 还是 B？",
+    });
+    expect(parseChainMessage(message)).toEqual(message);
+  });
+
+  it("ask-cleared 链消息原样过", () => {
+    const message = askClearedMessage("ask-1");
+    expect(message).toEqual({
+      source: CHAIN_MESSAGE_SOURCE,
+      kind: "ask-cleared",
+      id: "ask-1",
+    });
+    expect(parseChainMessage(message)).toEqual(message);
+  });
+
+  it("ask 上报原样过，页面会话可带可不带", () => {
+    const withPage = askReportMessage("ask-1", "问题", "sid-1");
+    expect(parseAskReport(withPage)).toEqual(withPage);
+    expect(parseAskReport(askReportMessage("ask-1", "问题"))).toEqual(
+      askReportMessage("ask-1", "问题", null),
+    );
+  });
+
+  it("ask 清除原样过，页面会话可带可不带", () => {
+    const withPage = askClearedReportMessage("ask-1", "sid-1");
+    expect(parseAskClearedReport(withPage)).toEqual(withPage);
+    expect(parseAskClearedReport(askClearedReportMessage("ask-1"))).toEqual(
+      askClearedReportMessage("ask-1", null),
+    );
+  });
+
+  it("形状不对的 ask 信封不收", () => {
+    expect(parseAskReport({})).toBeNull();
+    expect(parseAskReport({ type: ASK_MESSAGE_TYPE, id: "1", question: "" })).toBeNull();
+    expect(parseAskReport({ type: ASK_MESSAGE_TYPE, id: "", question: "q" })).toBeNull();
+    expect(parseAskReport({ type: ASK_MESSAGE_TYPE, id: "1", question: "q", page: "" })).toBeNull();
+    expect(parseAskClearedReport({ type: ASK_CLEARED_MESSAGE_TYPE, id: "" })).toBeNull();
+    expect(parseAskClearedReport({ type: ASK_CLEARED_MESSAGE_TYPE, id: "1", page: 7 })).toBeNull();
+    // 两条 ask 信封互不串：ask 上报的形状对 ask 清除不认。
+    expect(parseAskClearedReport(askReportMessage("ask-1", "问题"))).toBeNull();
   });
 });
 
