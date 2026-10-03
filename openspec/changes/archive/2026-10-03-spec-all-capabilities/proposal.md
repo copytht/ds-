@@ -20,6 +20,7 @@
 ## Capabilities
 
 ### New Capabilities
+
 - `outbound-backoff`: 账号处境判定与退避（已实现，需同步到主目录）
 - `gate`: 总开关与站点范围固定（`toggle.ts`, `page.ts` 相关）
 - `watchdog`: 链子看门狗（`watchdog.ts`, `backoff.ts` 依赖）
@@ -32,6 +33,7 @@
 - `toggle`: 图标状态与持久存储（`toggle.ts`, `icon.ts`）
 
 ### Modified Capabilities
+
 - 无（现有源码行为未变，仅补规格）
 
 ## Impact
