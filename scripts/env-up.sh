@@ -15,10 +15,11 @@ EXT_ID=lebhdfhpogojdocfeicgaffejombnmfl   # 由 MV3 路径算出，路径不变�
 say() { printf '  %-8s %s\n' "$1" "$2"; }
 
 # ---- 1) 扩展构建：源码比产物新才重建（老产物 = 名册缺动作 = 一串 unknown-action）----
+REBUILT=0
 if [ ! -f "$MV3/background.js" ]; then
-  pnpm build >/tmp/dsb-build.log 2>&1 && say 构建 "缺产物，已重建" || { say 构建 "重建失败 → /tmp/dsb-build.log"; exit 1; }
+  pnpm build >/tmp/dsb-build.log 2>&1 && { say 构建 "缺产物，已重建"; REBUILT=1; } || { say 构建 "重建失败 → /tmp/dsb-build.log"; exit 1; }
 elif [ -n "$(find src entrypoints -name '*.ts' -newer "$MV3/background.js" 2>/dev/null | head -1)" ]; then
-  pnpm build >/tmp/dsb-build.log 2>&1 && say 构建 "源码较新，已重建" || { say 构建 "重建失败 → /tmp/dsb-build.log"; exit 1; }
+  pnpm build >/tmp/dsb-build.log 2>&1 && { say 构建 "源码较新，已重建"; REBUILT=1; } || { say 构建 "重建失败 → /tmp/dsb-build.log"; exit 1; }
 else
   say 构建 "产物最新"
 fi
@@ -45,11 +46,19 @@ fi
 # 主进程的首个 flag 是 --user-data-dir，子进程是 --type=，据此只数主进程。
 if ps ax -o command= | grep -E '^/Applications/Chromium\.app/Contents/MacOS/Chromium --user-data-dir=.*ds-browser' >/dev/null 2>&1; then
   say 浏览器 "已在跑（独立 profile）"
+  if [ "$REBUILT" = 1 ]; then
+    say 提示 "刚重建过、浏览器却在跑：SW 吃的仍是旧脚本缓存，得重启浏览器才换新（本脚本起浏览器时会清缓存）"
+  fi
 else
+  # 起浏览器前清 SW 脚本缓存：扩展版本号不变时，Chromium 把 SW 脚本缓存在
+  # profile 里一直沿用（实测：SW 跑一天前的旧脚本，重建重启十几回都不换；
+  # 内容脚本却随页面加载新构建——症状是「读类动作新、写类动作旧」）。
+  # Database 是 SW 注册表（可再生成、无用户数据），一并清。
+  rm -rf "$PROFILE/Default/Service Worker/ScriptCache" "$PROFILE/Default/Service Worker/Database"
   "$CHROME" --user-data-dir="$PROFILE" --load-extension="$MV3" \
     --no-first-run --no-default-browser-check >/tmp/dsb-browser.log 2>&1 &
   disown
-  say 浏览器 "已起 → 独立 profile"
+  say 浏览器 "已起 → 独立 profile（清过 SW 脚本缓存）"
 fi
 
 # ---- 5) 判据：中继健康 + 动作流有订阅者 ----
