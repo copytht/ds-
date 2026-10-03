@@ -1,7 +1,13 @@
 import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 
-import { postActionResult, runAction, sendMessageSendToTab } from "../src/lib/action";
+import {
+  isDeepSeekUrl,
+  postActionResult,
+  runAction,
+  sendMessageSendToTab,
+  type ActionContext,
+} from "../src/lib/action";
 import { readBackoff, BACKOFF_STORAGE_KEY } from "../src/lib/backoff";
 import { createActionStream, type ActionFrame } from "../src/lib/actionstream";
 import { actionRequestMessage, sendResponseMessage, parseSendRequest } from "../src/lib/channel";
@@ -51,6 +57,14 @@ import {
   type ReplyPayload,
 } from "../src/lib/reply";
 import { readSpeak, readToggle, SPEAK_STORAGE_KEY, TOGGLE_STORAGE_KEY } from "../src/lib/toggle";
+import {
+  INITIAL_WATCHDOG_STATE,
+  WATCHDOG_CONFIG_STORAGE_KEY,
+  readWatchdogConfig,
+  watchdogDecision,
+  watchdogSeenActivity,
+  type WatchdogState,
+} from "../src/lib/watchdog";
 
 /**
  * background 这一侧干三件事：
@@ -95,6 +109,12 @@ export default defineBackground(() => {
   let failureLog: FailureRecord[] = [];
   /** 往 storage 写留痕的串行队列：轮询每 3s 失败一次，并发的读改写会互相踩。 */
   let persistQueue: Promise<unknown> = Promise.resolve();
+  /**
+   * 看门狗的在册状态：一条被武装的 DeepSeek 标签页一份。
+   * 只在内存里——service worker 有 20s 保活与 30s 探活闹钟按着，
+   * 武装期不会被收走；真被重启了，会话 url 由下一扫重新记住。
+   */
+  const watches = new Map<number, WatchdogState>();
 
   function persistFailureLog(): void {
     persistQueue = persistQueue
@@ -313,6 +333,8 @@ export default defineBackground(() => {
   browser.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name !== HEALTH_ALARM_NAME) return;
     void healthProbe();
+    // 看门狗搭这趟车：闹钟只在武装时排，总开关关掉即全停。
+    void watchdogSweep();
   });
 
   /**
@@ -324,6 +346,94 @@ export default defineBackground(() => {
       void browser.runtime.getPlatformInfo().catch(() => undefined);
     }, 20_000);
     return () => clearInterval(timer);
+  }
+
+  /**
+   * 围栏（页面模型排出 send 围栏、问句送进隔离世界）或回灌
+   * （答复送回内容脚本）落地：这是一条动静，刷新标签页的
+   * 动静时刻——连催计数与停手随之清零。
+   */
+  function watchdogSeen(tabId: number): void {
+    const before = watches.get(tabId) ?? INITIAL_WATCHDOG_STATE;
+    watches.set(tabId, watchdogSeenActivity(before, Date.now()));
+  }
+
+  /**
+   * 催办投递：固定正文打进取页作框并发送。两步都走与动作流
+   * 同一套执行门（`runAction`）——总开关 / 替人发言 / 退避
+   * 三道闸照样拦，拦着就回 false（不算催，下扫再试）；前半句
+   * 没成就不发后半句，免得空消息上屏。
+   */
+  async function deliverNudge(tabId: number, text: string): Promise<boolean> {
+    const context = await actionContext();
+    const frame = (action: string, params: Record<string, unknown>): ActionFrame => ({
+      type: "action",
+      id: nextMessageId("watchdog"),
+      action,
+      params,
+      target: String(tabId),
+    });
+    if (!(await runAction(frame("composer.type", { text }), context)).ok) {
+      return false;
+    }
+    return (await runAction(frame("send.enter", {}), context)).ok;
+  }
+
+  /**
+   * 看门狗扫一遍：搭周期探活的车（这张闹钟只在武装时排，见
+   * `syncHealthAlarm`）。决策是纯函数（`watchdog.ts`），这层只管
+   * 照做：漂移走 `tabs.update` 导航回去（host permission 覆盖
+   * 本站标签页，不必为它申请 tabs 权限），催办走 `deliverNudge`，
+   * 停手照 ADR-0004 留一笔（环节 `watchdog`）。
+   *
+   * 站外漂移看不见：没有 tabs 权限，非本站标签页的 url 读不到——
+   * 真机故障正是站内漂到新对话，那一档在这条扫的范围里。
+   */
+  async function watchdogSweep(): Promise<void> {
+    const stored = await browser.storage.local.get(WATCHDOG_CONFIG_STORAGE_KEY);
+    const config = readWatchdogConfig(stored[WATCHDOG_CONFIG_STORAGE_KEY]);
+    const tabs = await browser.tabs.query({});
+    const alive = new Set<number>();
+    for (const tab of tabs) {
+      if (tab.id === undefined || typeof tab.url !== "string" || !isDeepSeekUrl(tab.url)) {
+        continue;
+      }
+      alive.add(tab.id);
+      const before = watches.get(tab.id) ?? INITIAL_WATCHDOG_STATE;
+      const { act, next } = watchdogDecision(
+        before,
+        {
+          tabUrl: tab.url,
+          now: Date.now(),
+        },
+        config,
+      );
+      watches.set(tab.id, next);
+      if (act.kind === "navigate-back") {
+        console.log(`[ds-] 看门狗：标签页 ${tab.id} 离开了会话，导航回去`);
+        try {
+          await browser.tabs.update(tab.id, { url: act.url });
+        } catch (error) {
+          console.log("[ds-] 看门狗：导航回去没成", error);
+        }
+      } else if (act.kind === "nudge") {
+        const delivered = await deliverNudge(tab.id, act.text);
+        // 计数只认送出去的：闸拦着（退避中 / 没开替人发言）不算催。
+        watches.set(tab.id, delivered ? { ...next, nudges: next.nudges + 1 } : next);
+        console.log(
+          delivered
+            ? `[ds-] 看门狗：距上次动静超 ${config.silenceMs / 1000}s，催办已发`
+            : "[ds-] 看门狗：催办没送出去（闸拦着或标签页答不上），不算催",
+        );
+      } else if (act.kind === "stand-down") {
+        console.log(`[ds-] 看门狗：连催 ${config.maxNudges} 次无动静，停手`);
+        recordFailure("watchdog", `连催 ${config.maxNudges} 次无动静`);
+      }
+    }
+    // 关掉 / 离开本站的标签页不再扫：状态跟着标签页走，不留僵尸。
+    for (const tabId of watches.keys()) {
+      if (!alive.has(tabId)) watches.delete(tabId);
+    }
   }
 
   /**
@@ -418,43 +528,53 @@ export default defineBackground(() => {
     }
   }
 
+  /**
+   * 动作执行的门面：总开关 / 替人发言 / 退避现读 storage（同一处真源）。
+   * 动作流收到的动作与看门狗的催办走同一套门——催办也是替人发言，
+   * 闸拦着就不喊。
+   */
+  async function actionContext(): Promise<ActionContext> {
+    const stored = await browser.storage.local.get([
+      TOGGLE_STORAGE_KEY,
+      SPEAK_STORAGE_KEY,
+      BACKOFF_STORAGE_KEY,
+    ]);
+    return {
+      enabled: readToggle(stored[TOGGLE_STORAGE_KEY]),
+      speak: readSpeak(stored[SPEAK_STORAGE_KEY]),
+      // 退避：现读持久状态；判定后由 runAction 写回（重启后仍记得）。
+      backoff: readBackoff(stored[BACKOFF_STORAGE_KEY]),
+      setBackoff: async (next) => {
+        await browser.storage.local.set({ [BACKOFF_STORAGE_KEY]: next });
+      },
+      tabs: { query: (query) => browser.tabs.query(query) },
+      // 总开关读写口：真源就是 storage.local（同一条真源，图标与武装都跟着它走）。
+      // 写入触发 storage.onChanged → syncFromStorage，武装/断流随之生效。
+      toggle: {
+        get: async () => {
+          const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
+          return readToggle(stored[TOGGLE_STORAGE_KEY]);
+        },
+        set: async (value) => {
+          await browser.storage.local.set({ [TOGGLE_STORAGE_KEY]: value });
+          return value;
+        },
+      },
+      // 带 target 的动作投进那个标签页：帧裹一层 ds-/action 送过去；
+      // 标签页没了 / 内容脚本没注入（sendMessage 抛错）都折成 tab-gone，不冒泡。
+      sendToTab: sendMessageSendToTab((tabId, frameToTab) =>
+        browser.tabs.sendMessage(tabId, actionRequestMessage(frameToTab)),
+      ),
+    };
+  }
+
   /** 收到一件动作：现读总开关 → 执行 → 把结果交回中继。**每条路都当场回一个册子里的码**
    * （`disabled` / `unknown-action` / `tab-gone` / 成功的 `result`），只有回传本身失败
    * 才留给中继按 timeout 收场。 */
   async function handleAction(frame: ActionFrame): Promise<void> {
     try {
-      const stored = await browser.storage.local.get([
-        TOGGLE_STORAGE_KEY,
-        SPEAK_STORAGE_KEY,
-        BACKOFF_STORAGE_KEY,
-      ]);
-      const outcome = await runAction(frame, {
-        enabled: readToggle(stored[TOGGLE_STORAGE_KEY]),
-        speak: readSpeak(stored[SPEAK_STORAGE_KEY]),
-        // 退避：现读持久状态；判定后由 runAction 写回（重启后仍记得）。
-        backoff: readBackoff(stored[BACKOFF_STORAGE_KEY]),
-        setBackoff: async (next) => {
-          await browser.storage.local.set({ [BACKOFF_STORAGE_KEY]: next });
-        },
-        tabs: { query: (query) => browser.tabs.query(query) },
-        // 总开关读写口：真源就是 storage.local（同一条真源，图标与武装都跟着它走）。
-        // 写入触发 storage.onChanged → syncFromStorage，武装/断流随之生效。
-        toggle: {
-          get: async () => {
-            const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
-            return readToggle(stored[TOGGLE_STORAGE_KEY]);
-          },
-          set: async (value) => {
-            await browser.storage.local.set({ [TOGGLE_STORAGE_KEY]: value });
-            return value;
-          },
-        },
-        // 带 target 的动作投进那个标签页：帧裹一层 ds-/action 送过去；
-        // 标签页没了 / 内容脚本没注入（sendMessage 抛错）都折成 tab-gone，不冒泡。
-        sendToTab: sendMessageSendToTab((tabId, frameToTab) =>
-          browser.tabs.sendMessage(tabId, actionRequestMessage(frameToTab)),
-        ),
-      });
+      const context = await actionContext();
+      const outcome = await runAction(frame, context);
       await postActionResult((url, init) => fetch(url, init), frame.id, outcome);
     } catch (error) {
       // 回传失败不冒泡：这条流上的失败由中继按 timeout 收场，不进对话流。
@@ -473,6 +593,7 @@ export default defineBackground(() => {
       state = "off";
       notice = null;
       sendProgress = null; // 关了就不该再揣着上一次等待的现场
+      watches.clear(); // 看门狗全停：不导航、不催办、不留痕；重武装时重新记住
       await paintIcon();
       return;
     }
@@ -511,11 +632,16 @@ export default defineBackground(() => {
   });
 
   // 隔离世界送来的问句：打中继，把同构载荷原路交回。
-  browser.runtime.onMessage.addListener((message) => {
+  browser.runtime.onMessage.addListener((message, sender) => {
     const request = parseSendRequest(message);
     if (request === null) return undefined;
+    // 问句进了中继 = 页面模型排出了围栏：这是一条动静。
+    const tabId = sender.tab?.id;
+    if (tabId !== undefined) watchdogSeen(tabId);
     return sendRelay(request.question, request.page).then((payload) => {
       applyOutcome(payload);
+      // 答复送回内容脚本 = 回灌落地（送进作框由页面世界自己完成）。
+      if (tabId !== undefined) watchdogSeen(tabId);
       return sendResponseMessage(request.id, payload);
     });
   });
