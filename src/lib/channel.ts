@@ -16,6 +16,7 @@ import {
   PageError,
   type ActionOutcome,
 } from "./action";
+import { isAccountState, type AccountState } from "./page";
 import { actionErrorCodes } from "./fixtures";
 import type { ActionFrame } from "./actionstream";
 import { FAILURE_RELAY_UNREACHABLE } from "./relay";
@@ -93,6 +94,18 @@ export type AskClearedReport = {
   readonly page: string | null;
 };
 
+/** 隔离世界 → background 的账号处境上报信封标记。 */
+export const ACCOUNT_REPORT_MESSAGE_TYPE = "ds-/account";
+
+/**
+ * 账号处境上报（#2）：总开关开着时周期上报。禁言期写路径全断，
+ * 悬停得把这层说清（「禁言至何时」）——上报是通知，不等回话。
+ */
+export type AccountReport = {
+  readonly type: typeof ACCOUNT_REPORT_MESSAGE_TYPE;
+  readonly account: AccountState;
+};
+
 /** background → 内容脚本的一件动作：动作帧裹一层 `ds-/action`。 */
 export type ActionRequest = {
   readonly type: typeof ACTION_MESSAGE_TYPE;
@@ -166,6 +179,10 @@ export function askReportMessage(
 
 export function askClearedReportMessage(id: string, page: string | null = null): AskClearedReport {
   return { type: ASK_CLEARED_MESSAGE_TYPE, id, page };
+}
+
+export function accountReportMessage(account: AccountState): AccountReport {
+  return { type: ACCOUNT_REPORT_MESSAGE_TYPE, account };
 }
 
 function isValidId(id: unknown): id is string {
@@ -248,6 +265,15 @@ export function parseAskClearedReport(data: unknown): AskClearedReport | null {
   const page = pageSessionOf(data);
   if (page === undefined) return null;
   return askClearedReportMessage(id, page);
+}
+
+/** 认账号处境上报：account 过一遍 `isAccountState` 再收，认不出就 null。 */
+export function parseAccountReport(data: unknown): AccountReport | null {
+  if (!isPlainObject(data)) return null;
+  if (data["type"] !== ACCOUNT_REPORT_MESSAGE_TYPE) return null;
+  const account = data["account"];
+  if (!isAccountState(account)) return null;
+  return accountReportMessage(account);
 }
 
 /** 认 background → 隔离世界的响应；响应丢了按中继没响应兜底交给调用方。 */

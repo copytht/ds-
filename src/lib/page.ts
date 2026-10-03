@@ -87,9 +87,14 @@ export function isAccountState(value: unknown): value is AccountState {
   }
 }
 
+/** 写作框在不在（`page.state` 与账号处境周期上报共读这一处）。 */
+export function readComposerPresent(): boolean {
+  return document.querySelector(COMPOSER_SELECTOR) !== null;
+}
+
 /** 名字对齐 dsb 名册里的 `page.state`（`dsb/actions.py:59-61`）。`frame` 不用：读的就是本标签页。 */
 export function readPageState(_frame: ActionFrame): PageState {
-  const composerPresent = document.querySelector(COMPOSER_SELECTOR) !== null;
+  const composerPresent = readComposerPresent();
   return {
     url: location.href,
     title: document.title,

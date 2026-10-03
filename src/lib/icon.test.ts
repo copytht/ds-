@@ -7,6 +7,7 @@ import {
   SPIN_FRAMES,
   afterHealthProbe,
   badgeText,
+  describeAccount,
   describeSend,
   iconTitle,
   renderIcon,
@@ -14,6 +15,7 @@ import {
 } from "./icon";
 import { SEND_PHASES, type SendStatus } from "./relay";
 import { failureNotice, RELAY_START_COMMAND } from "./reply";
+import type { AccountState } from "./page";
 
 function pixelAt(pixels: Uint8ClampedArray, x: number, y: number, size = ICON_SIZE) {
   const offset = (y * size + x) * 4;
@@ -341,5 +343,44 @@ describe("角标转速（#28）", () => {
   it("答复写完（done）与不在途：不转、清空", () => {
     expect(badgeText("on-reachable", send("done"), false, 2)).toBe("");
     expect(badgeText("on-reachable", null, false, 2)).toBe("");
+  });
+});
+
+describe("账号处境（#2）", () => {
+  it("禁言带解封时刻；没写时刻也说清是禁言", () => {
+    expect(describeAccount({ kind: "muted", until: "2026 年 10 月 10 日 20:21" })).toBe(
+      "账号禁言至 2026 年 10 月 10 日 20:21，写动作停。",
+    );
+    expect(describeAccount({ kind: "muted", until: null })).toBe(
+      "账号被禁言（页面上没写解封时刻），写动作停。",
+    );
+  });
+
+  it("未登录指回登录口；ready 与 unknown 不说（不猜）", () => {
+    expect(describeAccount({ kind: "signed-out" })).toBe("账号未登录，登录后再用。");
+    expect(describeAccount({ kind: "ready" })).toBe("");
+    expect(describeAccount({ kind: "unknown" })).toBe("");
+  });
+
+  it("悬停：开着且可达时，禁言与未登录都进悬停", () => {
+    expect(
+      iconTitle("on-reachable", null, null, null, null, {
+        kind: "muted",
+        until: "2026 年 10 月 10 日 20:21",
+      }),
+    ).toContain("账号禁言至 2026 年 10 月 10 日 20:21，写动作停。");
+    expect(iconTitle("on-reachable", null, null, null, null, { kind: "signed-out" })).toContain(
+      "账号未登录，登录后再用。",
+    );
+  });
+
+  it("悬停：关、不可达、ready 都不带账号处境", () => {
+    const muted: AccountState = { kind: "muted", until: "x" };
+    expect(iconTitle("off", null, null, null, null, muted)).not.toContain("禁言");
+    expect(iconTitle("on-unreachable", null, null, null, null, muted)).not.toContain("禁言");
+    expect(iconTitle("on-reachable", null, null, null, null, { kind: "ready" })).not.toContain(
+      "账号",
+    );
+    expect(iconTitle("on-reachable")).not.toContain("账号");
   });
 });

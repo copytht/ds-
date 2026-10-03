@@ -9,6 +9,7 @@
 import { FAILURE_RELAY_UNREACHABLE, type SendPhase, type SendStatus } from "./relay";
 import { failureNotice, RELAY_START_COMMAND, type FailureNotice } from "./reply";
 import { ASK_BADGE_TEXT } from "./ask";
+import type { AccountState } from "./page";
 
 export type IconState = "off" | "on-reachable" | "on-unreachable";
 
@@ -93,6 +94,19 @@ export function badgeText(
 }
 
 /**
+ * 账号处境的一句话（#2）：禁言带页面上写的解封时刻，未登录指回登录口。
+ * `ready` 是常态、`unknown` 是分不清——都不说（不猜）。
+ */
+export function describeAccount(account: AccountState): string {
+  if (account.kind === "muted") {
+    return account.until === null
+      ? "账号被禁言（页面上没写解封时刻），写动作停。"
+      : `账号禁言至 ${account.until}，写动作停。`;
+  }
+  return account.kind === "signed-out" ? "账号未登录，登录后再用。" : "";
+}
+
+/**
  * 悬停文案：关与可达各自一句话，不可达必须带上原因与启动命令。
  *
  * 第四个参数是**上次故障的一句话**（`describeLastFailure` 产出）：红过又自己绿了之后，
@@ -101,6 +115,9 @@ export function badgeText(
  *
  * 第五个参数是**等人回的一句话**（`describePendingAsks` 产出，#26）：
  * 网页排了 ask 围栏问人，挂在这里，人悬停才知道要回。
+ *
+ * 第六个参数是**账号处境**（#2）：禁言带解封时刻、未登录指回登录口——
+ * 禁言期写路径全断，悬停是扩展侧唯一的显式停机说明。
  */
 export function iconTitle(
   state: IconState,
@@ -108,14 +125,19 @@ export function iconTitle(
   progress?: SendStatus | null,
   lastFailure?: string | null,
   pendingAsk?: string | null,
+  account: AccountState | null = null,
 ): string {
   if (state === "off") return `ds-：总开关已关，扩展没有接管页面。${CLICK_HINT}`;
   // 等待现场与等人回只在「开着且可达」时才有意义：不可达时手里那份进度已经作废了。
   const waiting = state === "on-reachable" && progress ? `${describeSend(progress)}。` : "";
   const ask = state === "on-reachable" && pendingAsk ? `${pendingAsk}。` : "";
+  const accountLine =
+    state === "on-reachable" && account !== null && account.kind !== "ready"
+      ? `${describeAccount(account)}。`
+      : "";
   if (state === "on-reachable") {
     const history = lastFailure ? `${lastFailure}。` : "";
-    return `ds-：总开关已开，中继可达。${waiting}${ask}${history}${CLICK_HINT}`;
+    return `ds-：总开关已开，中继可达。${accountLine}${waiting}${ask}${history}${CLICK_HINT}`;
   }
   const shown =
     notice ??

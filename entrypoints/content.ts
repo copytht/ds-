@@ -3,6 +3,7 @@ import { defineContentScript } from "wxt/utils/define-content-script";
 
 import {
   actionListener,
+  accountReportMessage,
   askClearedReportMessage,
   askReportMessage,
   sendRequestMessage,
@@ -21,7 +22,9 @@ import {
   clickSend,
   newChat,
   pressEnter,
+  readAccount,
   readComposer,
+  readComposerPresent,
   readPageState,
   typeComposer,
 } from "../src/lib/page";
@@ -92,6 +95,32 @@ export default defineContentScript({
       }
     };
 
+    /**
+     * 账号处境上报（#2）：总开关开着时 30s 一报。禁言期写路径全断，
+     * 悬停得把这层说清（「禁言至何时」）——上报是通知，不等回话。
+     */
+    const ACCOUNT_REPORT_INTERVAL_MS = 30_000;
+    let accountTimer: ReturnType<typeof setInterval> | undefined;
+    const reportAccount = async (): Promise<void> => {
+      try {
+        const account = readAccount(readComposerPresent());
+        await browser.runtime.sendMessage(accountReportMessage(account));
+        console.log(`[ds-] 账号处境已上报：${account.kind}`);
+      } catch {
+        // 上报是通知：送不出去不重试，下一报还在。
+      }
+    };
+    const startAccountReporting = (): void => {
+      if (accountTimer !== undefined) return;
+      void reportAccount();
+      accountTimer = setInterval(reportAccount, ACCOUNT_REPORT_INTERVAL_MS);
+    };
+    const stopAccountReporting = (): void => {
+      if (accountTimer === undefined) return;
+      clearInterval(accountTimer);
+      accountTimer = undefined;
+    };
+
     // 两个内容脚本谁先谁后都可能：页面世界开口要就答一次，这边自己上来也报一次。
     window.addEventListener("message", (event) => {
       if (event.source !== window) return;
@@ -143,8 +172,17 @@ export default defineContentScript({
       if (areaName !== "local") return;
       if (!(TOGGLE_STORAGE_KEY in changes)) return;
       void broadcast();
+      // 账号处境上报跟着总开关走：关着时内容脚本不发声。
+      if (readToggle(changes[TOGGLE_STORAGE_KEY].newValue)) {
+        startAccountReporting();
+      } else {
+        stopAccountReporting();
+      }
     });
 
     await broadcast();
+    // 总开关现在开着就立刻开始上报（刷新与重启靠 storage 自己保持）。
+    const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
+    if (readToggle(stored[TOGGLE_STORAGE_KEY])) startAccountReporting();
   },
 });

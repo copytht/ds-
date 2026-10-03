@@ -12,10 +12,12 @@ import { readBackoff, BACKOFF_STORAGE_KEY } from "../src/lib/backoff";
 import { createActionStream, type ActionFrame } from "../src/lib/actionstream";
 import {
   actionRequestMessage,
+  parseAccountReport,
   parseAskClearedReport,
   parseAskReport,
   parseSendRequest,
   sendResponseMessage,
+  type AccountReport,
   type AskClearedReport,
   type AskReport,
 } from "../src/lib/channel";
@@ -38,6 +40,7 @@ import {
   type IconState,
 } from "../src/lib/icon";
 import { nextMessageId } from "../src/lib/id";
+import type { AccountState } from "../src/lib/page";
 import {
   FAILURE_RELAY_UNREACHABLE,
   FAILURE_UNEXPECTED_RESPONSE,
@@ -126,6 +129,11 @@ export default defineBackground(() => {
   /** 角标转速（#28）：在途期间 250ms 一帧，问完即停；timer 只在在途时排。 */
   let spinTick = 0;
   let spinTimer: ReturnType<typeof setInterval> | undefined;
+  /**
+   * 账号处境（#2）：内容脚本总开关开着时 30s 一报。禁言期写路径全断，
+   * 悬停得把这层说清——只放内存，重启后下一报（30s 内）就补上。
+   */
+  let account: AccountState | null = null;
   /**
    * 失败留痕，新的在最前。启动时从 `storage.local` 载入，所以 service worker 被收走、
    * 浏览器重启都丢不了——只放内存的话，红过一次就再没人答得出「为什么红」。
@@ -233,6 +241,7 @@ export default defineBackground(() => {
         sendProgress,
         describeLastFailure(failureLog, Date.now()),
         describePendingAsks(pendingAsks),
+        account,
       ),
     });
     await browser.action.setBadgeText({
@@ -730,6 +739,14 @@ export default defineBackground(() => {
     const cleared = parseAskClearedReport(message);
     if (cleared !== null) {
       void handleAskCleared(cleared);
+      return undefined;
+    }
+    // 账号处境上报（#2）：记下最新值并上屏，悬停才说得出「禁言至何时」。
+    const accountReport: AccountReport | null = parseAccountReport(message);
+    if (accountReport !== null) {
+      account = accountReport.account;
+      console.log(`[ds-] 账号处境已更新：${account.kind}`);
+      void paintIcon();
       return undefined;
     }
     return undefined;

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  ACCOUNT_REPORT_MESSAGE_TYPE,
   actionListener,
   actionRequestMessage,
   ACTION_MESSAGE_TYPE,
@@ -10,6 +11,8 @@ import {
   askMessage,
   askReportMessage,
   ASK_MESSAGE_TYPE,
+  accountReportMessage,
+  parseAccountReport,
   parseAskClearedReport,
   parseAskReport,
   sendRequestMessage,
@@ -180,6 +183,50 @@ describe("ask 信封（#26）", () => {
     expect(parseAskClearedReport({ type: ASK_CLEARED_MESSAGE_TYPE, id: "1", page: 7 })).toBeNull();
     // 两条 ask 信封互不串：ask 上报的形状对 ask 清除不认。
     expect(parseAskClearedReport(askReportMessage("ask-1", "问题"))).toBeNull();
+  });
+});
+
+describe("账号处境上报（#2）", () => {
+  it("上报原样过", () => {
+    const message = accountReportMessage({
+      kind: "muted",
+      until: "2026 年 10 月 10 日 20:21",
+    });
+    expect(message).toEqual({
+      type: ACCOUNT_REPORT_MESSAGE_TYPE,
+      account: { kind: "muted", until: "2026 年 10 月 10 日 20:21" },
+    });
+    expect(parseAccountReport(message)).toEqual(message);
+  });
+
+  it("四种处境都收", () => {
+    const cases = [
+      { kind: "ready" },
+      { kind: "muted", until: null },
+      { kind: "signed-out" },
+      { kind: "unknown" },
+    ] as const;
+    for (const account of cases) {
+      expect(parseAccountReport(accountReportMessage(account))).toEqual(
+        accountReportMessage(account),
+      );
+    }
+  });
+
+  it("形状不对的不收", () => {
+    expect(parseAccountReport({})).toBeNull();
+    expect(parseAccountReport({ type: ASK_MESSAGE_TYPE, account: { kind: "ready" } })).toBeNull();
+    expect(parseAccountReport({ type: ACCOUNT_REPORT_MESSAGE_TYPE })).toBeNull();
+    expect(parseAccountReport({ type: ACCOUNT_REPORT_MESSAGE_TYPE, account: {} })).toBeNull();
+    expect(
+      parseAccountReport({ type: ACCOUNT_REPORT_MESSAGE_TYPE, account: { kind: "muted" } }),
+    ).toBeNull(); // muted 缺 until
+    expect(
+      parseAccountReport({
+        type: ACCOUNT_REPORT_MESSAGE_TYPE,
+        account: { kind: "ready", until: "x" },
+      }),
+    ).toBeNull(); // ready 不带 until
   });
 });
 
