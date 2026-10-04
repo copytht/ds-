@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 
+import { ACTION_ERROR_PAGE_CHANGED } from "./action";
 import type { ActionFrame } from "./action";
 import {
   lastMessage,
   listMessages,
+  nextFrame,
   readLast,
   readMessages,
   readRow,
+  readyWithin,
   roleOf,
+  settleUntilMounted,
   type ListViewport,
   type StyleProbe,
 } from "./messages";
@@ -485,3 +489,173 @@ function stubLayer(element: Element, overflowY: string, client: number): number[
   });
   return writes;
 }
+
+/**
+ * `readyWithin` 的替身件：jsdom 不做布局，滚动层不 `stub` 就永远不滚得动，
+ * 而就绪判据要的就是「滚得动 + 至少一行读得出」。
+ *
+ * `ready` 真时钟、`instant` 假时钟——后者用 `settle` 走完预算，不必真等 5s。
+ */
+const instant = (): Promise<void> => Promise.resolve();
+function fakeClock(stepMs: number): () => number {
+  let now = 0;
+  return (): number => {
+    now += stepMs;
+    return now;
+  };
+}
+
+describe("就绪轮询（issue #40）", () => {
+  it("行还没挂进来：预算内等到那一行，不报 page-changed", async () => {
+    // 真机实测（2026-10-04，导航后立刻量）：主列表几何已就绪（742×1856、auto），
+    // 但 `rows: 0` —— 「没就绪」的主症状是读不出行，不是高度为 0。
+    document.body.innerHTML = conversationHtml();
+    const rows = [...document.querySelectorAll("[data-virtual-list-item-key]")];
+    const saved = rows.map((row) => row.innerHTML);
+    for (const row of rows) row.innerHTML = ""; // 行在，正文还没渲染
+    let polls = 0;
+
+    await readyWithin(fakeClock(1_000), (): Promise<void> => {
+      polls += 1;
+      if (polls === 2) rows.forEach((row, index) => (row.innerHTML = saved[index] ?? ""));
+      return Promise.resolve();
+    });
+
+    expect(polls).toBe(2); // 等了两拍才等到：不是当场报 page-changed
+  });
+
+  it("一行都读不出：预算耗尽才报 page-changed（这回是真的「结构变了」）", async () => {
+    document.body.innerHTML = conversationHtml();
+    for (const row of document.querySelectorAll("[data-virtual-list-item-key]")) row.innerHTML = "";
+    // 正文永不出来：等再久也没用——这才是该报结构变了的那种。
+
+    await expect(readyWithin(fakeClock(1_000), instant)).rejects.toMatchObject({
+      code: ACTION_ERROR_PAGE_CHANGED,
+    });
+  });
+
+  it("结构真变了（认不出列表）：当场 page-changed，不进轮询", async () => {
+    document.body.innerHTML = "<div>没有列表</div>";
+    let polls = 0;
+
+    await expect(
+      readyWithin(fakeClock(1_000), (): Promise<void> => {
+        polls += 1;
+        return Promise.resolve();
+      }),
+    ).rejects.toMatchObject({ code: ACTION_ERROR_PAGE_CHANGED });
+
+    expect(polls).toBe(0); // 一拍都没等：找不到就是找不到，等也没用
+  });
+
+  it("新对话一行都没有：进轮询还是当场回空？（挂着列表但没行 = 没就绪）", async () => {
+    // 挂着列表、一行都没有：那是「还没挂上来」，等预算；不是「空对话」。
+    document.body.innerHTML = conversationHtml();
+    for (const row of document.querySelectorAll("[data-virtual-list-item-key]")) row.remove();
+
+    await expect(readyWithin(fakeClock(1_000), instant)).rejects.toMatchObject({
+      code: ACTION_ERROR_PAGE_CHANGED,
+    });
+  });
+
+  it("就绪探测不写 scrollTop：别污染 readMessages 的起点", async () => {
+    document.body.innerHTML = conversationHtml();
+    const writes = stubLayer(document.querySelector(".ds-virtual-list")!, "auto", 100);
+
+    await readyWithin(fakeClock(1_000), instant);
+
+    expect(writes).toEqual([]); // 就绪只读行，不试写滚动
+  });
+
+  it("messages.list / messages.last 走同一条就绪路：就绪后照常读出", async () => {
+    document.body.innerHTML = conversationHtml();
+    stubLayer(document.querySelector(".ds-virtual-list")!, "auto", 100);
+
+    const list = await listMessages(frameOf("messages.list"));
+    const last = await lastMessage(frameOf("messages.last"));
+
+    expect(list.messages).toHaveLength(2);
+    expect(last.messages).toHaveLength(1);
+  });
+});
+
+describe("nextFrame：不可见页面也得收工", () => {
+  it("requestAnimationFrame 永不回调（页面不可见）时靠 setTimeout 兜底", async () => {
+    // 真机 2026-10-04 撞过：后台标签页不产生帧，裸 rAF 的 Promise 永远挂着，
+    // `readMessages` / `readLast` 里的 `settleUntilMounted` 随之卡死、动作永不回话。
+    const original = globalThis.requestAnimationFrame;
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: (): number => 0, // 收下回调但永不调用 = 页面不可见
+    });
+    try {
+      await expect(
+        Promise.race([
+          nextFrame(),
+          new Promise((resolve) => setTimeout(() => resolve("超时"), 3_000)),
+        ]),
+      ).resolves.toBeUndefined();
+    } finally {
+      Object.defineProperty(globalThis, "requestAnimationFrame", {
+        configurable: true,
+        writable: true,
+        value: original,
+      });
+    }
+  });
+
+  it("rAF 正常回调时仍走那一路，不被兜底拖慢", async () => {
+    const original = globalThis.requestAnimationFrame;
+    let called = false;
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: (callback: FrameRequestCallback): number => {
+        called = true;
+        callback(0);
+        return 0;
+      },
+    });
+    try {
+      await nextFrame();
+      expect(called).toBe(true);
+    } finally {
+      Object.defineProperty(globalThis, "requestAnimationFrame", {
+        configurable: true,
+        writable: true,
+        value: original,
+      });
+    }
+  });
+});
+
+describe("不可见页面：一屏也要扫得完", () => {
+  it("rAF 死掉时，settleUntilMounted 的 30 帧上限收得住（不超 2s）", async () => {
+    // 兜底曾借用 POLL_INTERVAL_MS(500ms)：30 帧 = 每屏 15s，一屏都扫不完，
+    // `messages.list` 于是永不回话（比挂死更隐蔽——它「在等」）。
+    const original = globalThis.requestAnimationFrame;
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: (): number => 0, // 收下回调但永不调用 = 页面不可见
+    });
+    try {
+      const view = {
+        querySelectorAll: (): ArrayLike<Element> => [],
+        scrollTop: 0,
+        clientHeight: 100,
+        scrollHeight: 300,
+      };
+      const started = Date.now();
+      await settleUntilMounted(view, "1,", nextFrame); // key 集合不变 → 走满 30 帧
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      Object.defineProperty(globalThis, "requestAnimationFrame", {
+        configurable: true,
+        writable: true,
+        value: original,
+      });
+    }
+  });
+});

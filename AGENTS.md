@@ -69,6 +69,10 @@ dsb 内建五件工作工具（`ls` / `read` / `grep` / `write` / `edit`），�
 `storage`），别另起一个。
 脚本改动同样过 `pnpm quality`（ruff 会扫 `scripts/`）。
 
+**碰真站点的命令一律限速，限速已经固化进工具里**：`page-action.py` 每个会碰站点的子命令
+动手前**默认随机等 8–20 秒**（`--pace MIN,MAX` 改档、`--no-pace` 关；`list` 只读本地
+目标清单所以不等）。这条不用你记着手敲——`AGENTS.md` 记纪律、工具记执行。
+
 ## Agent skills
 
 ### Issue tracker

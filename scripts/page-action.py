@@ -32,6 +32,7 @@ import asyncio
 import hashlib
 import json
 import os
+import random
 import sys
 import time
 import urllib.parse
@@ -48,6 +49,36 @@ SITE_MATCH = os.environ.get("DSB_SITE_MATCH", "https://chat.deepseek.com/")
 
 #: 站点上的动作信封（与 `src/lib/channel.ts` 的 `ACTION_MESSAGE_TYPE` 同一份）。
 ACTION_MESSAGE_TYPE = "ds-/action"
+
+#: 默认动手前的随机等待区间（秒）。用户 2026-10-04 拍板：「注意速率」——别把站点当
+#: 自己家机器连打，隔开一段、每次长度还不一样。
+PACE_DEFAULT = (8.0, 20.0)
+
+
+def pace(spec: str | None, *, no_pace: bool = False) -> None:
+    """动手前随机等一下（默认开，`--no-pace` 关，`--pace MIN,MAX` 自定义）。
+
+    为什么固化进工具而不是每次手敲：这条纪律靠记性一定会漏，而漏了就是连打站点。
+    随机而非固定时长，免得打出机器人的节奏。打印等待时长，方便复盘时对齐时间线。
+    """
+    if no_pace:
+        return
+    low, high = PACE_DEFAULT
+    if spec:
+        parts = spec.split(",")
+        try:
+            low = float(parts[0])
+            high = float(parts[1]) if len(parts) > 1 else low
+        except (ValueError, IndexError):
+            print(f"[page-action] --pace 要「MIN,MAX」两个数：{spec}", file=sys.stderr)
+            raise SystemExit(2) from None
+    low, high = min(low, high), max(low, high)
+    if high <= 0:
+        return
+    delay = random.uniform(low, high)
+    print(f"[page-action] 等 {delay:.1f}s 再动手（限速）", file=sys.stderr)
+    time.sleep(delay)
+
 
 READ_EXPR = """(() => {
   const SEL =
@@ -107,7 +138,13 @@ def find_target(kind: str, needle: str, timeout: float = 0.0) -> dict | None:
         time.sleep(0.3)
 
 
-async def evaluate(ws_url: str, expression: str) -> object:
+async def evaluate(ws_url: str, expression: str, timeout: float = 60.0) -> object:
+    """在目标上下文里跑表达式取回值。
+
+    **必须有超时**：对端（扩展页 / 页面 SW）不答时 `recv()` 会永远挂着，
+    探针就变成一个没输出的死进程——排查时看不出是「慢」还是「卡」。
+    超时抛 `TimeoutError`，由 `run()` 折成一句人话。
+    """
     async with websockets.connect(ws_url, max_size=None) as ws:
         await ws.send(
             json.dumps(
@@ -123,13 +160,24 @@ async def evaluate(ws_url: str, expression: str) -> object:
             )
         )
         while True:
-            message = json.loads(await ws.recv())
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            except TimeoutError as error:
+                raise TimeoutError(
+                    f"CDP Runtime.evaluate 等回包超过 {timeout:.0f}s"
+                    "（对端没答：扩展没醒 / 页面正忙 / 动作在途）"
+                ) from error
+            message = json.loads(raw)
             if message.get("id") == 1:
                 return message
 
 
-def run(ws_url: str, expression: str) -> object:
-    return asyncio.run(evaluate(ws_url, expression))
+def run(ws_url: str, expression: str, timeout: float = 60.0) -> object:
+    try:
+        return asyncio.run(evaluate(ws_url, expression, timeout))
+    except TimeoutError as error:
+        print(f"[page-action] {error}", file=sys.stderr)
+        raise SystemExit(4) from error
 
 
 async def call_cdp(ws_url: str, method: str, params: dict | None = None) -> object:
@@ -436,7 +484,8 @@ def send_action(action: str, params: dict) -> object:
         "  return JSON.stringify(r);"
         "})()"
     )
-    result = run(ext["webSocketDebuggerUrl"], script)
+    # 动作本身有 30s 的中继锁，超时给得比默认宽一点；再宽就是真卡住了，该报错而不是挂着。
+    result = run(ext["webSocketDebuggerUrl"], script, timeout=75.0)
     return unwrap(result)
 
 
@@ -476,6 +525,14 @@ def unwrap(message: object) -> object:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="页面动作真机探针（开发用）")
+    # 全局：动手前先随机等一下（默认开）。理由见 pace()。
+    parser.add_argument(
+        "--pace",
+        default=None,
+        metavar="MIN,MAX",
+        help="动手前随机等 MIN..MAX 秒（默认 8..20；给 0 关闭；例：--pace 3,6）",
+    )
+    parser.add_argument("--no-pace", action="store_true", help="别等，立刻动手（默认是等的）")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="列 CDP 目标")
     sub.add_parser("read", help="读 DeepSeek 页面状态")
@@ -509,6 +566,10 @@ def main() -> None:
     args = parser.parse_args()
 
     require_cdp()
+
+    # 只读本地目标清单（list）不用碰站点，不必等。
+    if args.command != "list":
+        pace(args.pace, no_pace=args.no_pace)
 
     if args.command == "list":
         for target in targets():

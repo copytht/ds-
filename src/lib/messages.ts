@@ -1,6 +1,7 @@
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_READ_FAILED, PageError } from "./action";
 import type { ActionFrame } from "./action";
 import { parseToolCall } from "./fence";
+import { FRAME_FALLBACK_MS, POLL_INTERVAL_MS } from "./wait";
 
 /**
  * 读对话（`messages.list` / `messages.last`）：**只读页面渲染出来的 DOM**。
@@ -152,10 +153,26 @@ export async function settleUntilMounted(
     if (keysOf(view) !== was) return;
   }
 }
+/**
+ * 等下一帧。
+ *
+ * **`requestAnimationFrame` 必须配超时兜底**（真机 2026-10-04 撞过）：页面**不可见**时
+ * 浏览器不产生帧，rAF 回调**永不触发**——裸 rAF 的 `Promise` 就永远挂着，
+ * `readMessages` / `readLast` 里的 `settleUntilMounted` 随之卡死，动作永不回话
+ * （表现是探针等到超时、CDP 那边一句回包都没有）。后台标签页、切换走的标签页都会这样。
+ * 所以 rAF 与 `setTimeout` **赛跑**，先到者赢。
+ */
 export function nextFrame(): Promise<void> {
   return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
-    else setTimeout(resolve, 0);
+    let done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(finish);
+    // 兜底：不可见页面 rAF 不来，这一路一定在 FRAME_FALLBACK_MS 内收工。
+    setTimeout(finish, FRAME_FALLBACK_MS);
   });
 }
 
@@ -441,10 +458,69 @@ export async function readLast(
   return [...seen.values()].at(-1) ?? null;
 }
 
+/**
+ * 就绪预算（ms）：等「列表挂上且读得出」的窗口。
+ *
+ * 取 5s：真机上虚拟列表挂一屏约 190ms（#37 量过），「没就绪」是秒级窗口；
+ * 比 25s 的 `SWEEP_BUDGET_MS` 短，因为这个预算只等**就位**，不扫整段对话——
+ * 真失败要早报出来，别让调用方白等（`messages.*` 没有 `timeout` 入参可调）。
+ */
+const READY_BUDGET_MS = 5_000;
+
+/**
+ * 视口里此刻至少有一行读得出正文吗？
+ *
+ * 这是就绪的**唯一**判据，也是真机实测过的那个：2026-10-04 导航后立刻量，主列表
+ * `.ds-virtual-list--printable` 的几何**已完全就绪**（742×1856、`overflow:auto`），
+ * 只是**一行都还没挂进来**（`rows: 0`）。所以「没就绪」的主症状就是「读不出行」。
+ *
+ * 为什么不再加一条「滚得动」：`conversation()` 已经用 `scrollsVertically` 挑过滚动层
+ * （`clientHeight > 0` + 认得的 `overflowY`），选出来的层在真机上本就能滚；而在 jsdom 里
+ * `clientHeight` 恒 0、`getComputedStyle` 没有真 `overflowY`——再加那条只会把「jsdom 无布局」
+ * 误判成「页面没就位」，把单测全卡到预算耗尽。滚不滚得动由 `readMessages` 自己的
+ * 「滚不动消息列表」那条抛点负责（它有真机的几何可看），就绪不必重复挑层。
+ */
+function hasReadableRow(view: ListViewport): boolean {
+  const seen = new Map<string, Message>();
+  sweepInto(view, seen);
+  return seen.size > 0;
+}
+
+/**
+ * 在预算内等消息列表**就绪**，回那条视口。
+ *
+ * 「就绪」= **至少一行 `readRow` 读得出正文**。罩住两个抛点的病因：
+ * - `lastMessage` 的「认不出消息行」——行挂上了、内容还没渲染时读不出；
+ * - `readMessages` 的「滚不动消息列表」——一行都读不出时它连第一屏都没得扫。
+ *
+ * 结构**真的变了**（`conversation()` 回 null，锚点失效）不进轮询，当场抛——
+ * 轮询只罩「挂着但没就位」，不罩「根本找不到」。这是 `wait.ts` 的 `viewWithin`
+ * 同一套模式（#37 为 `wait.*` 立的规矩），这里扩到读动作。
+ *
+ * `now` / `settle` 是替身口：单测用即时 settle + 假时钟把预算走完，不必真等 5s。
+ */
+export async function readyWithin(
+  now: () => number = Date.now,
+  settle: () => Promise<void> = sleepPoll,
+): Promise<ListViewport> {
+  const deadline = now() + READY_BUDGET_MS;
+  for (;;) {
+    const view = conversation(document);
+    if (view === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "找不到消息列表");
+    if (hasReadableRow(view)) return view;
+    if (now() >= deadline) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "消息列表还没就绪");
+    await settle();
+  }
+}
+
+function sleepPoll(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+}
+
 /** `messages.list`：按序的全部消息（角色 + 文本）。新对话一行都没有，回空数组不算错。 */
 export async function listMessages(_frame: ActionFrame): Promise<MessageList> {
-  const view = conversation(document);
-  if (view === null) return { messages: [] };
+  if (conversation(document) === null) return { messages: [] };
+  const view = await readyWithin();
   const messages = await readMessages(view);
   // 进得来就说明挂着行（`conversation` 靠一行行找上来的），一条没读到 = 认不出结构。
   if (messages.length === 0) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "认不出消息行");
@@ -453,8 +529,8 @@ export async function listMessages(_frame: ActionFrame): Promise<MessageList> {
 
 /** `messages.last`：最后一条。形状与 `list` 一致，最多一条。 */
 export async function lastMessage(_frame: ActionFrame): Promise<MessageList> {
-  const view = conversation(document);
-  if (view === null) return { messages: [] };
+  if (conversation(document) === null) return { messages: [] };
+  const view = await readyWithin();
   const message = await readLast(view);
   if (message === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "认不出消息行");
   return { messages: [message] };
