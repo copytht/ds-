@@ -122,6 +122,32 @@ describe("一行 → 一条消息", () => {
 
     expect(readRow(row)?.text).toBe("第一段\n\n第二段");
   });
+
+  it("代码块外框：表头与复制/下载按钮是 `<pre>` 的兄弟，不算正文", () => {
+    // 结构照抄真机（2026-10-04）：`div.md-code-block` 里直接挂着表头、`<pre>`、图标。
+    document.body.innerHTML = `
+      <div class="ds-virtual-list">
+        <div data-virtual-list-item-key="1">
+          <div class="ds-message"><div class="ds-markdown ds-assistant-message-main-content">
+            <p>先看这个：</p>
+            <div class="md-code-block md-code-block-light">
+              <div class="md-code-block-banner"><span>send</span></div>
+              <div role="button" class="ds-button"><span>复制</span></div>
+              <div role="button" class="ds-button"><span>下载</span></div>
+              <pre><span>{"tool": "ls", "arguments": {}}</span></pre>
+              <svg></svg>
+            </div>
+            <p>跑完再来。</p>
+          </div></div>
+        </div>
+      </div>`;
+    const row = document.querySelector("[data-virtual-list-item-key]") as Element;
+
+    expect(readRow(row)).toEqual({
+      role: "assistant",
+      text: '先看这个：\n\n```send\n{"tool": "ls", "arguments": {}}\n```\n\n跑完再来。',
+    });
+  });
 });
 
 describe("messages.list / messages.last 执行器", () => {

@@ -81,6 +81,11 @@ uv run scripts/page-action.py capture --codes    # 落 captures/<时间戳>/
 标记没了**。`messages.ts` 读行文本时把 `<pre>` 还原成一段围栏：正文能 `parseToolCall` 就写回
 ```send，否则写普通的 ```。所以 `rowText` 出来的文本，`parseSendFence` 照样认。
 
+**外框里只有 `<pre>` 算正文**：表头与按钮是 `<pre>` 的**同级兄弟**（真机结构
+`div.md-code-block` → 表头 / `<pre>` / 图标）。读的时候按「这一层直接挂着 `<pre>`」认外框，
+其余兄弟一律不读——不然正文会变成「send 复制 下载 ```send …」，人看的只有代码本身。
+（同理，别把控件文字当正文喂给 agent。）
+
 ## 工具调用解析住哪
 
 `parseToolCall` / `MALFORMED_CALL_HINT` 住在 `src/lib/fence.ts`（围栏域）——因为**读 DOM** 的

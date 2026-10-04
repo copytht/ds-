@@ -159,11 +159,30 @@ export function nextFrame(): Promise<void> {
   });
 }
 
+/**
+ * 这一层的直接子元素里有 `<pre>` 吗——**代码块外框**的判据。
+ *
+ * 真机上代码块外框里除了 `<pre>` 正文，还有表头（语言标签）与复制/下载按钮，都是**同级兄弟**
+ * （结构见 `site-dom-anchors.md`「围栏在 DOM 里的样子」）。所以「这一层直接挂着 `<pre>`」
+ * 就等于「这一层是代码块外框」——外框里除了 `<pre>` 一律不算正文。
+ */
+function hasDirectPre(element: Element): boolean {
+  const children = element.children;
+  for (let index = 0; index < children.length; index += 1) {
+    if (children[index]?.tagName === "PRE") return true;
+  }
+  return false;
+}
+
 function textOf(root: Element): string {
   const parts: string[] = [];
   const walk = (element: Element): void => {
+    // 代码块外框：只有 `<pre>` 算正文，其余兄弟（表头 / 按钮 / 图标）是控件。
+    // 不排掉它们，读出来的正文会变成「send 复制 下载 ```send …」——人看的是代码本身。
+    const codeBlock = hasDirectPre(element);
     for (const node of element.childNodes) {
       if (node.nodeType === TEXT_NODE) {
+        if (codeBlock) continue;
         const raw = node.textContent ?? "";
         // 带换行的纯空白是排版（缩进），不当正文；行内的单个空格要留着，不然词会粘一起。
         if (raw.trim() === "" && raw.includes("\n")) continue;
@@ -172,16 +191,17 @@ function textOf(root: Element): string {
       }
       if (node.nodeType !== ELEMENT_NODE) continue;
       const child = node as Element;
-      if (child.tagName === "BR") {
-        parts.push("\n");
-        continue;
-      }
       if (child.tagName === "PRE") {
         // 新版站点（2026-10-04）把 ```send 围栏渲染成**代码块**：表头「send」+
         // 复制/下载按钮 + `<pre>` 正文——原文里的 ``` 标记在 DOM 里没了。读的时候
         // 把它还原成一段围栏：正文能解析成工具调用就写回 ```send，否则写普通的 ```。
         const body = textOf(child);
         parts.push(`\n\`\`\`${parseToolCall(body) === null ? "" : "send"}\n${body}\n\`\`\`\n`);
+        continue;
+      }
+      if (codeBlock) continue; // 表头 / 复制下载按钮 / 图标——控件不是正文
+      if (child.tagName === "BR") {
+        parts.push("\n");
         continue;
       }
       if (BLOCK_TAGS.has(child.tagName)) {
