@@ -43,6 +43,17 @@ Trellis 0.6.17 与 0.7.0-beta 仍只发 v1 工厂函数插件，v2 下加载报
 - 想加失败码 / 消息 kind / 存储键：先找现有册子（fixture、`channel.ts`、`toggle.ts` 导出），
   两头一起加，别开第三本。
 
+## 页面动作（扩展侧）
+
+- 一件动作四处对齐：执行器 `src/lib/page.ts` → 名册 `entrypoints/content.ts` 的
+  `ACTION_ROSTER` → 契约样例 `protocol/fixtures/action.json` → 测试（同名共置）。
+- **没实现的控件只登记 `docs/page-actions.md`，别写进 `ACTION_ROSTER`**——写了没执行器，
+  点下去只会回 `unknown-action`，是假实现。
+- 会改页面状态的写动作记进 `src/lib/action.ts` 的 `BACKOFF_GATED_ACTIONS`；动写作框的才进
+  `SPEAK_GATED_ACTIONS`。失败码只取册子里那几个（`page-changed` / `composer-absent` 等），
+  别新增。
+- 定位优先站点设计系统的 `ds-*` / `role` / `aria-*`；哈希 class 不碰。
+
 ## 页面动作选择器（`src/lib/page.ts` 那批）
 
 - **优先**站点设计系统的 `ds-*` class 与语义属性（`role` / `aria-*` / `data-*` key）；

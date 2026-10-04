@@ -1,4 +1,9 @@
-import { ACTION_ERROR_COMPOSER_ABSENT, ACTION_ERROR_PAGE_CHANGED, PageError } from "./action";
+import {
+  ACTION_ERROR_COMPOSER_ABSENT,
+  ACTION_ERROR_PAGE_CHANGED,
+  ACTION_ERROR_UNKNOWN,
+  PageError,
+} from "./action";
 import type { ActionFrame } from "./action";
 
 /**
@@ -244,4 +249,67 @@ export function newChat(_frame: ActionFrame): Record<string, never> {
   if (el === undefined) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "找不到「开启新对话」");
   el.click();
   return {};
+}
+
+/**
+ * 写作框旁边那两个小开关（#30）：站点设计系统的 `div.ds-toggle-button`，状态在
+ * `aria-pressed`。**按按钮文字认控件**——文字是本地化的（这里只认中文），认不出当
+ * 控件不在、由调用方回 `page-changed`，不猜。
+ */
+const TOGGLE_SELECTOR = "div.ds-toggle-button";
+const THINK_LABEL = "深度思考";
+const SEARCH_LABEL = "智能搜索";
+
+/** 按文字找一个开关；`textContent` 前后空白容忍，其余严格相等。 */
+function findToggle(label: string): HTMLElement | null {
+  const entries = document.querySelectorAll<HTMLElement>(TOGGLE_SELECTOR);
+  return [...entries].find((entry) => (entry.textContent || "").trim() === label) ?? null;
+}
+
+/** 读开关状态：只认 `aria-pressed === "true"` 为开，别的一律算关。 */
+function readToggleState(el: HTMLElement): boolean {
+  return el.getAttribute("aria-pressed") === "true";
+}
+
+/** 读一个开关：找不到认得的控件就抛 `page-changed`。 */
+function readToggleOption(label: string): { enabled: boolean } {
+  const el = findToggle(label);
+  if (el === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, `找不到「${label}」开关`);
+  return { enabled: readToggleState(el) };
+}
+
+/**
+ * 把一个开关拨到目标态。**幂等**：已在目标态就不点（点了反而拨反）。点完再读一次回
+ * **达成态**——站点可能拒它或异步生效，回目标态会说谎。
+ *
+ * `enabled` 非布尔当认不出形状（与主开关 `toggle.set` 同一口径），别把 `"false"`
+ * 这种字符串按真值收下。
+ */
+function setToggleOption(label: string, frame: ActionFrame): { enabled: boolean } {
+  const enabled = frame.params["enabled"];
+  if (typeof enabled !== "boolean") {
+    throw new PageError(ACTION_ERROR_UNKNOWN, "enabled 必须是布尔");
+  }
+  const el = findToggle(label);
+  if (el === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, `找不到「${label}」开关`);
+  if (readToggleState(el) !== enabled) el.click();
+  return { enabled: readToggleState(el) };
+}
+
+/** `think.get` / `think.set`：深度思考开关。 */
+export function readThink(_frame: ActionFrame): { enabled: boolean } {
+  return readToggleOption(THINK_LABEL);
+}
+
+export function setThink(frame: ActionFrame): { enabled: boolean } {
+  return setToggleOption(THINK_LABEL, frame);
+}
+
+/** `search.get` / `search.set`：智能搜索开关。 */
+export function readSearch(_frame: ActionFrame): { enabled: boolean } {
+  return readToggleOption(SEARCH_LABEL);
+}
+
+export function setSearch(frame: ActionFrame): { enabled: boolean } {
+  return setToggleOption(SEARCH_LABEL, frame);
 }

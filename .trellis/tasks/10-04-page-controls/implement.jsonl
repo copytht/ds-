@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "页面动作执行器放 src/lib/page.ts、entrypoints/content.ts 只接线；新增 think/search 开关遵循一主题一文件与共置测试"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "改 action.json fixture 要两半同步；测试同名共置；提交前 pnpm quality 必绿"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "改动作契约（fixture action.json）的跨层同步清单与反模式"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "写开关查找前先复用 page.ts 既有 PageError / findSendButton 的口径与写法"}

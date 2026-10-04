@@ -32,6 +32,10 @@ import {
   readComposer,
   readComposerPresent,
   readPageState,
+  readSearch,
+  readThink,
+  setSearch,
+  setThink,
   stopClick,
   typeComposer,
 } from "../src/lib/page";
@@ -197,6 +201,11 @@ export default defineContentScript({
       "composer.read": readComposer,
       "composer.type": typeComposer,
       "composer.clear": clearComposer,
+      // 写作框旁边那两个小开关（#30）。
+      "think.get": readThink,
+      "think.set": setThink,
+      "search.get": readSearch,
+      "search.set": setSearch,
       "send.click": clickSend,
       "send.enter": pressEnter,
       "stop.click": stopClick,

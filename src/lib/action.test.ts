@@ -476,6 +476,35 @@ describe("退避闸（账号在处罚区，写动作停发）", () => {
     expect(sent.map((f) => f.action)).toEqual(["page.state"]);
   });
 
+  it("think.set / search.set 也在退避闸下（改页面状态是写），think.get 不受影响", async () => {
+    const { send, sent } = recordingSendToTab(MUTED);
+    const ctx = context({ sendToTab: send });
+
+    for (const action of ["think.set", "search.set"]) {
+      expect(
+        await runAction(frame({ action, params: { enabled: true }, target: "42" }), ctx),
+      ).toEqual({ ok: false, error: "backing-off" });
+    }
+    // 读开关是只读：不探针、不拦。
+    sent.length = 0;
+    expect(await runAction(frame({ action: "think.get", target: "42" }), ctx)).toEqual({
+      ok: true,
+      result: {},
+    });
+    expect(sent.map((f) => f.action)).toEqual(["think.get"]);
+  });
+
+  it("think.set / search.set 只进退避闸、不进 speak 闸（不代你发言）", async () => {
+    // 账号正常 + speak 关着：不该被 speak 闸挡。
+    const { send, sent } = recordingSendToTab({ kind: "ready" });
+    const ctx = context({ speak: false, sendToTab: send });
+
+    expect(
+      await runAction(frame({ action: "think.set", params: { enabled: true }, target: "42" }), ctx),
+    ).toEqual({ ok: true, result: {} });
+    expect(sent.map((f) => f.action)).toEqual(["page.state", "think.set"]);
+  });
+
   it("stop.click 也在退避闸下（停生成也是改页面状态）", async () => {
     const { send, sent } = recordingSendToTab(MUTED);
     const ctx = context({ sendToTab: send });

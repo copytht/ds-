@@ -169,6 +169,66 @@
       }
     },
     {
+      "name": "think.get 成功",
+      "request": {
+        "action": "think.get",
+        "params": {},
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "name": "think.set 成功",
+      "request": {
+        "action": "think.set",
+        "params": {
+          "enabled": true
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "name": "search.get 成功",
+      "request": {
+        "action": "search.get",
+        "params": {},
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "enabled": false
+        }
+      }
+    },
+    {
+      "name": "search.set 成功",
+      "request": {
+        "action": "search.set",
+        "params": {
+          "enabled": false
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "enabled": false
+        }
+      }
+    },
+    {
       "name": "send.click 成功",
       "request": {
         "action": "send.click",
