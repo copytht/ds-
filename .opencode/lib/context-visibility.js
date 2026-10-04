@@ -146,3 +146,57 @@ export function prependEphemeralText(messages, text) {
   }
   return true
 }
+
+// ============================================================
+// OpenCode v2 helpers
+//
+// V2 drops the `{info, parts}` transcript shape. The
+// `ctx.session.hook("context", ...)` event carries `messages` as
+// LLM turns (`{role, content}`) and `system` as parts
+// (`{type:"text", text}`). Ephemeral injection appends a synthetic
+// system part instead of a synthetic user part, so nothing leaks
+// into stored history.
+// ============================================================
+
+/** Index of the last `{role:"user"}` turn in a V2 message list. */
+export function findLatestV2UserMessageIndex(messages) {
+  if (!Array.isArray(messages)) return -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") return i
+  }
+  return -1
+}
+
+/** True when the V2 transcript already contains an assistant turn. */
+export function transcriptHasAssistantMessageV2(messages) {
+  if (!Array.isArray(messages)) return false
+  return messages.some(message => message?.role === "assistant")
+}
+
+/** Concatenated text of the latest V2 user turn. */
+export function latestUserPromptTextV2(messages) {
+  const index = findLatestV2UserMessageIndex(messages)
+  if (index < 0) return ""
+  const content = messages[index].content
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  return content
+    .filter(part => part?.type === "text" && typeof part.text === "string")
+    .map(part => part.text)
+    .join("\n")
+}
+
+/**
+ * Insert an ephemeral `<system>` text part into a V2 context-hook event.
+ * The part is placed after the leading identity/system part (index 1) so
+ * the model sees it as session-level context. Rebuilt per request, so it
+ * never accumulates in stored history.
+ */
+export function prependSystemText(system, text) {
+  if (!Array.isArray(system)) return false
+  if (typeof text !== "string" || !text) return false
+  const part = { type: "text", text }
+  if (system.length === 0) system.push(part)
+  else system.splice(1, 0, part)
+  return true
+}

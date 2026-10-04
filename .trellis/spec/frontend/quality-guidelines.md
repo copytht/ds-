@@ -15,6 +15,16 @@ pnpm quality   # = check（eslint + tsc + vitest + prettier）+ ruff check/forma
 （同 `vendor/` 口径）：`eslint.config.js` 的 ignores 与 `.prettierignore`
 都排除它们。别把生成物拉进格式化或 lint，也别手改——升级会盖回去。
 
+**已知本地补丁（OpenCode v2 插件）**：`.opencode/plugins/` 下三支插件
+（`session-start.js`、`inject-workflow-state.js`、`inject-subagent-context.js`）
+与 `.opencode/lib/context-visibility.js` 已就地移植到 OpenCode v2 插件 API
+（默认导出 `{id, setup}`；`ctx.session.hook("context")`、
+`ctx.tool.hook("execute.before")`；子 agent 工具名 `subagent`、入参 `agent`）。
+Trellis 0.6.17 与 0.7.0-beta 仍只发 v1 工厂函数插件，v2 下加载报
+`must export a default definition with an id and an effect or setup function`。
+这是**有意的手改例外**：`trellis update` 会用 v1 模板盖回，盖回后按同一口径
+重新移植（这几个文件在 `.trellis/.template-hashes.json` 里的哈希会失配，属预期）。
+
 ## 测试怎么写
 
 - TS：与实现同名共置（`src/lib/relay.test.ts`），vitest；改了 parse 函数就先改它的测试。

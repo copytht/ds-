@@ -407,8 +407,8 @@ function commandStartsWithTrellisContext(command) {
  * commands before execution; that prefix is the only channel by which an
  * AI-run `task.py` sees the OpenCode session.
  */
-function injectTrellisContextIntoBash(ctx, input, output, hostPlatform, env) {
-  const args = output?.args
+function injectTrellisContextIntoBash(ctx, event, hostPlatform, env) {
+  const args = event?.input
   const commandKey = getBashCommandKey(args)
   if (!commandKey) return false
 
@@ -416,154 +416,162 @@ function injectTrellisContextIntoBash(ctx, input, output, hostPlatform, env) {
   if (!command.trim()) return false
   if (commandStartsWithTrellisContext(command)) return false
 
-  const contextKey = ctx.getContextKey(input)
+  const contextKey = ctx.getContextKey({ sessionID: event.sessionID })
   if (!contextKey) return false
 
   args[commandKey] = `${buildTrellisContextPrefix(contextKey, hostPlatform, env)}${command}`
   return true
 }
 
-// OpenCode plugin factory: `export default async (input) => hooks`.
-// OpenCode 1.2.x iterates every module export and invokes it as a function
-// (packages/opencode/src/plugin/index.ts — `for ([_, fn] of Object.entries(mod)) await fn(input)`);
-// the previous `{ id, server }` object shape failed with
-// `TypeError: fn is not a function` in 1.2.x.
-export default async ({ directory, platform: hostPlatform = process.platform, env = process.env }) => {
-  const ctx = new TrellisContext(directory)
-  debugLog("inject", "Plugin loaded, directory:", directory)
+// OpenCode v2 requires plugins to default-export `{ id, setup }`
+// (schema: `{id, effect}` | `{id, setup}`). The v1 factory-function export
+// fails with "Plugin must export a default definition with an id and an
+// effect or setup function."
+//
+// V2 also renamed tools: the shell tool can surface as `shell` (or `bash`),
+// and `task` became `subagent`, whose input takes `agent` instead of
+// `subagent_type` (the legacy key is still accepted defensively).
+export default {
+  id: "trellis.subagent-context",
+  async setup(pluginCtx) {
+    const directory = pluginCtx.location?.directory || process.cwd()
+    const hostPlatform = process.platform
+    const env = process.env
+    const ctx = new TrellisContext(directory)
+    debugLog("inject", "Plugin loaded, directory:", directory)
 
-  return {
-      "tool.execute.before": async (input, output) => {
-        try {
-          if (process.env.TRELLIS_HOOKS === "0" || process.env.TRELLIS_DISABLE_HOOKS === "1") {
-            return
-          }
-          debugLog("inject", "tool.execute.before called, tool:", input?.tool)
-
-          const toolName = input?.tool?.toLowerCase()
-          if (toolName === "bash") {
-            if (injectTrellisContextIntoBash(ctx, input, output, hostPlatform, env)) {
-              debugLog("inject", "Injected TRELLIS_CONTEXT_ID into Bash command")
-            }
-            return
-          }
-
-          if (toolName !== "task") {
-            return
-          }
-
-          const args = output?.args
-          if (!args) return
-
-          const rawSubagentType = args.subagent_type
-          // Strip "trellis-" prefix added by v0.5.0-beta.5 agent rename migration
-          const subagentType = (rawSubagentType || "").replace(/^trellis-/, "")
-          const originalPrompt = args.prompt || ""
-
-          debugLog("inject", "Task tool called, subagent_type:", rawSubagentType)
-
-          if (!AGENTS_ALL.includes(subagentType)) {
-            debugLog("inject", "Skipping - unsupported subagent_type")
-            return
-          }
-
-          // Resolve active task in this priority order (only later steps
-          // run when earlier ones miss):
-          //   1. Exact session runtime context lookup for input.sessionID
-          //   2. `Active task: <path>` hint in the dispatch prompt
-          //      (explicit per-dispatch override — beats single-session
-          //      inference so multi-window users can disambiguate)
-          //   3. Single-session fallback — only when exactly 1 session
-          //      runtime file exists locally
-          let taskDir = null
-          let taskSource = null
-
-          const contextKey = ctx.getContextKey(input)
-          if (contextKey) {
-            const context = ctx.readContext(contextKey)
-            const exactRef = ctx.normalizeTaskRef(context?.current_task || "")
-            if (exactRef) {
-              taskDir = exactRef
-              taskSource = `session:${contextKey}`
-            }
-          }
-
-          if (!taskDir) {
-            const hintRef = extractActiveTaskHint(originalPrompt)
-            if (hintRef) {
-              const hintNormalized = ctx.normalizeTaskRef(hintRef)
-              if (hintNormalized) {
-                const hintDir = ctx.resolveTaskDir(hintNormalized)
-                if (hintDir && existsSync(hintDir)) {
-                  taskDir = hintNormalized
-                  taskSource = "prompt-hint"
-                  debugLog("inject", "Resolved task from Active task: hint:", hintNormalized)
-                }
-              }
-            }
-          }
-
-          if (!taskDir) {
-            const fallback = ctx._resolveSingleSessionFallback()
-            if (fallback?.taskPath) {
-              const fallbackDir = ctx.resolveTaskDir(fallback.taskPath)
-              if (fallbackDir && existsSync(fallbackDir)) {
-                taskDir = fallback.taskPath
-                taskSource = fallback.source
-                debugLog("inject", "Resolved task via single-session fallback:", taskDir, "source:", taskSource)
-              }
-            }
-          }
-
-          // Agents requiring task directory
-          if (AGENTS_REQUIRE_TASK.includes(subagentType)) {
-            // subagentType is already stripped of "trellis-" prefix above
-            if (!taskDir) {
-              debugLog("inject", "Skipping - no current task")
-              return
-            }
-            const taskDirFull = ctx.resolveTaskDir(taskDir)
-            if (!taskDirFull || !existsSync(taskDirFull)) {
-              debugLog("inject", "Skipping - task directory not found")
-              return
-            }
-          }
-
-          // Check for [finish] marker
-          const isFinish = originalPrompt.toLowerCase().includes("[finish]")
-
-          // Get context based on agent type
-          let context = ""
-          switch (subagentType) {
-            case "implement":
-              context = getImplementContext(ctx, taskDir)
-              break
-            case "check":
-              context = isFinish
-                ? getFinishContext(ctx, taskDir)
-                : getCheckContext(ctx, taskDir)
-              break
-            case "research":
-              context = getResearchContext(ctx, taskDir)
-              break
-          }
-
-          if (!context) {
-            debugLog("inject", "No context to inject")
-            return
-          }
-
-          const newPrompt = buildPrompt(subagentType, originalPrompt, context, isFinish)
-
-          // Mutate args in-place — whole-object replacement does NOT work for the task tool
-          // because the runtime holds a local reference to the same args object.
-          args.prompt = newPrompt
-
-          debugLog("inject", "Injected context for", subagentType, "prompt length:", newPrompt.length)
-
-        } catch (error) {
-          debugLog("inject", "Error in tool.execute.before:", error.message, error.stack)
+    await pluginCtx.tool.hook("execute.before", async (event) => {
+      try {
+        if (process.env.TRELLIS_HOOKS === "0" || process.env.TRELLIS_DISABLE_HOOKS === "1") {
+          return
         }
+        debugLog("inject", "tool.execute.before called, tool:", event?.tool)
+
+        const toolName = (event?.tool || "").toLowerCase()
+        if (toolName === "bash" || toolName === "shell") {
+          if (injectTrellisContextIntoBash(ctx, event, hostPlatform, env)) {
+            debugLog("inject", "Injected TRELLIS_CONTEXT_ID into Bash command")
+          }
+          return
+        }
+
+        if (toolName !== "subagent" && toolName !== "task") {
+          return
+        }
+
+        const args = event?.input
+        if (!args) return
+
+        const rawSubagentType = args.agent || args.subagent_type
+        // Strip "trellis-" prefix added by v0.5.0-beta.5 agent rename migration
+        const subagentType = (rawSubagentType || "").replace(/^trellis-/, "")
+        const originalPrompt = args.prompt || ""
+
+        debugLog("inject", "Subagent tool called, agent:", rawSubagentType)
+
+        if (!AGENTS_ALL.includes(subagentType)) {
+          debugLog("inject", "Skipping - unsupported subagent")
+          return
+        }
+
+        // Resolve active task in this priority order (only later steps
+        // run when earlier ones miss):
+        //   1. Exact session runtime context lookup for input.sessionID
+        //   2. `Active task: <path>` hint in the dispatch prompt
+        //      (explicit per-dispatch override — beats single-session
+        //      inference so multi-window users can disambiguate)
+        //   3. Single-session fallback — only when exactly 1 session
+        //      runtime file exists locally
+        let taskDir = null
+        let taskSource = null
+
+        const contextKey = ctx.getContextKey({ sessionID: event.sessionID })
+        if (contextKey) {
+          const context = ctx.readContext(contextKey)
+          const exactRef = ctx.normalizeTaskRef(context?.current_task || "")
+          if (exactRef) {
+            taskDir = exactRef
+            taskSource = `session:${contextKey}`
+          }
+        }
+
+        if (!taskDir) {
+          const hintRef = extractActiveTaskHint(originalPrompt)
+          if (hintRef) {
+            const hintNormalized = ctx.normalizeTaskRef(hintRef)
+            if (hintNormalized) {
+              const hintDir = ctx.resolveTaskDir(hintNormalized)
+              if (hintDir && existsSync(hintDir)) {
+                taskDir = hintNormalized
+                taskSource = "prompt-hint"
+                debugLog("inject", "Resolved task from Active task: hint:", hintNormalized)
+              }
+            }
+          }
+        }
+
+        if (!taskDir) {
+          const fallback = ctx._resolveSingleSessionFallback()
+          if (fallback?.taskPath) {
+            const fallbackDir = ctx.resolveTaskDir(fallback.taskPath)
+            if (fallbackDir && existsSync(fallbackDir)) {
+              taskDir = fallback.taskPath
+              taskSource = fallback.source
+              debugLog("inject", "Resolved task via single-session fallback:", taskDir, "source:", taskSource)
+            }
+          }
+        }
+
+        // Agents requiring task directory
+        if (AGENTS_REQUIRE_TASK.includes(subagentType)) {
+          // subagentType is already stripped of "trellis-" prefix above
+          if (!taskDir) {
+            debugLog("inject", "Skipping - no current task")
+            return
+          }
+          const taskDirFull = ctx.resolveTaskDir(taskDir)
+          if (!taskDirFull || !existsSync(taskDirFull)) {
+            debugLog("inject", "Skipping - task directory not found")
+            return
+          }
+        }
+
+        // Check for [finish] marker
+        const isFinish = originalPrompt.toLowerCase().includes("[finish]")
+
+        // Get context based on agent type
+        let context = ""
+        switch (subagentType) {
+          case "implement":
+            context = getImplementContext(ctx, taskDir)
+            break
+          case "check":
+            context = isFinish
+              ? getFinishContext(ctx, taskDir)
+              : getCheckContext(ctx, taskDir)
+            break
+          case "research":
+            context = getResearchContext(ctx, taskDir)
+            break
+        }
+
+        if (!context) {
+          debugLog("inject", "No context to inject")
+          return
+        }
+
+        const newPrompt = buildPrompt(subagentType, originalPrompt, context, isFinish)
+
+        // Mutate args in-place — whole-object replacement does NOT work for
+        // the subagent tool because the runtime holds a local reference to
+        // the same args object.
+        args.prompt = newPrompt
+
+        debugLog("inject", "Injected context for", subagentType, "prompt length:", newPrompt.length)
+
+      } catch (error) {
+        debugLog("inject", "Error in tool.execute.before:", error.message, error.stack)
       }
-    }
+    })
+  },
 }
