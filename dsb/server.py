@@ -40,6 +40,7 @@ from dsb.gateway import (
 from dsb.log import log_event, setup_logging
 from dsb.mcp import MCP_PATH, McpService, Tool
 from dsb.said import SaidLog
+from dsb.work import WORK_ROOT_ENV_KEY, resolve_work_root, work_tools
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
@@ -72,13 +73,14 @@ def said_tools(said: SaidLog) -> list[Tool]:
     ]
 
 
-def build_tools(gateway: Gateway, said: SaidLog) -> list[Tool]:
-    """注册给 :class:`dsb.mcp.McpService` 的全表：网关汇总的 + 自家的两件。
+def build_tools(gateway: Gateway, said: SaidLog, root: Path) -> list[Tool]:
+    """注册给 :class:`dsb.mcp.McpService` 的全表：网关汇总的 + 自家工作工具 + 说给人听的两件。
 
-    顺序即话语权：自家 ``said_*`` 在后，撞名时自家说了算（网关内部的撞名在
-    :meth:`dsb.gateway.Gateway.tools` 里已经记过一笔 ``tool-clash``）。
+    顺序即话语权：``said_*`` 在后，撞名时自家说了算（网关内部的撞名在
+    :meth:`dsb.gateway.Gateway.tools` 里已经记过一笔 ``tool-clash``）。五件工作工具是裸名
+    （``ls`` / ``read`` / …），第三方工具名恒带 ``<server>_`` 前缀，正常不会相撞。
     """
-    return [*gateway.tools(), *said_tools(said)]
+    return [*gateway.tools(), *work_tools(root), *said_tools(said)]
 
 
 def route(
@@ -220,16 +222,24 @@ def main() -> None:
     env_text = read_env_text()
     port = resolve_port(env_text)
     config_path = resolve_config_path(env_text)
+    root = resolve_work_root(env_text)
     gateway = Gateway.from_config(load_config(config_path), timeout=resolve_timeout(env_text))
-    service = McpService(build_tools(gateway, SaidLog()))
+    service = McpService(build_tools(gateway, SaidLog(), root))
     names = ", ".join(service.tool_names) or "（空）"
     print(
-        f"[dsb] MCP 网关已启动：http://{DEFAULT_HOST}:{port}{MCP_PATH}（工具：{names}）",
+        f"[dsb] MCP 网关已启动：http://{DEFAULT_HOST}:{port}{MCP_PATH}"
+        f"（工具：{names}；工作目录：{root}）",
         flush=True,
     )
+    if not root.is_dir():
+        print(
+            f"[dsb] 工作目录不存在（看 {WORK_ROOT_ENV_KEY} 或 .env）：{root}；"
+            "工作工具调用时会回 bad-path。",
+            file=sys.stderr,
+        )
     if not gateway.servers:
         print(
-            f"[dsb] 没配 MCP server（看 {config_path}）：tools/list 只剩自家的 said_*。",
+            f"[dsb] 没配 MCP server（看 {config_path}）：tools/list 只剩工作工具与自家的 said_*。",
             file=sys.stderr,
         )
     with make_server(service, port=port) as server:

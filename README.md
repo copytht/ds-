@@ -18,6 +18,9 @@
 
 中继完全被动：不推送、不轮询、无会话、一条 CORS 头都不下发；只有 background 打网络。
 
+dsb 另外内建五件工作工具（`ls` / `read` / `grep` / `write` / `edit`），钉死在工作文件夹
+root 内（`DSB_WORK_ROOT` 配置，缺省本仓根），不给任何命令执行；见 `docs/adr/0012`。
+
 ## 结构
 
 ```

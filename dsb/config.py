@@ -5,6 +5,8 @@
 - ``DSB_PORT``：监听端口（默认 8787）；
 - ``DSB_TOOL_TIMEOUT``：一次工具调用等子进程的时限（秒，见 :mod:`dsb.gateway`）。
 
+``DSB_WORK_ROOT``（工作文件夹 root）用同款口径在 :mod:`dsb.work` 里解析，不走本模块。
+
 ``OPENSESS_ID`` / ``DSB_IDLE_TIMEOUT`` / ``DSB_ACTIONS_ENABLED`` 都随问答后端与动作服务
 一起废了（ADR-0011）——没有会话要起、没有问句要等、没有动作要放行。
 """

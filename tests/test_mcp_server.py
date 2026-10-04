@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from dsb.gateway import Gateway
 from dsb.mcp import (
     INTERNAL_ERROR,
     INVALID_PARAMS,
@@ -18,7 +20,9 @@ from dsb.mcp import (
     Tool,
     rpc_request,
 )
-from dsb.server import ERROR_PAYLOAD, make_server, route
+from dsb.said import SaidLog
+from dsb.server import ERROR_PAYLOAD, build_tools, make_server, route
+from dsb.work import work_tools
 
 
 def _echo(arguments: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -251,3 +255,75 @@ def test_post_over_the_wire_round_trips(service: McpService) -> None:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+
+# ---- 工作工具（ADR-0012） ----
+
+
+def test_build_tools_lists_the_work_tools_and_said_tools(tmp_path: Path) -> None:
+    """``build_tools`` 把五件工作工具挂上，``said_*`` 仍在最后（撞名时自家说了算）。"""
+    service = McpService(build_tools(Gateway({}), SaidLog(), tmp_path))
+    names = service.tool_names
+    for name in ("ls", "read", "grep", "write", "edit"):
+        assert name in names, names
+    assert names.index("said_add") > names.index("read")
+    assert not {"shell", "bash", "sh", "exec", "run"} & set(names)
+
+
+def test_work_tools_are_described_in_the_catalog(tmp_path: Path) -> None:
+    service = McpService(build_tools(Gateway({}), SaidLog(), tmp_path))
+    tools = result_of(call(service, 1, "tools/list"))["tools"]
+    work = [tool for tool in tools if tool["name"] in {"ls", "read", "grep", "write", "edit"}]
+    assert len(work) == 5
+    assert all("[工作目录]" in tool["description"] for tool in work)
+
+
+def test_a_work_tool_round_trips_over_the_service(tmp_path: Path) -> None:
+    service = McpService(work_tools(tmp_path))
+
+    result = result_of(
+        call(
+            service,
+            1,
+            "tools/call",
+            {"name": "write", "arguments": {"path": "a/b.txt", "content": "你好"}},
+        )
+    )
+    assert result["isError"] is False
+
+    result = result_of(
+        call(service, 2, "tools/call", {"name": "read", "arguments": {"path": "a/b.txt"}})
+    )
+    assert result["content"][0]["text"] == "你好"
+
+    result = result_of(
+        call(
+            service,
+            3,
+            "tools/call",
+            {
+                "name": "edit",
+                "arguments": {"path": "a/b.txt", "old_string": "你好", "new_string": "再见"},
+            },
+        )
+    )
+    assert result["isError"] is False
+
+    result = result_of(
+        call(
+            service,
+            4,
+            "tools/call",
+            {"name": "grep", "arguments": {"pattern": "再见", "path": "."}},
+        )
+    )
+    assert result["content"][0]["text"] == "a/b.txt:1: 再见"
+
+
+def test_a_work_tool_out_of_root_returns_a_failed_payload(tmp_path: Path) -> None:
+    service = McpService(work_tools(tmp_path))
+    result = result_of(
+        call(service, 1, "tools/call", {"name": "read", "arguments": {"path": "../x"}})
+    )
+    assert result["isError"] is True
+    assert result["content"][0]["text"].startswith("out-of-root")
