@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "质量检查口径：lint/typecheck/vitest/prettier/ruff/pytest 与协议说明黄金值对拍"}
-{"file": ".trellis/spec/frontend/type-safety.md", "reason": "核对 parseReplyPayload 与各 parse 函数是否「认不出回 null、不猜」"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对跨层改动：本地截获不破坏普通围栏转发、失败码册子两头一致、无重复执行"}
