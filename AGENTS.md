@@ -21,9 +21,11 @@
 **用户正在用浏览器时不许重启它**（不 SIGTERM、不重开窗口）。要清 flag、换 profile、装扩展，
 先问现在方不方便，或者让用户自己动手；动主 profile 必须用户明确点头，含糊点头不算。
 
-**例外（2026-10-04 用户拍板）**：`scripts/env-up.sh` 检测到 ds-browser 装的扩展比构建旧
-时，会自动重启 ds-browser（SIGTERM 主进程 → 清 SW 脚本缓存 → 重装扩展 → 开会话页）。
-登录态在 profile 里不丢、开着的标签页会关；除此之外的浏览器一律不动，规矩照旧。
+**例外（2026-10-04 用户拍板）**：**ds-browser**（独立 profile 那个）这套动作不用先问、直接做：
+`scripts/env-up.sh` 检测到它装的扩展比构建旧会自动重启它（SIGTERM 主进程 → 清 SW 脚本缓存 →
+重装扩展 → 开会话页）；要带调试口跑真机探针（`scripts/page-action.py`）时，按 `--debug`
+重启它也一样。登录态在 profile 里不丢、开着的标签页会关。**除此之外的浏览器一律不动**
+（主 profile、别人在用的），要动仍先问。
 
 ## 环境准备
 
@@ -53,8 +55,9 @@ dsb 内建五件工作工具（`ls` / `read` / `grep` / `write` / `edit`），�
 ## 脚本
 
 **所有脚本放 `scripts/`、按可复用写**：一件事一个工具、参数化；别写一次性 `/tmp` 脚本，
-更别把脚本贴进对话就算完。要临时读页面 / 发页面动作 / 跑表达式，走已有工具的入口
-（`scripts/page-action.py` 的 `read` / `send` / `js` / `stop-test`），别另起一个。
+更别把脚本贴进对话就算完。要临时读页面 / 发页面动作 / 跑表达式 / 读写扩展 storage，
+走已有工具的入口（`scripts/page-action.py` 的 `read` / `send` / `js` / `stop-test` /
+`storage`），别另起一个。
 脚本改动同样过 `pnpm quality`（ruff 会扫 `scripts/`）。
 
 ## Agent skills
