@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "deepseek": {
+      "models": {
+        "deepseek-flash": {
+          "limit": {
+            "context": 393216
+          }
+        }
+      }
+    }
+  }
+}
