@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
+- **Total Sessions**: 5
 - **Last Active**: 2026-10-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~115 | Active |
+| `journal-1.md` | ~137 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-10-04 | 页面动作 7/8：stop.click（生成中停止键） | `e4a5d89`, `9543e3f` | `-` |
 | 4 | 2026-10-04 | 判据 4：扩展最后探活经中继日志可读 | - | `main` |
 | 3 | 2026-10-04 | 环境起好 + env-up 自动换旧扩展浏览器 | - | `main` |
 | 2 | 2026-10-04 | trellis-update-spec：沉淀本会话三条学习 | - | `main` |
