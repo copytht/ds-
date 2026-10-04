@@ -7,7 +7,9 @@ import {
   readLast,
   readMessages,
   readRow,
+  roleOf,
   type ListViewport,
+  type StyleProbe,
 } from "./messages";
 
 const FRAME: ActionFrame = {
@@ -161,6 +163,66 @@ describe("messages.list / messages.last 执行器", () => {
     expect(await lastMessage(frameOf("messages.last"))).toEqual({
       messages: [{ role: "unknown", text: "认不出" }],
     });
+  });
+});
+
+/**
+ * 角色三层里的**渲染层**（气泡）：jsdom 不做布局，`getComputedStyle` / `getBoundingClientRect`
+ * 拿不到真值，所以用替身探测口，把「算出来的样式 / 几何」写在 `data-*` 上喂进去。
+ * 数字照真机量的（`10-04-read-conversation/research/role-bubble.md`）。
+ */
+const attributeProbe: StyleProbe = {
+  style: (el) => ({
+    backgroundColor: el.getAttribute("data-bg") ?? "rgba(0, 0, 0, 0)",
+    borderRadius: el.getAttribute("data-radius") ?? "0px",
+  }),
+  rect: (el) => ({
+    left: Number(el.getAttribute("data-left") ?? "0"),
+    right: Number(el.getAttribute("data-right") ?? "0"),
+  }),
+};
+
+/** 造一行：行占 0..752，里面放一块「绘制出来的东西」（或什么都不放）。 */
+function bubbleRow(inner: string, rowLeft = 0, rowRight = 752): Element {
+  document.body.innerHTML = `
+    <div class="ds-virtual-list"><div class="ds-virtual-list-visible-items">
+      <div data-virtual-list-item-key="1" data-left="${rowLeft}" data-right="${rowRight}">
+        ${inner}
+      </div>
+    </div></div>`;
+  return document.querySelector("[data-virtual-list-item-key]") as Element;
+}
+
+describe("角色：渲染层（气泡）", () => {
+  it("用户：不满宽的圆角块（真机 22px、贴右）", () => {
+    const row = bubbleRow(
+      '<div data-bg="rgb(237, 243, 254)" data-radius="22px" data-left="88" data-right="752">继续</div>',
+    );
+    expect(roleOf(row, attributeProbe)).toBe("user");
+  });
+
+  it("用户（长到满宽）：还有头像圆兜着", () => {
+    const row = bubbleRow(
+      '<div data-bg="rgb(237, 243, 254)" data-radius="22px" data-left="0" data-right="752">长消息</div>' +
+        '<div data-bg="rgb(255, 255, 255)" data-radius="100px" data-left="710" data-right="740"></div>',
+    );
+    expect(roleOf(row, attributeProbe)).toBe("user");
+  });
+
+  it("助手：整宽素文，什么都不画", () => {
+    expect(roleOf(bubbleRow("<p>答案</p>"), attributeProbe)).toBe("assistant");
+  });
+
+  it("助手带代码块：满宽 12px 的块不算气泡（真机数字）", () => {
+    const row = bubbleRow(
+      '<div data-bg="rgb(249, 250, 251)" data-radius="12px" data-left="0" data-right="752">' +
+        '<pre>{"tool": "ls"}</pre></div>',
+    );
+    expect(roleOf(row, attributeProbe)).toBe("assistant");
+  });
+
+  it("没有布局（行宽为 0）：判不了，回 unknown——不猜", () => {
+    expect(roleOf(bubbleRow("<p>答案</p>", 0, 0), attributeProbe)).toBe("unknown");
   });
 });
 

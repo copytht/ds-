@@ -126,6 +126,25 @@
       }
     },
     {
+      "name": "messages.last 角色认不出（unknown）",
+      "request": {
+        "action": "messages.last",
+        "params": {},
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "messages": [
+            {
+              "role": "unknown",
+              "text": "认不出角色的那条"
+            }
+          ]
+        }
+      }
+    },
+    {
       "name": "messages.last 成功",
       "request": {
         "action": "messages.last",
