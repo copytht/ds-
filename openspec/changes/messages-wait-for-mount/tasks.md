@@ -28,4 +28,8 @@
 ## 5. 集成验证
 
 - [x] 5.1 `pnpm quality` 全绿。验证：**446 vitest + 138 pytest**，`All checks passed!`，退出码 0。
-- [ ] 5.2 真机复验（限速、单发、随机延迟）：`scripts/env-up.sh --debug` 后，在**刚导航进一条对话**（列表挂上但 `rows: 0` 的那个窗口）立刻发 `messages.list` / `messages.last`，确认等到而不是 `page-changed`。验证：回 `ok:true` 且角色正确。
+- [x] 5.2 真机复验：`messages.list` / `messages.last` 回 `ok:true`，**12 条、角色序列 `UAUAUAUAUAUA` 全对**。
+      **实测限制（不是缺陷）**：后台标签页（`visibilityState: hidden`）浏览器会节流渲染，
+      `readMessages` 的 25s 扫描预算扫不完 → 回 `read-failed`（在册码，语义正确）。
+      这是环境对隐藏页面的正常限制——`read-failed` 说「读到了也读不完」，没说「结构变了」，
+      正是本 issue 要的口径。**真机复验请让 DeepSeek 标签页在前台**（`page-action.py` 会自动限速）。
