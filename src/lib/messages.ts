@@ -96,7 +96,11 @@ const BLOCK_TAGS = new Set([
   "UL",
 ]);
 
-export type MessageRole = "user" | "assistant";
+/**
+ * 消息角色。`unknown` 是**认不出**时的老实答案（站点换版会让角色线索消失）——
+ * 不许猜成 user / assistant：标错角色比读不到更坏（agent 会拿它当上下文）。
+ */
+export type MessageRole = "user" | "assistant" | "unknown";
 
 export type Message = {
   readonly role: MessageRole;
@@ -155,11 +159,30 @@ export function nextFrame(): Promise<void> {
   });
 }
 
+/**
+ * 这一层的直接子元素里有 `<pre>` 吗——**代码块外框**的判据。
+ *
+ * 真机上代码块外框里除了 `<pre>` 正文，还有表头（语言标签）与复制/下载按钮，都是**同级兄弟**
+ * （结构见 `site-dom-anchors.md`「围栏在 DOM 里的样子」）。所以「这一层直接挂着 `<pre>`」
+ * 就等于「这一层是代码块外框」——外框里除了 `<pre>` 一律不算正文。
+ */
+function hasDirectPre(element: Element): boolean {
+  const children = element.children;
+  for (let index = 0; index < children.length; index += 1) {
+    if (children[index]?.tagName === "PRE") return true;
+  }
+  return false;
+}
+
 function textOf(root: Element): string {
   const parts: string[] = [];
   const walk = (element: Element): void => {
+    // 代码块外框：只有 `<pre>` 算正文，其余兄弟（表头 / 按钮 / 图标）是控件。
+    // 不排掉它们，读出来的正文会变成「send 复制 下载 ```send …」——人看的是代码本身。
+    const codeBlock = hasDirectPre(element);
     for (const node of element.childNodes) {
       if (node.nodeType === TEXT_NODE) {
+        if (codeBlock) continue;
         const raw = node.textContent ?? "";
         // 带换行的纯空白是排版（缩进），不当正文；行内的单个空格要留着，不然词会粘一起。
         if (raw.trim() === "" && raw.includes("\n")) continue;
@@ -168,16 +191,17 @@ function textOf(root: Element): string {
       }
       if (node.nodeType !== ELEMENT_NODE) continue;
       const child = node as Element;
-      if (child.tagName === "BR") {
-        parts.push("\n");
-        continue;
-      }
       if (child.tagName === "PRE") {
         // 新版站点（2026-10-04）把 ```send 围栏渲染成**代码块**：表头「send」+
         // 复制/下载按钮 + `<pre>` 正文——原文里的 ``` 标记在 DOM 里没了。读的时候
         // 把它还原成一段围栏：正文能解析成工具调用就写回 ```send，否则写普通的 ```。
         const body = textOf(child);
         parts.push(`\n\`\`\`${parseToolCall(body) === null ? "" : "send"}\n${body}\n\`\`\`\n`);
+        continue;
+      }
+      if (codeBlock) continue; // 表头 / 复制下载按钮 / 图标——控件不是正文
+      if (child.tagName === "BR") {
+        parts.push("\n");
         continue;
       }
       if (BLOCK_TAGS.has(child.tagName)) {
@@ -198,20 +222,108 @@ function textOf(root: Element): string {
 }
 
 /**
- * 一行 → 一条消息。助手认设计系统那个正文类；用户行没有它，正文在可折叠文本里。
- * 认不出的行回 `null`——**不猜角色**。
+ * 读渲染要用的两件事：算出来的样式与几何。
  *
- * 注：站点换版后（2026-10-04）这两条正文类也随 `.ds-message` 一起没了，这版上 `readRow`
- * 一律回 `null`（`messages.*` 因此读不出——见 #37）。**只需要正文文本**的 `wait.*` 不受
- * 影响：它走 `rowText`（角色无关）。
+ * 留成**可注入的探测口**，因为 jsdom 不做布局——`getBoundingClientRect` 全零、
+ * `getComputedStyle` 没有真底色；测试喂替身，真机走 `domProbe`。
  */
-export function readRow(row: Element): Message | null {
+export type StyleProbe = {
+  readonly style: (el: Element) => {
+    readonly backgroundColor: string;
+    readonly borderRadius: string;
+  };
+  readonly rect: (el: Element) => { readonly left: number; readonly right: number };
+};
+
+/** 真机探测口：`getComputedStyle` + `getBoundingClientRect`。 */
+export const domProbe: StyleProbe = {
+  style: (el) => {
+    const computed = getComputedStyle(el);
+    return { backgroundColor: computed.backgroundColor, borderRadius: computed.borderRadius };
+  },
+  rect: (el) => {
+    const box = el.getBoundingClientRect();
+    return { left: box.left, right: box.right };
+  },
+};
+
+/** 判角色用的阈值（真机量的，见任务 research/role-bubble.md）。 */
+const AVATAR_RADIUS_PX = 100; // 头像圆：30px 圆 → border-radius 100px
+const BUBBLE_RADIUS_PX = 16; // 气泡 22px；助手内容块 12px（薄边界，取下界留余量）
+const EDGE_EPSILON_PX = 2; // 缘对齐容差
+
+/** `border-radius` 可能写成 `12px 12px 0px 0px`；取第一个数。 */
+function radiusPx(borderRadius: string): number {
+  const value = Number.parseFloat(borderRadius);
+  return Number.isFinite(value) ? value : 0;
+}
+
+/** 这块真的画了底色吗（`rgba(0, 0, 0, 0)` / `transparent` 都算没画）。 */
+function paints(backgroundColor: string): boolean {
+  const color = backgroundColor.trim();
+  return color !== "" && color !== "transparent" && color !== "rgba(0, 0, 0, 0)";
+}
+
+/**
+ * 认角色的三层解析，**首个命中为准，认不出不猜**（见 `guides/human-first-thinking-guide.md`）：
+ *
+ * 1. **标记层**：行上还留着站点的设计系统类（助手 `.ds-assistant-message-main-content`、
+ *    用户 `.ds-collapsible-text`）→ 直接用（站点换版前的行为，零回归）；
+ * 2. **渲染层**：人看的是**气泡**——用户消息被画成一个圆角块（真机：22px 圆角、**不满宽**，
+ *    旁边还有 30px 圆头像），助手是整宽素文、一个带底色的块都没有。只认**形状 + 位置 + 头像**，
+ *    **颜色不作判据**（暗色主题底色全变）；
+ * 3. 都不中 → `unknown`——**不猜**：标错角色比读不到更坏（agent 会拿它当上下文）。
+ *
+ * 注：站点换版后某套渲染连 `ds-*` 都撤了（`div._81e7b5e`），那时靠第 2 层气泡兜。
+ * 载荷（`chat_message_role`）本来也能当源，但那是改 #20 口径的大动作，为一个**没复现**的
+ * 病不值，故不做。
+ */
+export function roleOf(row: Element, probe: StyleProbe = domProbe): MessageRole {
+  if (row.querySelector(ASSISTANT_BODY_SELECTOR) !== null) return "assistant";
+  if (row.querySelector(USER_BODY_SELECTOR) !== null) return "user";
+
+  const rowBox = probe.rect(row);
+  if (rowBox.right - rowBox.left <= 0) return "unknown"; // 没有布局（未挂载 / jsdom）→ 判不了
+
+  const elements = row.querySelectorAll("*");
+  for (let index = 0; index < elements.length; index += 1) {
+    const element = elements[index];
+    if (element === undefined) continue;
+    const { backgroundColor, borderRadius } = probe.style(element);
+    if (!paints(backgroundColor)) continue;
+    const radius = radiusPx(borderRadius);
+    if (radius >= AVATAR_RADIUS_PX) return "user"; // 头像圆
+    const box = probe.rect(element);
+    const fullWidth = Math.abs(box.left - rowBox.left) <= EDGE_EPSILON_PX;
+    if (radius >= BUBBLE_RADIUS_PX && !fullWidth) return "user"; // 气泡：不满宽的圆角块
+  }
+  return "assistant"; // 没有气泡：整宽素文就是助手（人也是这么看的）
+}
+
+/**
+ * 一行 → 一条消息。**角色**走 `roleOf` 四层；**正文**优先取标记层的正文块
+ * （不含工具条那一圈），没有就取整行文本（`rowText`，含围栏还原）。
+ *
+ * 站点标记层还在（这页有 `.ds-message`）、而这行没有 → 不是消息行（分隔条之类），跳过。
+ */
+export function readRow(row: Element, probe: StyleProbe = domProbe): Message | null {
+  const text = rowText(row);
+  if (text === null) return null; // 空行不算消息
+
   const assistant = row.querySelector(ASSISTANT_BODY_SELECTOR);
-  if (assistant !== null) return { role: "assistant", text: textOf(assistant) };
-  if (row.querySelector(MESSAGE_SELECTOR) === null) return null; // 不是消息行
+  if (assistant !== null) return { role: roleOf(row, probe), text: textOf(assistant) };
   const user = row.querySelector(USER_BODY_SELECTOR);
-  if (user === null) return null; // 是消息行但认不出——跳过，别安个角色上去
-  return { role: "user", text: textOf(user) };
+  if (user !== null) return { role: roleOf(row, probe), text: textOf(user) };
+
+  const doc = row.ownerDocument;
+  if (
+    row.querySelector(MESSAGE_SELECTOR) === null &&
+    doc !== null &&
+    doc.querySelector(MESSAGE_SELECTOR) !== null
+  ) {
+    return null; // 标记层还在而这行没有 → 不是消息行
+  }
+  return { role: roleOf(row, probe), text };
 }
 
 /**

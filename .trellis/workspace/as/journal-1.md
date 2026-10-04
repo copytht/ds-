@@ -221,3 +221,30 @@ Planned + implemented the send.page composite as an extension-side local tool (A
 ### Next Steps
 
 - messages.* 的角色判据在新版站点没了（.ds-message / .ds-assistant-message-main-content / .ds-collapsible-text 全撤，行上无 role/aria）——要修得先定新的角色锚，另开 issue
+
+
+## Session 9: 读对话：角色判据改渲染层（气泡）+ 代码块正文只取 <pre>
+<!-- trellis-session: v=2 fp=572d6a7b24341c9a -->
+
+**Date**: 2026-10-04
+**Task**: 读对话：角色判据改渲染层（气泡）+ 代码块正文只取 <pre>
+**Branch**: `read-conversation`
+
+### Summary
+
+站点换版把角色判据（ds-* 角色类）拿掉后 messages.* 读不出角色。改成三层：标记层（零回归）→ 渲染层气泡（不满宽圆角块 / 头像圆，颜色不作判据，jsdom 不布局故走可注入 StyleProbe）→ unknown（不猜）。载荷层（chat_message_role）评估后明确不做：要改 #20 口径 + 跨世界管子，而「角色认不出」一次没复现。契约 MessageRole 加 unknown 并同步 fixture。真机复验时发现并修掉代码块正文噪声（表头/复制下载按钮是 <pre> 同级兄弟，原来混进正文）——外框里只取 <pre>。真机 messages.list 12 条角色 UAUAUAUAUAUA 全对、围栏还原干净；pnpm quality 440 vitest + 138 pytest 全绿。PR #39；另开 #40（页面未就绪被报成 page-changed）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b21d74c` | feat(scripts): 固化「完整证据」捕获流程（page-action.py capture）+ 人先思考指南 |
+| `984d87e` | feat(inject): 从出站请求体取整段对话（角色账本的原料）+ ADR-0014 |
+| `7b04339` | feat(read): 角色四层解析（载荷账本 → 标记 → 气泡 → unknown） |
+| `2195ccd` | refactor(read): 砍掉载荷层，角色只留「标记 → 气泡 → unknown」 |
+| `478493f` | test(read): 渲染层（气泡）替身 probe 五例 + 契约加 unknown 样例 |
+| `92ff36c` | fix(read): 代码块外框只取 <pre>，表头与复制/下载按钮不进正文 |
+
+### Status
+
+[OK] **Completed**

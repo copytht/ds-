@@ -17,6 +17,7 @@ __pycache__/
 .dsb-token
 .archify/
 screenshots/
+captures/
 *.log
 .DS_Store
 # 本机装出来的东西，不进库（守则钉死）

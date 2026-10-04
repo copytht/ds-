@@ -7,7 +7,9 @@ import {
   readLast,
   readMessages,
   readRow,
+  roleOf,
   type ListViewport,
+  type StyleProbe,
 } from "./messages";
 
 const FRAME: ActionFrame = {
@@ -97,14 +99,14 @@ describe("一行 → 一条消息", () => {
     expect(readRow(rowAt(1))?.role).toBe("assistant");
   });
 
-  it("不是消息行的行跳过，认不出的 ds-message 行也跳过——不猜角色", () => {
+  it("不是消息行的行跳过；认不出角色的消息行带 unknown——都不猜角色", () => {
     document.body.innerHTML = `
       <div class="ds-virtual-list">
         <div data-virtual-list-item-key="1"><span>日期分隔条</span></div>
         <div data-virtual-list-item-key="2"><div class="ds-message"><div>没有可折叠文本</div></div></div>
       </div>`;
-    expect(readRow(rowAt(0))).toBeNull();
-    expect(readRow(rowAt(1))).toBeNull();
+    expect(readRow(rowAt(0))).toBeNull(); // 不是消息行（这页有 .ds-message，唯独它没有）
+    expect(readRow(rowAt(1))).toEqual({ role: "unknown", text: "没有可折叠文本" });
   });
 
   it("块级元素分行，行内空格留着——不然段落会粘成一坨", () => {
@@ -119,6 +121,32 @@ describe("一行 → 一条消息", () => {
     const row = document.querySelector("[data-virtual-list-item-key]") as Element;
 
     expect(readRow(row)?.text).toBe("第一段\n\n第二段");
+  });
+
+  it("代码块外框：表头与复制/下载按钮是 `<pre>` 的兄弟，不算正文", () => {
+    // 结构照抄真机（2026-10-04）：`div.md-code-block` 里直接挂着表头、`<pre>`、图标。
+    document.body.innerHTML = `
+      <div class="ds-virtual-list">
+        <div data-virtual-list-item-key="1">
+          <div class="ds-message"><div class="ds-markdown ds-assistant-message-main-content">
+            <p>先看这个：</p>
+            <div class="md-code-block md-code-block-light">
+              <div class="md-code-block-banner"><span>send</span></div>
+              <div role="button" class="ds-button"><span>复制</span></div>
+              <div role="button" class="ds-button"><span>下载</span></div>
+              <pre><span>{"tool": "ls", "arguments": {}}</span></pre>
+              <svg></svg>
+            </div>
+            <p>跑完再来。</p>
+          </div></div>
+        </div>
+      </div>`;
+    const row = document.querySelector("[data-virtual-list-item-key]") as Element;
+
+    expect(readRow(row)).toEqual({
+      role: "assistant",
+      text: '先看这个：\n\n```send\n{"tool": "ls", "arguments": {}}\n```\n\n跑完再来。',
+    });
   });
 });
 
@@ -149,14 +177,78 @@ describe("messages.list / messages.last 执行器", () => {
     expect(await lastMessage(frameOf("messages.last"))).toEqual({ messages: [] });
   });
 
-  it("挂着行却一条都认不出 = 结构变了，当场抛，别装作空对话", async () => {
+  it("挂着行但认不出角色：如实带 unknown（不猜、不装空对话）", async () => {
     document.body.innerHTML = `
       <div class="ds-virtual-list">
         <div data-virtual-list-item-key="1"><div class="ds-message"><div>认不出</div></div></div>
       </div>`;
 
-    await expect(listMessages(frameOf("messages.list"))).rejects.toThrow("认不出消息行");
-    await expect(lastMessage(frameOf("messages.last"))).rejects.toThrow("认不出消息行");
+    expect(await listMessages(frameOf("messages.list"))).toEqual({
+      messages: [{ role: "unknown", text: "认不出" }],
+    });
+    expect(await lastMessage(frameOf("messages.last"))).toEqual({
+      messages: [{ role: "unknown", text: "认不出" }],
+    });
+  });
+});
+
+/**
+ * 角色三层里的**渲染层**（气泡）：jsdom 不做布局，`getComputedStyle` / `getBoundingClientRect`
+ * 拿不到真值，所以用替身探测口，把「算出来的样式 / 几何」写在 `data-*` 上喂进去。
+ * 数字照真机量的（`10-04-read-conversation/research/role-bubble.md`）。
+ */
+const attributeProbe: StyleProbe = {
+  style: (el) => ({
+    backgroundColor: el.getAttribute("data-bg") ?? "rgba(0, 0, 0, 0)",
+    borderRadius: el.getAttribute("data-radius") ?? "0px",
+  }),
+  rect: (el) => ({
+    left: Number(el.getAttribute("data-left") ?? "0"),
+    right: Number(el.getAttribute("data-right") ?? "0"),
+  }),
+};
+
+/** 造一行：行占 0..752，里面放一块「绘制出来的东西」（或什么都不放）。 */
+function bubbleRow(inner: string, rowLeft = 0, rowRight = 752): Element {
+  document.body.innerHTML = `
+    <div class="ds-virtual-list"><div class="ds-virtual-list-visible-items">
+      <div data-virtual-list-item-key="1" data-left="${rowLeft}" data-right="${rowRight}">
+        ${inner}
+      </div>
+    </div></div>`;
+  return document.querySelector("[data-virtual-list-item-key]") as Element;
+}
+
+describe("角色：渲染层（气泡）", () => {
+  it("用户：不满宽的圆角块（真机 22px、贴右）", () => {
+    const row = bubbleRow(
+      '<div data-bg="rgb(237, 243, 254)" data-radius="22px" data-left="88" data-right="752">继续</div>',
+    );
+    expect(roleOf(row, attributeProbe)).toBe("user");
+  });
+
+  it("用户（长到满宽）：还有头像圆兜着", () => {
+    const row = bubbleRow(
+      '<div data-bg="rgb(237, 243, 254)" data-radius="22px" data-left="0" data-right="752">长消息</div>' +
+        '<div data-bg="rgb(255, 255, 255)" data-radius="100px" data-left="710" data-right="740"></div>',
+    );
+    expect(roleOf(row, attributeProbe)).toBe("user");
+  });
+
+  it("助手：整宽素文，什么都不画", () => {
+    expect(roleOf(bubbleRow("<p>答案</p>"), attributeProbe)).toBe("assistant");
+  });
+
+  it("助手带代码块：满宽 12px 的块不算气泡（真机数字）", () => {
+    const row = bubbleRow(
+      '<div data-bg="rgb(249, 250, 251)" data-radius="12px" data-left="0" data-right="752">' +
+        '<pre>{"tool": "ls"}</pre></div>',
+    );
+    expect(roleOf(row, attributeProbe)).toBe("assistant");
+  });
+
+  it("没有布局（行宽为 0）：判不了，回 unknown——不猜", () => {
+    expect(roleOf(bubbleRow("<p>答案</p>", 0, 0), attributeProbe)).toBe("unknown");
   });
 });
 
