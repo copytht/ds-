@@ -57,3 +57,31 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: 环境起好 + env-up 自动换旧扩展浏览器
+<!-- trellis-session: v=2 fp=86243b66464d5909 -->
+
+**Date**: 2026-10-04
+**Task**: 环境起好 + env-up 自动换旧扩展浏览器
+**Branch**: `main`
+
+### Summary
+
+Session summary was not supplied.
+
+### Main Changes
+
+- env-up.sh：旧扩展 ds-browser 自动重启（mtime 判据+SIGTERM+清SW缓存）；旧中继撞端口改提示 kill；AGENTS.md 同步例外
+
+### Git Commits
+
+(No commits - planning session)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 人在独立 profile 登录 DeepSeek、勾替人开口、开总开关；看图标三态/悬停/控制台 [ds-] 行
