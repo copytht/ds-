@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/10-04-wait-key-sign/research/row-keys.md", "reason": "真机样本：站点行 key 带符号（生成中负 key 待定行），|key| 单调——判据改动的唯一依据"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "改页面选择器/动作的口径：优先站点语义属性、真机 DOM 落成回归用例、提交前 pnpm quality"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层：background→content→DOM 的等待原语，失败码册子两头一致"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "key 是站点给的字符串属性：认不出（非数字）不猜、按缺失处理"}

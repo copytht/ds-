@@ -49,3 +49,47 @@ export function parseSendFence(text: string): string | null {
 export function parseAskFence(text: string): string | null {
   return parseFence(text, ASK_OPENING);
 }
+
+/* -------------------------------------------------------------------------- */
+/* 围栏里的工具调用                                                           */
+/* -------------------------------------------------------------------------- */
+
+/** 模型在 ```send 围栏里排的东西：只有 `tool` 与 `arguments` 两个键。 */
+export type ToolCall = {
+  readonly tool: string;
+  readonly arguments: Record<string, unknown>;
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 围栏正文 → 工具调用；排得不成形一律 null，不猜。
+ *
+ * 猜的代价不对称：猜错了会替模型选一个它没想选的工具，所以宁可把
+ * `MALFORMED_CALL_HINT` 回灌进去让它自己改，也不在这里修形状。
+ *
+ * 住这里（而不是 relay）：**读 DOM** 的那半边也要认工具调用——新版站点把 ```send
+ * 渲染成代码块（``` 标记没了），`messages.ts` 读行文本时得靠它判「这是不是一段
+ * 工具调用」，好把围栏还原回去。relay 转出去，中继那条线的调用方照旧。
+ */
+export function parseToolCall(text: string): ToolCall | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) return null;
+  const tool = parsed["tool"];
+  if (typeof tool !== "string" || tool.trim() === "") return null;
+  const args = parsed["arguments"] ?? {};
+  if (!isPlainObject(args)) return null;
+  return { tool, arguments: args };
+}
+
+/** 围栏排坏了时回灌的正文（`status: ok` 的一条，进对话流，让模型自己改）。 */
+export const MALFORMED_CALL_HINT =
+  '围栏里不是合法的工具调用。期望形状：{"tool": "工具名", "arguments": {…按该工具的入参…}}，' +
+  "arguments 是对象（没有参数写 {}）；一次最多排一块。";
