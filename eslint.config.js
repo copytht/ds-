@@ -15,6 +15,9 @@ export default [
       "vendor/**",
       "dsb/**",
       "tests/**",
+      // Trellis 生成的平台插件与脚本，升级会重生成 → 不进本仓库的 lint
+      ".opencode/**",
+      ".trellis/**",
     ],
   },
   js.configs.recommended,

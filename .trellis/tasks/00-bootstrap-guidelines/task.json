@@ -1,0 +1,30 @@
+{
+  "id": "00-bootstrap-guidelines",
+  "name": "00-bootstrap-guidelines",
+  "title": "Bootstrap Guidelines",
+  "description": "Fill in project development guidelines for AI agents (specs written from the real codebase: extension layer, dsb relay, cross-layer guides)",
+  "status": "completed",
+  "dev_type": "docs",
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "as",
+  "assignee": "as",
+  "createdAt": "2026-10-04",
+  "completedAt": "2026-10-04",
+  "branch": null,
+  "base_branch": null,
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    ".trellis/spec/backend/",
+    ".trellis/spec/frontend/",
+    ".trellis/spec/guides/"
+  ],
+  "notes": "Completed by the in-session agent per trellis-spec-bootstrap: templates reshaped to the real repo (React/database sections removed, extension/dsb split documented), every rule points at a real file. session_auto_commit set to false in .trellis/config.yaml before writing.",
+  "meta": {}
+}

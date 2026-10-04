@@ -17,3 +17,4 @@ vendor/
 
 # openspec 装出来的拷贝（与 .agents/skills 同内容），升级重生成 → 格式化会每次回潮
 .opencode/
+.trellis/
