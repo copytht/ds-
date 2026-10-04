@@ -198,21 +198,40 @@ CAPTURE_ASSETS_JS = r"""
 
 CAPTURE_DIGEST_JS = r"""
 (() => {
-  const rectOf = (el) => { const b = el.getBoundingClientRect(); return { l: Math.round(b.left), t: Math.round(b.top), r: Math.round(b.right), b: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height) }; };
-  const styled = (el) => { const cs = getComputedStyle(el); return { bg: cs.backgroundColor, radius: cs.borderRadius, display: cs.display, overflowY: cs.overflowY }; };
+  const rectOf = (el) => {
+    const b = el.getBoundingClientRect();
+    return {
+      l: Math.round(b.left), t: Math.round(b.top), r: Math.round(b.right),
+      b: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height),
+    };
+  };
+  const styled = (el) => {
+    const cs = getComputedStyle(el);
+    return {
+      bg: cs.backgroundColor, radius: cs.borderRadius,
+      display: cs.display, overflowY: cs.overflowY,
+    };
+  };
   const painted = (row) => {
     const out = [];
     row.querySelectorAll("*").forEach((d) => {
       const s = styled(d);
       const has = s.bg && s.bg !== "rgba(0, 0, 0, 0)" && s.bg !== "transparent";
       if (!has) return;
-      out.push({ tag: d.tagName, cls: String(d.className).slice(0, 44), bg: s.bg, radius: s.radius, rect: rectOf(d) });
+      out.push({
+        tag: d.tagName, cls: String(d.className).slice(0, 44),
+        bg: s.bg, radius: s.radius, rect: rectOf(d),
+      });
     });
     return out.slice(0, 8);
   };
   const rowDigest = (r) => ({
     key: r.getAttribute("data-virtual-list-item-key"),
-    markerRole: r.querySelector(".ds-assistant-message-main-content") ? "assistant" : (r.querySelector(".ds-collapsible-text") ? "user" : null),
+    markerRole: r.querySelector(".ds-assistant-message-main-content")
+      ? "assistant"
+      : r.querySelector(".ds-collapsible-text")
+        ? "user"
+        : null,
     hasMessage: r.querySelector(".ds-message") !== null,
     hasPre: r.querySelectorAll("pre").length,
     rect: rectOf(r),
@@ -232,7 +251,8 @@ CAPTURE_DIGEST_JS = r"""
       rows: vis ? Array.from(vis.children).map(rowDigest) : [],
     };
   });
-  const circle = document.querySelector('div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle');
+  const CIRCLE = 'div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle';
+  const circle = document.querySelector(CIRCLE);
   const composer = document.querySelector("textarea, [contenteditable='true']");
   const path = circle ? circle.querySelector("svg path") : null;
   return JSON.stringify({
@@ -242,8 +262,17 @@ CAPTURE_DIGEST_JS = r"""
     commitId: (document.querySelector('meta[name="commit-id"]') || {}).content || null,
     historyStateKeys: Object.keys(history.state || {}),
     lists,
-    composer: composer ? { tag: composer.tagName, editable: composer.getAttribute("contenteditable"), placeholder: composer.getAttribute("placeholder"), rect: rectOf(composer) } : null,
-    sendCircle: circle ? { cls: String(circle.className).slice(0, 90), pathStart: path ? path.getAttribute("d").slice(0, 28) : null, rect: rectOf(circle) } : null,
+    composer: composer ? {
+      tag: composer.tagName,
+      editable: composer.getAttribute("contenteditable"),
+      placeholder: composer.getAttribute("placeholder"),
+      rect: rectOf(composer),
+    } : null,
+    sendCircle: circle ? {
+      cls: String(circle.className).slice(0, 90),
+      pathStart: path ? path.getAttribute("d").slice(0, 28) : null,
+      rect: rectOf(circle),
+    } : null,
   });
 })()
 """
@@ -263,7 +292,7 @@ async def script_sources(ws_url: str, match: str) -> list[tuple[str, str]]:
         while time.monotonic() < idle_until:
             try:
                 message = json.loads(await asyncio.wait_for(ws.recv(), timeout=1.2))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
             if message.get("method") == "Debugger.scriptParsed":
                 params = message.get("params") or {}
@@ -311,9 +340,7 @@ def capture(out_dir: str, want_codes: bool) -> None:
     codes = 0
     if want_codes:
         (out / "codes").mkdir(exist_ok=True)
-        for index, (url, source) in enumerate(
-            asyncio.run(script_sources(ws, "deepseek.com"))
-        ):
+        for index, (url, source) in enumerate(asyncio.run(script_sources(ws, "deepseek.com"))):
             name = f"{index:02d}-" + url.rsplit("/", 1)[-1].replace("?", "_")[:64]
             (out / "codes" / name).write_text(source, encoding="utf-8")
             codes += 1
@@ -576,6 +603,7 @@ def main() -> None:
     if args.command == "capture":
         capture(args.out, args.codes)
         return
+
 
 if __name__ == "__main__":
     main()

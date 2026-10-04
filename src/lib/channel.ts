@@ -89,8 +89,34 @@ export type ToolsMessage = {
   readonly tools: readonly ToolInfo[];
 };
 
+/** 载荷里的一条消息（角色 + 正文）。 */
+export type ChatPayloadMessage = {
+  readonly role: "user" | "assistant";
+  readonly text: string;
+};
+
+/**
+ * 页面世界从出站请求体里读到的**整段对话**（角色 + 正文）——角色账本的原料（ADR-0014）。
+ *
+ * 站点发消息时会把整段历史一起带上，其 `role` 就是站点消息模型的角色（站点代码里叫
+ * `chat_message_role`）——**是数据**，比从 DOM 判角色硬，换版不影响它。
+ * 只在本页内存里记账：不上报 background、不出页面、不落盘。
+ */
+export type ChatMessage = {
+  readonly source: typeof CHAIN_MESSAGE_SOURCE;
+  readonly kind: "chat";
+  readonly id: string;
+  readonly messages: readonly ChatPayloadMessage[];
+};
+
 export type ChainMessage =
-  CallMessage | ResultMessage | AskMessage | AskClearedMessage | SaidMessage | ToolsMessage;
+  | CallMessage
+  | ResultMessage
+  | AskMessage
+  | AskClearedMessage
+  | SaidMessage
+  | ToolsMessage
+  | ChatMessage;
 
 export type SendRequest = {
   readonly type: typeof SEND_MESSAGE_TYPE;
@@ -197,6 +223,11 @@ export function toolsMessage(id: string, tools: readonly ToolInfo[]): ToolsMessa
   return { source: CHAIN_MESSAGE_SOURCE, kind: "tools", id, tools };
 }
 
+/** 页面世界把整段对话交出来 → 隔离世界记进**本页角色账本**（不上报 background）。 */
+export function chatMessage(id: string, messages: readonly ChatPayloadMessage[]): ChatMessage {
+  return { source: CHAIN_MESSAGE_SOURCE, kind: "chat", id, messages };
+}
+
 /**
  * 从页面地址里抠出页面会话 id（/a/chat/s/<id> 里那段）；认不出返回 null。
  * 只服务于 ask 的分表（每条页面会话各自挂着「等人回」）。
@@ -296,7 +327,17 @@ export function parseChainMessage(data: unknown): ChainMessage | null {
     if (!Array.isArray(tools) || !tools.every(isToolInfo)) return null;
     return toolsMessage(id, tools);
   }
+  if (data["kind"] === "chat") {
+    const messages = data["messages"];
+    if (!Array.isArray(messages) || !messages.every(isPayloadMessage)) return null;
+    return chatMessage(id, messages);
+  }
   return null;
+}
+function isPayloadMessage(value: unknown): value is ChatPayloadMessage {
+  if (!isPlainObject(value)) return false;
+  const role = value["role"];
+  return (role === "user" || role === "assistant") && isValidText(value["text"]);
 }
 
 /** 认隔离世界 → background 的请求。 */

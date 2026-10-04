@@ -5,12 +5,17 @@ import {
   askClearedMessage,
   askMessage,
   callMessage,
+  chatMessage,
   parseChainMessage,
   saidMessage,
   type ResultMessage,
 } from "../src/lib/channel";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
-import { isOutgoingChatRequest, rewriteOutgoingBody } from "../src/lib/inject";
+import {
+  extractOutgoingMessages,
+  isOutgoingChatRequest,
+  rewriteOutgoingBody,
+} from "../src/lib/inject";
 import { findSendButton } from "../src/lib/page";
 import { nextMessageId } from "../src/lib/id";
 import { buildReply, hasReplyAnchor, isInjectableReply } from "../src/lib/reply";
@@ -56,9 +61,21 @@ export default defineContentScript({
     const xhrTargets = new WeakMap<XMLHttpRequest, XhrTarget>();
     const watchingXhrs = new WeakSet<XMLHttpRequest>();
 
+    /**
+     * 出站请求体到手时，顺手把**整段对话**（角色 + 正文）交给隔离世界记账（ADR-0014）：
+     * 站点发消息时会带上整段历史，其 `role` 就是站点消息模型的角色——比从 DOM 判角色硬。
+     * 与「要不要注入协议说明」各管各的：认不出的请求体两边都不动。
+     */
+    const recordConversation = (body: string): void => {
+      const messages = extractOutgoingMessages(body, catalog);
+      if (messages === null || messages.length === 0) return;
+      window.postMessage(chatMessage(nextMessageId("chat"), messages), "*");
+    };
+
     /** 判断逻辑在 src/lib/inject.ts，这里只认它那句「null 就原样放行」。 */
     const rewriteBody = (body: string, method: string, url: string): string | null => {
       if (!isOutgoingChatRequest(method, url)) return null;
+      recordConversation(body);
       const next = rewriteOutgoingBody(body, catalog);
       if (next !== null) console.log("[ds-] 已把协议说明拼到这条消息开头");
       return next;

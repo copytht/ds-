@@ -97,14 +97,14 @@ describe("一行 → 一条消息", () => {
     expect(readRow(rowAt(1))?.role).toBe("assistant");
   });
 
-  it("不是消息行的行跳过，认不出的 ds-message 行也跳过——不猜角色", () => {
+  it("不是消息行的行跳过；认不出角色的消息行带 unknown——都不猜角色", () => {
     document.body.innerHTML = `
       <div class="ds-virtual-list">
         <div data-virtual-list-item-key="1"><span>日期分隔条</span></div>
         <div data-virtual-list-item-key="2"><div class="ds-message"><div>没有可折叠文本</div></div></div>
       </div>`;
-    expect(readRow(rowAt(0))).toBeNull();
-    expect(readRow(rowAt(1))).toBeNull();
+    expect(readRow(rowAt(0))).toBeNull(); // 不是消息行（这页有 .ds-message，唯独它没有）
+    expect(readRow(rowAt(1))).toEqual({ role: "unknown", text: "没有可折叠文本" });
   });
 
   it("块级元素分行，行内空格留着——不然段落会粘成一坨", () => {
@@ -149,14 +149,18 @@ describe("messages.list / messages.last 执行器", () => {
     expect(await lastMessage(frameOf("messages.last"))).toEqual({ messages: [] });
   });
 
-  it("挂着行却一条都认不出 = 结构变了，当场抛，别装作空对话", async () => {
+  it("挂着行但认不出角色：如实带 unknown（不猜、不装空对话）", async () => {
     document.body.innerHTML = `
       <div class="ds-virtual-list">
         <div data-virtual-list-item-key="1"><div class="ds-message"><div>认不出</div></div></div>
       </div>`;
 
-    await expect(listMessages(frameOf("messages.list"))).rejects.toThrow("认不出消息行");
-    await expect(lastMessage(frameOf("messages.last"))).rejects.toThrow("认不出消息行");
+    expect(await listMessages(frameOf("messages.list"))).toEqual({
+      messages: [{ role: "unknown", text: "认不出" }],
+    });
+    expect(await lastMessage(frameOf("messages.last"))).toEqual({
+      messages: [{ role: "unknown", text: "认不出" }],
+    });
   });
 });
 

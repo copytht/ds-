@@ -15,6 +15,9 @@ uv.lock
 vendor/
 .env
 
+# 本机抓下来的站点证据（page-action.py capture）
+captures/
+
 # openspec 装出来的拷贝（与 .agents/skills 同内容），升级重生成 → 格式化会每次回潮
 .opencode/
 .trellis/
