@@ -49,6 +49,15 @@ except ValueError:
     say 提示 "dsb 源码比中继进程新——跑的是旧代码：kill $RELAY_PID 后重跑本脚本才生效"
   fi
 else
+  # ping 不回话但端口有人占着 = 跑着旧代码的长驻中继（dsb 不重载代码，
+  # 旧代码连 /mcp 路由都没有）。只提示、不擅自动：kill 会丢子进程
+  # （mcp.json 里起着的 server 要重拉一遍）。
+  RELAY_PID=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1)
+  if [ -n "$RELAY_PID" ]; then
+    say 提示 "中继在跑（PID $RELAY_PID）却不答 ping：跑的是旧代码"
+    say 提示 "kill $RELAY_PID 后重跑本脚本才生效（会丢它起的子进程，需重拉一遍）"
+    exit 1
+  fi
   nohup pnpm relay:dev >/tmp/dsb-relay.log 2>&1 &
   disown
   say 中继 "已起 → /tmp/dsb-relay.log"
