@@ -17,6 +17,7 @@
   uv run scripts/page-action.py read
   uv run scripts/page-action.py send stop.click
   uv run scripts/page-action.py send composer.type --params '{"text": "你好"}'
+  uv run scripts/page-action.py storage get --keys '["backoffUntil","toggle","speak"]'
 
 环境：
   DSB_CDP_PORT   调试口端口，默认 9222
@@ -217,6 +218,30 @@ def send_action(action: str, params: dict) -> object:
     return unwrap(result)
 
 
+def storage_op(op: str, keys_json: str, data_json: str) -> object:
+    """读写扩展 storage.local：开发探针要看 / 清退避这类持久态，从扩展页上下文发。"""
+    ext = ensure_extension_page()
+    try:
+        keys = json.loads(keys_json)
+        data = json.loads(data_json)
+    except json.JSONDecodeError as error:
+        print(f"[page-action] --keys/--data 不是合法 JSON：{error}", file=sys.stderr)
+        raise SystemExit(2) from error
+    if op == "get":
+        script = f"chrome.storage.local.get({json.dumps(keys)}).then((v) => JSON.stringify(v))"
+    elif op == "remove":
+        script = (
+            f"chrome.storage.local.remove({json.dumps(keys)})"
+            ".then(() => JSON.stringify({ ok: true }))"
+        )
+    else:
+        script = (
+            f"chrome.storage.local.set({json.dumps(data)})"
+            ".then(() => JSON.stringify({ ok: true }))"
+        )
+    return unwrap(run(ext["webSocketDebuggerUrl"], script))
+
+
 def unwrap(message: object) -> object:
     """从 CDP Runtime.evaluate 的回包取 value，顺带把异常说清楚。"""
     if not isinstance(message, dict):
@@ -244,6 +269,10 @@ def main() -> None:
     send = sub.add_parser("send", help="给 DeepSeek 标签页发一件页面动作")
     send.add_argument("action", help="动作名，如 stop.click")
     send.add_argument("--params", default="{}", help="动作参数 JSON，默认 {}")
+    storage = sub.add_parser("storage", help="读写扩展 storage.local（开发探针）")
+    storage.add_argument("op", choices=["get", "set", "remove"], help="get 读 / set 写 / remove 删")
+    storage.add_argument("--keys", default="[]", help="get / remove 的键数组（JSON）")
+    storage.add_argument("--data", default="{}", help="set 的对象（JSON）")
     args = parser.parse_args()
 
     require_cdp()
@@ -309,6 +338,12 @@ def main() -> None:
             raise SystemExit(2)
         print(
             json.dumps(send_action(args.action, params), ensure_ascii=False, indent=2),
+        )
+        return
+
+    if args.command == "storage":
+        print(
+            json.dumps(storage_op(args.op, args.keys, args.data), ensure_ascii=False, indent=2),
         )
         return
 
