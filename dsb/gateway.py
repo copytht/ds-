@@ -48,6 +48,15 @@ TOOL_TIMEOUT_ENV_KEY = "DSB_TOOL_TIMEOUT"
 DEFAULT_TOOL_TIMEOUT = 120.0
 #: 起子进程 + 握手（initialize）的上限：npx 首次下载可能拖，给足但别无限。
 START_TIMEOUT = 30.0
+CONNECT_TIMEOUT_ENV_KEY = "DSB_CONNECT_TIMEOUT"
+#: ``tools/list`` 的上限：发现一次就够，比握手紧、比调用宽。
+DISCOVERY_TIMEOUT = 20.0
+DISCOVERY_TIMEOUT_ENV_KEY = "DSB_DISCOVERY_TIMEOUT"
+#: 单次结果的字符上限：一条失控结果（整份日志、一棵目录树）能同时灌满对话、扩展的
+#: 内存与存储；超了截断并写明原长（见 :func:`cap_result`）。
+MAX_RESULT_CHARS = 64 * 1024
+#: 单个 server 最多注册多少件工具：一张撑爆协议说明的表对谁都没好处。
+MAX_TOOLS_PER_SERVER = 128
 #: 对外的协议版本：与本仓 ``dsb.mcp`` 讲的一致，子进程按它开场。
 PROTOCOL_VERSION = "2025-06-18"
 
@@ -97,16 +106,21 @@ def load_config(path: Path | None = None) -> dict[str, dict[str, Any]]:
     return out
 
 
-def resolve_timeout(env_text: str) -> float:
-    """一次调用的时限：进程环境变量优先，其次 ``.env`` 的同名键，最后默认值。"""
-    raw = os.environ.get(TOOL_TIMEOUT_ENV_KEY) or env_value(env_text, TOOL_TIMEOUT_ENV_KEY)
+def resolve_seconds(env_text: str, key: str, default: float) -> float:
+    """一段秒数：进程环境变量优先，其次 ``.env`` 的同名键，最后默认值（非正数落默认）。"""
+    raw = os.environ.get(key) or env_value(env_text, key)
     if raw is None:
-        return DEFAULT_TOOL_TIMEOUT
+        return default
     try:
         seconds = float(raw)
     except ValueError:
-        return DEFAULT_TOOL_TIMEOUT
-    return seconds if seconds > 0 else DEFAULT_TOOL_TIMEOUT
+        return default
+    return seconds if seconds > 0 else default
+
+
+def resolve_timeout(env_text: str) -> float:
+    """一次调用的时限——三档超时里的那一档（另两档是握手与发现，见 :mod:`dsb.server`）。"""
+    return resolve_seconds(env_text, TOOL_TIMEOUT_ENV_KEY, DEFAULT_TOOL_TIMEOUT)
 
 
 def command_of(entry: Mapping[str, Any]) -> list[str] | None:
@@ -143,6 +157,18 @@ def text_of_result(result: Any) -> tuple[str, bool]:
     return str(result), failed
 
 
+def cap_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
+    """给模型看的结果 → 截到上限；截了就在尾巴上写明原长。
+
+    :func:`text_of_result` 的口径是「不猜、不丢」——结果要送进对话，模型看全貌比看半截
+    强。上限是给这句话留的唯一例外：一条失控结果（几十兆的目录树、整份日志）会同时灌满
+    对话、扩展的内存与存储，而截断处写着原长，模型知道自己看的是前多少字、可以改问法。
+    """
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n\n…（结果已截断：原文 {len(text)} 字，这里是前 {limit} 字）"
+
+
 class StdioServer:
     """一个配好的 MCP server：stdio 上一行一条 JSON-RPC，按 id 认领回应。"""
 
@@ -154,12 +180,14 @@ class StdioServer:
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
         start_timeout: float = START_TIMEOUT,
+        discovery_timeout: float = DISCOVERY_TIMEOUT,
     ) -> None:
         self.name = name
         self._argv = argv
         self._env = dict(env or {})
         self._cwd = cwd
         self._start_timeout = start_timeout
+        self._discovery_timeout = discovery_timeout
         self._proc: subprocess.Popen[str] | None = None
         self._pending: dict[str, queue.Queue[Any]] = {}
         self._guard = threading.Lock()
@@ -332,7 +360,7 @@ class StdioServer:
     def list_tools(self) -> list[Payload]:
         """``tools/list`` 的结果（起一次、留一份；工具表因此是静态的）。"""
         if not self._tools:
-            result = self._request("tools/list", {}, self._start_timeout)
+            result = self._request("tools/list", {}, self._discovery_timeout)
             if not isinstance(result, Mapping) or not isinstance(result.get("tools"), list):
                 raise GatewayError(ERROR_UNEXPECTED)
             self._tools = [dict(tool) for tool in result["tools"] if isinstance(tool, Mapping)]
@@ -374,6 +402,7 @@ class Gateway:
         *,
         timeout: float = DEFAULT_TOOL_TIMEOUT,
         start_timeout: float = START_TIMEOUT,
+        discovery_timeout: float = DISCOVERY_TIMEOUT,
     ) -> Gateway:
         """配置 → 起好子进程的网关；起不来的 server 记一笔、跳过（别的照常）。"""
         servers: dict[str, StdioServer] = {}
@@ -390,6 +419,7 @@ class Gateway:
                 env={str(k): str(v) for k, v in env.items()} if isinstance(env, Mapping) else None,
                 cwd=cwd if isinstance(cwd, str) else None,
                 start_timeout=start_timeout,
+                discovery_timeout=discovery_timeout,
             )
             try:
                 server.start()
@@ -414,7 +444,9 @@ class Gateway:
             except GatewayError:
                 log_event("server-down", tool=server_name, error=ERROR_UNEXPECTED)
                 continue
-            for descriptor in described:
+            if len(described) > MAX_TOOLS_PER_SERVER:
+                log_event("tools-capped", tool=server_name, count=len(described))
+            for descriptor in described[:MAX_TOOLS_PER_SERVER]:
                 raw_name = descriptor.get("name")
                 if not isinstance(raw_name, str) or not raw_name:
                     continue
@@ -445,7 +477,9 @@ class Gateway:
                 # 网关自己的三个码：失败提示在扩展侧折，这里给一段能进对话的说明。
                 return {"text": f"{error.code}（工具 {external}）"}, True
             text, failed = text_of_result(result)
-            return {"text": text}, failed
+            if len(text) > MAX_RESULT_CHARS:
+                log_event("result-capped", tool=external, chars=len(text))
+            return {"text": cap_result(text)}, failed
 
         return handle
 

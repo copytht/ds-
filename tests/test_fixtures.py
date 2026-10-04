@@ -50,14 +50,19 @@ def test_case_names_are_unique_within_each_file() -> None:
 
 
 def test_fence_cases_are_coherent() -> None:
-    """抽出围栏内容的输入里必须排着 send 围栏；其余输入只能落空。"""
+    """抽出围栏正文的输入里必须排着 send 围栏；抽出几块就得有几个起始行。
+
+    一次回答可以排多块（按顺序全取），所以这里是**数组**：几块就是几条。
+    """
     for case in raw_cases("fence.json"):
         assert isinstance(case["input"], str)
-        call = case["expectedCall"]
-        assert call is None or isinstance(call, str)
-        if call is not None:
-            assert call
+        calls = case["expectedCalls"]
+        assert isinstance(calls, list), case["name"]
+        assert all(isinstance(call, str) and call for call in calls), case["name"]
+        if calls:
             assert "```send" in case["input"], case["name"]
+        openings = [line.strip() for line in case["input"].split("\n")]
+        assert openings.count("```send") >= len(calls), case["name"]
 
 
 def test_reply_payloads_follow_the_schema() -> None:

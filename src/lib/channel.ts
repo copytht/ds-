@@ -4,9 +4,10 @@
  * 页面世界看得到模型的回答但碰不到 `storage` 与扩展 API，background 打中继却看不到页面，
  * 中间隔着隔离世界那一层；三段路各认各的信封，形状不对的一律不猜（返回 null）。
  *
- * - `call` / `result` / `ask` / `ask-cleared` / `said`：页面世界 ↔ 隔离世界，走
+ * - `call` / `result` / `ask` / `ask-cleared` / `said` / `stop`：页面世界 ↔ 隔离世界，走
  *   `window.postMessage`（`said` 是页面世界报给协调者的话，`tools` 是隔离世界
- *   广播下来的工具目录）；
+ *   广播下来的工具目录，`stop` 是页面世界报「自动续聊到顶、停手了」）；
+ * - `call` 带的是**一轮各块围栏**（一次回答可以排多块）；
  * - `send` 请求 / 响应、`said` 上报、`tools` 请求 / 响应：隔离世界 ↔ background，
  *   走 `browser.runtime`；
  * - `action` 请求与执行结果：background ↔ 内容脚本，走 `browser.tabs.sendMessage`，
@@ -44,8 +45,11 @@ export type CallMessage = {
   readonly source: typeof CHAIN_MESSAGE_SOURCE;
   readonly kind: "call";
   readonly id: string;
-  /** 围栏正文：一段工具调用 JSON（解析归上一层，这里只管运送）。 */
-  readonly call: string;
+  /**
+   * 这一轮各块围栏的正文（一段工具调用 JSON 一条），按页面上的顺序。
+   * 一次回答可以排多块，所以这里是**数组**；解析归上一层，这里只管运送。
+   */
+  readonly calls: readonly string[];
 };
 
 export type ResultMessage = {
@@ -71,6 +75,18 @@ export type AskClearedMessage = {
 };
 
 /**
+ * 页面世界报「自动续聊到顶、停手了」（刹车见 `rounds.ts`）：报给 background 留一笔
+ * （ADR-0004 失败留痕）。通知式——不等回话，也不进对话流。
+ */
+export type StopMessage = {
+  readonly source: typeof CHAIN_MESSAGE_SOURCE;
+  readonly kind: "stop";
+  readonly id: string;
+  /** 停手原因的码（`continuation.ts` 的 `STOP_*`）。 */
+  readonly cause: string;
+};
+
+/**
  * 页面世界认出围栏之外的话：报给 background 记进 said（`said_add`）。
  * 报不上不碍事——这条只是「让人看见」，不是问答回路。
  */
@@ -90,13 +106,19 @@ export type ToolsMessage = {
 };
 
 export type ChainMessage =
-  CallMessage | ResultMessage | AskMessage | AskClearedMessage | SaidMessage | ToolsMessage;
+  | CallMessage
+  | ResultMessage
+  | AskMessage
+  | AskClearedMessage
+  | SaidMessage
+  | ToolsMessage
+  | StopMessage;
 
 export type SendRequest = {
   readonly type: typeof SEND_MESSAGE_TYPE;
   readonly id: string;
-  /** 围栏正文：一段工具调用 JSON。 */
-  readonly call: string;
+  /** 这一轮各块围栏的正文（一段工具调用 JSON 一条），按页面上的顺序。 */
+  readonly calls: readonly string[];
 };
 
 export type SendResponse = {
@@ -108,6 +130,9 @@ export type SendResponse = {
 export const ASK_MESSAGE_TYPE = "ds-/ask";
 /** 隔离世界 → background 的 ask 清除信封标记。 */
 export const ASK_CLEARED_MESSAGE_TYPE = "ds-/ask-cleared";
+
+/** 隔离世界 → background 的「续聊到顶停手」上报信封标记。 */
+export const STOP_MESSAGE_TYPE = "ds-/stop";
 
 /** 网页排了 ask 围栏问人：记下来，扩展侧露出「在等人回」。 */
 export type AskReport = {
@@ -122,6 +147,17 @@ export type AskReport = {
 export type AskClearedReport = {
   readonly type: typeof ASK_CLEARED_MESSAGE_TYPE;
   readonly id: string;
+  readonly page: string | null;
+};
+
+/**
+ * 续聊到顶停手：页面世界报的，报给 background 留一笔（那一跳只有 background 碰得到
+ * 失败留痕）。跟 ask 一样带页面会话 id——留痕里说得出是哪条会话停的手。
+ */
+export type StopReport = {
+  readonly type: typeof STOP_MESSAGE_TYPE;
+  readonly id: string;
+  readonly cause: string;
   readonly page: string | null;
 };
 
@@ -169,8 +205,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function callMessage(id: string, call: string): CallMessage {
-  return { source: CHAIN_MESSAGE_SOURCE, kind: "call", id, call };
+export function callMessage(id: string, calls: readonly string[]): CallMessage {
+  return { source: CHAIN_MESSAGE_SOURCE, kind: "call", id, calls };
 }
 
 export function resultMessage(id: string, payload: ReplyPayload): ResultMessage {
@@ -185,6 +221,11 @@ export function askMessage(id: string, question: string): AskMessage {
 /** 页面世界看见对话继续 → 此前挂着的「等人回」作废。 */
 export function askClearedMessage(id: string): AskClearedMessage {
   return { source: CHAIN_MESSAGE_SOURCE, kind: "ask-cleared", id };
+}
+
+/** 页面世界报「续聊到顶、停手」→ 隔离世界 → background 留痕。 */
+export function stopMessage(id: string, cause: string): StopMessage {
+  return { source: CHAIN_MESSAGE_SOURCE, kind: "stop", id, cause };
 }
 
 /** 页面世界认出围栏之外的话 → 隔离世界 → background 记进 said。 */
@@ -206,8 +247,8 @@ export function pageSessionIdOf(url: string): string | null {
   return match?.[1] ?? null;
 }
 
-export function sendRequestMessage(id: string, call: string): SendRequest {
-  return { type: SEND_MESSAGE_TYPE, id, call };
+export function sendRequestMessage(id: string, calls: readonly string[]): SendRequest {
+  return { type: SEND_MESSAGE_TYPE, id, calls };
 }
 
 export function sendResponseMessage(id: string, payload: ReplyPayload): SendResponse {
@@ -230,6 +271,14 @@ export function saidReportMessage(text: string): SaidReport {
   return { type: SAID_MESSAGE_TYPE, text };
 }
 
+export function stopReportMessage(
+  id: string,
+  cause: string,
+  page: string | null = null,
+): StopReport {
+  return { type: STOP_MESSAGE_TYPE, id, cause, page };
+}
+
 export function toolsRequestMessage(): ToolsRequest {
   return { type: TOOLS_REQUEST_MESSAGE_TYPE };
 }
@@ -248,6 +297,11 @@ function isValidId(id: unknown): id is string {
 
 function isValidText(text: unknown): text is string {
   return typeof text === "string" && text.trim() !== "";
+}
+
+/** 一轮各块围栏的正文：非空数组，每一条都是非空文本（形都不对就整个作废）。 */
+function isValidCalls(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.length > 0 && value.every(isValidText);
 }
 
 /**
@@ -269,9 +323,9 @@ export function parseChainMessage(data: unknown): ChainMessage | null {
   if (!isValidId(id)) return null;
 
   if (data["kind"] === "call") {
-    const call = data["call"];
-    if (!isValidText(call)) return null;
-    return callMessage(id, call);
+    const calls = data["calls"];
+    if (!isValidCalls(calls)) return null;
+    return callMessage(id, calls);
   }
   if (data["kind"] === "result") {
     const payload = data["payload"];
@@ -285,6 +339,11 @@ export function parseChainMessage(data: unknown): ChainMessage | null {
   }
   if (data["kind"] === "ask-cleared") {
     return askClearedMessage(id);
+  }
+  if (data["kind"] === "stop") {
+    const cause = data["cause"];
+    if (!isValidText(cause)) return null;
+    return stopMessage(id, cause);
   }
   if (data["kind"] === "said") {
     const text = data["text"];
@@ -304,9 +363,9 @@ export function parseSendRequest(data: unknown): SendRequest | null {
   if (!isPlainObject(data)) return null;
   if (data["type"] !== SEND_MESSAGE_TYPE) return null;
   const id = data["id"];
-  const call = data["call"];
-  if (!isValidId(id) || !isValidText(call)) return null;
-  return sendRequestMessage(id, call);
+  const calls = data["calls"];
+  if (!isValidId(id) || !isValidCalls(calls)) return null;
+  return sendRequestMessage(id, calls);
 }
 
 /** 认隔离世界 → background 的 ask 上报（#26）。 */
@@ -330,6 +389,18 @@ export function parseAskClearedReport(data: unknown): AskClearedReport | null {
   const page = pageSessionOf(data);
   if (page === undefined) return null;
   return askClearedReportMessage(id, page);
+}
+
+/** 认隔离世界 → background 的「续聊停手」上报（#26 同款：通知式，带页面会话 id）。 */
+export function parseStopReport(data: unknown): StopReport | null {
+  if (!isPlainObject(data)) return null;
+  if (data["type"] !== STOP_MESSAGE_TYPE) return null;
+  const id = data["id"];
+  const cause = data["cause"];
+  if (!isValidId(id) || !isValidText(cause)) return null;
+  const page = pageSessionOf(data);
+  if (page === undefined) return null;
+  return stopReportMessage(id, cause, page);
 }
 
 /** 认隔离世界 → background 的 said 上报：一段非空文本。 */

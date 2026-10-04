@@ -31,10 +31,17 @@ from urllib.parse import urlsplit
 
 from dsb.config import PORT_ENV_KEY, env_value, find_dotenv, repo_root
 from dsb.gateway import (
+    CONNECT_TIMEOUT_ENV_KEY,
+    DISCOVERY_TIMEOUT,
+    DISCOVERY_TIMEOUT_ENV_KEY,
+    MAX_RESULT_CHARS,
+    MAX_TOOLS_PER_SERVER,
     MCP_CONFIG_ENV_KEY,
     MCP_CONFIG_FILENAME,
+    START_TIMEOUT,
     Gateway,
     load_config,
+    resolve_seconds,
     resolve_timeout,
 )
 from dsb.log import log_event, setup_logging
@@ -223,7 +230,13 @@ def main() -> None:
     port = resolve_port(env_text)
     config_path = resolve_config_path(env_text)
     root = resolve_work_root(env_text)
-    gateway = Gateway.from_config(load_config(config_path), timeout=resolve_timeout(env_text))
+    gateway = Gateway.from_config(
+        load_config(config_path),
+        timeout=resolve_timeout(env_text),
+        # 三档超时各现读一份：握手（npx 首次下载慢）/ 发现（一次就够）/ 调用。
+        start_timeout=resolve_seconds(env_text, CONNECT_TIMEOUT_ENV_KEY, START_TIMEOUT),
+        discovery_timeout=resolve_seconds(env_text, DISCOVERY_TIMEOUT_ENV_KEY, DISCOVERY_TIMEOUT),
+    )
     service = McpService(build_tools(gateway, SaidLog(), root))
     names = ", ".join(service.tool_names) or "（空）"
     print(
@@ -237,6 +250,11 @@ def main() -> None:
             "工作工具调用时会回 bad-path。",
             file=sys.stderr,
         )
+    print(
+        f"[dsb] 限额：单次结果 {MAX_RESULT_CHARS} 字、单服务工具 {MAX_TOOLS_PER_SERVER} 件、"
+        f"工具调用 {resolve_timeout(env_text):g}s",
+        flush=True,
+    )
     if not gateway.servers:
         print(
             f"[dsb] 没配 MCP server（看 {config_path}）：tools/list 只剩工作工具与自家的 said_*。",

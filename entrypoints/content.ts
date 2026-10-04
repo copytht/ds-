@@ -13,6 +13,7 @@ import {
   parseToolsResponse,
   resultMessage,
   saidReportMessage,
+  stopReportMessage,
   toolsMessage,
   toolsRequestMessage,
   unreachableResult,
@@ -21,6 +22,7 @@ import {
   type AskMessage,
   type CallMessage,
   type SaidMessage,
+  type StopMessage,
 } from "../src/lib/channel";
 import { nextMessageId } from "../src/lib/id";
 import {
@@ -68,7 +70,7 @@ export default defineContentScript({
     /** 页面世界认出的围栏 → background 打网关 → 结果按同一条信封原路回去。 */
     const forwardToRelay = async (call: CallMessage): Promise<void> => {
       try {
-        const response = await browser.runtime.sendMessage(sendRequestMessage(call.id, call.call));
+        const response = await browser.runtime.sendMessage(sendRequestMessage(call.id, call.calls));
         const parsed = parseSendResponse(response);
         window.postMessage(
           parsed === null ? unreachableResult(call.id) : resultMessage(call.id, parsed.payload),
@@ -109,6 +111,17 @@ export default defineContentScript({
         );
       } catch (error) {
         console.log("[ds-] ask 清除没有送出去", error);
+      }
+    };
+
+    /** 自动续聊到顶停手：报给 background 留一笔（ADR-0004），不进对话流。 */
+    const reportStop = async (stop: StopMessage): Promise<void> => {
+      try {
+        await browser.runtime.sendMessage(
+          stopReportMessage(stop.id, stop.cause, pageSessionIdOf(location.href)),
+        );
+      } catch (error) {
+        console.log("[ds-] 停手上报没有送出去", error);
       }
     };
 
@@ -185,6 +198,10 @@ export default defineContentScript({
       }
       if (chain?.kind === "ask-cleared") {
         void reportAskCleared(chain);
+        return;
+      }
+      if (chain?.kind === "stop") {
+        void reportStop(chain);
         return;
       }
 

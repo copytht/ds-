@@ -14,8 +14,8 @@ export type FixtureFile<T> = {
 export type FenceCase = {
   readonly name: string;
   readonly input: string;
-  /** send 围栏里的正文（一段工具调用 JSON）；没排围栏是 null。 */
-  readonly expectedCall: string | null;
+  /** 各块 send 围栏的正文（一段工具调用 JSON 一条），按出现顺序；没排围栏是空数组。 */
+  readonly expectedCalls: readonly string[];
 };
 
 /** 回灌组装对拍（`reply.json`）。 */

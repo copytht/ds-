@@ -55,6 +55,8 @@ def log_event(
     exc: BaseException | None = None,
     missing: str | None = None,
     tool: str | None = None,
+    chars: int | None = None,
+    count: int | None = None,
 ) -> None:
     """一条事件，形如 ``[2026-10-03 14:49:36] tool-fail tool=fs_echo error=tool-timeout``。
 
@@ -77,4 +79,8 @@ def log_event(
         bits.append(f"took_ms={round(took_ms)}")
     if missing is not None:
         bits.append(f"missing={missing}")
+    if chars is not None:
+        bits.append(f"chars={chars}")
+    if count is not None:
+        bits.append(f"count={count}")
     _logger().info(" ".join(bits))

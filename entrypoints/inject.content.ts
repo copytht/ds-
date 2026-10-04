@@ -1,20 +1,39 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 
-import { detectAskQuestion, detectToolCall, extractAssistantAnswer } from "../src/lib/answer";
+import { detectAskQuestion, detectToolCalls, extractAssistantAnswer } from "../src/lib/answer";
 import {
   askClearedMessage,
   askMessage,
   callMessage,
+  pageSessionIdOf,
   parseChainMessage,
   saidMessage,
+  stopMessage,
   type ResultMessage,
 } from "../src/lib/channel";
+import {
+  buildContinuation,
+  CONTINUATION_MARKER,
+  isArmedFresh,
+  STOP_CONTINUATION_LIMIT,
+} from "../src/lib/continuation";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
-import { isOutgoingChatRequest, rewriteOutgoingBody } from "../src/lib/inject";
+import {
+  isOutgoingChatRequest,
+  rewriteContinuationBody,
+  rewriteOutgoingBody,
+} from "../src/lib/inject";
 import { findSendButton } from "../src/lib/page";
 import { nextMessageId } from "../src/lib/id";
-import { buildReply, hasReplyAnchor, isInjectableReply } from "../src/lib/reply";
+import { hasReplyAnchor, isInjectableReply } from "../src/lib/reply";
 import type { ToolInfo } from "../src/lib/relay";
+import {
+  beginRound,
+  INITIAL_ROUNDS,
+  MAX_CONTINUATION_ROUNDS,
+  resetRounds,
+  type RoundState,
+} from "../src/lib/rounds";
 import { outsideFences } from "../src/lib/said";
 import { parseToggleMessage, wantStateMessage } from "../src/lib/toggle";
 
@@ -27,7 +46,9 @@ type XhrTarget = { readonly method: string; readonly url: string };
  *    说明里那份工具目录是隔离世界广播下来的（`tools` 信封）。
  * 2. **回灌链**：同一次包下来的**响应体**就是检测点（模型回答的唯一来源）→ 认出 ```send 围栏 →
  *    围栏正文交给隔离世界去打本机网关 → 结果进**唯一出站口**排队，出站窗口到点放行（ADR-0002）→
- *    回灌作为一条真实用户消息发进当前会话。
+ *    **续聊**：对话里只发一个短标记（`agent:` 首行锚 + 一行字），工具结果由同一次出站的
+ *    **请求体替换**交给模型（`rewriteContinuationBody`）——结果不进可见消息（ADR-0012）。
+ *    一条任务里自动续多少轮有上限（`rounds.ts`），到顶停手并在扩展侧留痕。
  *
  * 失败一律不进对话流：中继没问成时这里只留一行日志，页面里不出现任何新消息。
  */
@@ -53,15 +74,57 @@ export default defineContentScript({
     /** 隔离世界广播下来的工具目录（`tools/list`）；null = 还没取到，说明里会写明。 */
     let catalog: readonly ToolInfo[] | null = null;
 
+    /** 自动续聊的轮数（`rounds.ts`）：一条任务里最多自动续这么多轮。 */
+    let rounds: RoundState = INITIAL_ROUNDS;
+
+    /** 排着队、还没到出站窗口的续聊正文；放行那一刻才武装（见 `flush`）。 */
+    let queuedContinuation: string | null = null;
+
+    /** 已武装：下一条出站聊天请求的正文会被换成它（一次即作废）。 */
+    let armedContinuation: string | null = null;
+
+    /** 武装的时刻：过期（`ARMED_TTL_MS`）一样作废，见下。 */
+    let armedAt = 0;
+
+    /** 上一次见过的页面会话 id：换了会话 = 换了条任务，轮数归零。 */
+    let sessionKey: string | null = null;
+
     const xhrTargets = new WeakMap<XMLHttpRequest, XhrTarget>();
     const watchingXhrs = new WeakSet<XMLHttpRequest>();
+
+    /**
+     * 出站改写：挂着的续聊优先（这一趟就是自动续聊那一趟），否则照旧拼协议说明。
+     *
+     * 续聊**一次即作废**：替换没成也作废——留着它，下一条出站就是用户自己发的消息，
+     * 会被当成续聊那趟、正文被工具结果顶掉（把人说的话吃了，比少一轮严重得多）。
+     */
+    const rewriteOutgoing = (body: string): string | null => {
+      if (armedContinuation !== null && !isArmedFresh(armedAt, Date.now())) {
+        // 挂太久了：多半是那一趟没真发出去。作废——不能让它顶掉用户下一条消息。
+        console.log("[ds-] 挂着的续聊已过期，作废（不拿它顶用户的下一句话）");
+        armedContinuation = null;
+      }
+      if (armedContinuation === null) {
+        const next = rewriteOutgoingBody(body, catalog);
+        if (next !== null) console.log("[ds-] 已把协议说明拼到这条消息开头");
+        return next;
+      }
+      const pending = armedContinuation;
+      armedContinuation = null;
+      armedAt = 0;
+      const next = rewriteContinuationBody(body, pending);
+      console.log(
+        next === null
+          ? "[ds-] 续聊正文没能替换进出站请求，这一轮作废（结果没送到模型手上）"
+          : "[ds-] 续聊正文已替换进这次出站请求（工具结果不走可见消息）",
+      );
+      return next;
+    };
 
     /** 判断逻辑在 src/lib/inject.ts，这里只认它那句「null 就原样放行」。 */
     const rewriteBody = (body: string, method: string, url: string): string | null => {
       if (!isOutgoingChatRequest(method, url)) return null;
-      const next = rewriteOutgoingBody(body, catalog);
-      if (next !== null) console.log("[ds-] 已把协议说明拼到这条消息开头");
-      return next;
+      return rewriteOutgoing(body);
     };
 
     /** 排下一次开窗：队列空着就不排。 */
@@ -78,14 +141,32 @@ export default defineContentScript({
       const step = release(gate, Date.now(), Math.random);
       gate = step.gate;
       for (const message of step.released) {
+        // 武装放在放行这一刻：从入队到开窗有几秒，期间用户可能自己在发消息——
+        // 早武装就会把他的真消息换成工具结果。
+        const isContinuation = queuedContinuation !== null && message === CONTINUATION_MARKER;
+        if (isContinuation) {
+          armedContinuation = queuedContinuation;
+          armedAt = Date.now();
+          queuedContinuation = null;
+        }
         void sendToPage(message)
           .then((sent) => {
+            // 没发出去就把武装撤掉（发出去的已经被替换那一步消费掉了）：
+            // 留着它，下一个出站就是用户自己发的消息，正文会被工具结果顶掉。
+            if (!sent && isContinuation) {
+              armedContinuation = null;
+              armedAt = 0;
+            }
             console.log(
-              sent ? "[ds-] 回灌已作为用户消息发出" : "[ds-] 回灌没有发出去，页面里没有新消息",
+              sent ? "[ds-] 续聊已作为一条短标记发出" : "[ds-] 续聊没有发出去，页面里没有新消息",
             );
           })
           .catch((error) => {
-            console.log("[ds-] 回灌发送出岔，页面里没有新消息", error);
+            if (isContinuation) {
+              armedContinuation = null;
+              armedAt = 0;
+            }
+            console.log("[ds-] 续聊发送出岔，页面里没有新消息", error);
           });
       }
       if (gate.queue.length > 0) scheduleFlush();
@@ -99,7 +180,17 @@ export default defineContentScript({
         console.log(`[ds-] 中继没问成（${error}），失败不进对话流`);
         return;
       }
-      gate = enqueue(gate, buildReply(result.payload), Date.now(), Math.random);
+      // 刹车（`rounds.ts`）：到顶就不发这一轮，只在扩展侧留一笔、等用户开口。
+      const verdict = beginRound(rounds);
+      rounds = verdict.next;
+      if (!verdict.proceed) {
+        const id = nextMessageId("rounds");
+        console.log(`[ds-] 自动续聊已连到 ${MAX_CONTINUATION_ROUNDS} 轮上限，停手等用户开口`);
+        window.postMessage(stopMessage(id, STOP_CONTINUATION_LIMIT), "*");
+        return;
+      }
+      queuedContinuation = buildContinuation(result.payload);
+      gate = enqueue(gate, CONTINUATION_MARKER, Date.now(), Math.random);
       scheduleFlush();
     }
 
@@ -114,20 +205,28 @@ export default defineContentScript({
      */
     function detect(raw: string): void {
       if (!enabled) return;
-      const call = detectToolCall(raw);
+      // 换了页面会话 = 换了条任务：轮数归零，别把上一条的刹车额度带过来。
+      const key = pageSessionIdOf(location.href);
+      if (key !== sessionKey) {
+        sessionKey = key;
+        rounds = resetRounds();
+      }
+      const calls = detectToolCalls(raw);
       // **围栏之外的话**一律报给协调者：有围栏时围栏转网关，围栏以外那些别的话不能被吞掉。
       // 回灌自己（首行是 `agent:`）不算：那是桥送回去的，再报就成了回声。
       const said = outsideFences(extractAssistantAnswer(raw));
       if (said !== "" && !hasReplyAnchor(said)) {
         window.postMessage(saidMessage(nextMessageId("said"), said), "*");
       }
-      if (call !== null) {
+      if (calls.length > 0) {
         const id = nextMessageId("send");
-        console.log(`[ds-] 认出 send 围栏（${id}），交给中继`);
-        window.postMessage(callMessage(id, call), "*");
+        console.log(`[ds-] 认出 ${calls.length} 块 send 围栏（${id}），交给中继`);
+        window.postMessage(callMessage(id, calls), "*");
         pendingAsk = false;
         return;
       }
+      // 这一轮答复里没有围栏 = 任务收尾：轮数归零，下一次任务重新有满额。
+      rounds = resetRounds();
       const ask = detectAskQuestion(raw);
       if (ask !== null) {
         pendingAsk = true;
@@ -186,9 +285,7 @@ export default defineContentScript({
         const outgoing = isOutgoingChatRequest(method, url);
 
         const bodyText = init !== undefined && typeof init.body === "string" ? init.body : null;
-        const nextBody =
-          outgoing && bodyText !== null ? rewriteOutgoingBody(bodyText, catalog) : null;
-        if (nextBody !== null) console.log("[ds-] 已把协议说明拼到这条消息开头");
+        const nextBody = outgoing && bodyText !== null ? rewriteOutgoing(bodyText) : null;
         const requestInit =
           nextBody !== null && init !== undefined ? { ...init, body: nextBody } : init;
 
@@ -256,6 +353,12 @@ export default defineContentScript({
           flushTimer = null;
         }
         gate = newGate();
+        // 续聊这两笔与轮数也一样作废：关着时挂着的正文不该在下一次开闸时冒出来。
+        queuedContinuation = null;
+        armedContinuation = null;
+        armedAt = 0;
+        rounds = resetRounds();
+        sessionKey = null;
       }
       console.log(
         `[ds-] 总开关${next ? "打开" : "关闭"}，协议说明${next ? "开始注入" : "不再注入"}，回灌链${next ? "开始工作" : "整条不再工作"}`,

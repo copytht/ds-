@@ -136,12 +136,18 @@ describe("describeLastFailure · 一句里答得出三件事", () => {
     expect(describeLastFailure([healthFailure(localTime(14, 51, 30))], now)).toContain("还没恢复");
   });
 
-  it("三个环节各有各的说法——排查方向不一样", () => {
+  it("每个环节各有各的说法——排查方向不一样", () => {
     const at = localTime(14, 49, 36);
     const where = (record: FailureRecord) => describeLastFailure([record], now);
     expect(where({ at, where: "health", cause: "x" })).toContain("周期探活");
     expect(where({ at, where: "call", cause: "x" })).toContain("工具调用");
     expect(where({ at, where: "watchdog", cause: "x" })).toContain("看门狗");
+    expect(where({ at, where: "rounds", cause: "x" })).toContain("续聊刹车");
+  });
+
+  it("册子外的环节名不进记录（免得悬停印出 undefined）", () => {
+    expect(readFailureLog([{ at: 1, where: "status", cause: "x" }])).toEqual([]);
+    expect(readFailureLog([{ at: 1, where: "send", cause: "x" }])).toEqual([]);
   });
 
   it("一次都没红过就没有这句", () => {

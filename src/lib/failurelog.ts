@@ -15,7 +15,7 @@ export const FAILURE_LOG_STORAGE_KEY = "ds-/failures";
 export const FAILURE_LOG_CAP = 20;
 
 /** 失败发生在哪一环——排查方向完全不同，所以必须留。 */
-export type FailureWhere = "health" | "call" | "watchdog";
+export type FailureWhere = "health" | "call" | "watchdog" | "rounds";
 
 export type FailureRecord = {
   /** 故障**开始**的时刻（同一次故障的延续不另起一条）。 */
@@ -31,14 +31,20 @@ const WHERE_LABELS: Readonly<Record<FailureWhere, string>> = {
   health: "周期探活",
   call: "工具调用",
   watchdog: "看门狗",
+  rounds: "续聊刹车",
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * 判据必须与 `FailureWhere` 逐字对齐：早先这里认 `"status"` / `"send"`（旧链路的环节名），
+ * 两个都不在联合里、也没有标签——存量记录一旦带上它们，悬停那行会印出 `undefined`。
+ * 顺带把「认不出的一律丢」这条守住：册子外的词不当环节。
+ */
 function isFailureWhere(value: unknown): value is FailureWhere {
-  return value === "health" || value === "status" || value === "send" || value === "watchdog";
+  return value === "health" || value === "call" || value === "watchdog" || value === "rounds";
 }
 
 /**
