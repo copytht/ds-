@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { ACTION_ERROR_PAGE_CHANGED } from "./action";
+import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_READ_FAILED } from "./action";
 import type { ActionFrame } from "./action";
+import { parseWaitSeconds } from "./wait-budget";
 import {
   lastMessage,
   listMessages,
@@ -504,6 +505,12 @@ function fakeClock(stepMs: number): () => number {
     return now;
   };
 }
+/**
+ * 给 `readyWithin` 的 deadline（ms）。假时钟从 0 起、每拍 +1_000，所以
+ * `12_000` 相当于「第 12 拍到点」——够验「等到」也够验「到点抛」，不必真等。
+ * 别用 `Infinity`：那就永远等不到，`page-changed` 那几条会转成死循环。
+ */
+const READY_DEADLINE = 12_000;
 
 describe("就绪轮询（issue #40）", () => {
   it("行还没挂进来：预算内等到那一行，不报 page-changed", async () => {
@@ -515,7 +522,7 @@ describe("就绪轮询（issue #40）", () => {
     for (const row of rows) row.innerHTML = ""; // 行在，正文还没渲染
     let polls = 0;
 
-    await readyWithin(fakeClock(1_000), (): Promise<void> => {
+    await readyWithin(READY_DEADLINE, fakeClock(1_000), (): Promise<void> => {
       polls += 1;
       if (polls === 2) rows.forEach((row, index) => (row.innerHTML = saved[index] ?? ""));
       return Promise.resolve();
@@ -529,7 +536,7 @@ describe("就绪轮询（issue #40）", () => {
     for (const row of document.querySelectorAll("[data-virtual-list-item-key]")) row.innerHTML = "";
     // 正文永不出来：等再久也没用——这才是该报结构变了的那种。
 
-    await expect(readyWithin(fakeClock(1_000), instant)).rejects.toMatchObject({
+    await expect(readyWithin(READY_DEADLINE, fakeClock(1_000), instant)).rejects.toMatchObject({
       code: ACTION_ERROR_PAGE_CHANGED,
     });
   });
@@ -539,7 +546,7 @@ describe("就绪轮询（issue #40）", () => {
     let polls = 0;
 
     await expect(
-      readyWithin(fakeClock(1_000), (): Promise<void> => {
+      readyWithin(READY_DEADLINE, fakeClock(1_000), (): Promise<void> => {
         polls += 1;
         return Promise.resolve();
       }),
@@ -553,7 +560,7 @@ describe("就绪轮询（issue #40）", () => {
     document.body.innerHTML = conversationHtml();
     for (const row of document.querySelectorAll("[data-virtual-list-item-key]")) row.remove();
 
-    await expect(readyWithin(fakeClock(1_000), instant)).rejects.toMatchObject({
+    await expect(readyWithin(READY_DEADLINE, fakeClock(1_000), instant)).rejects.toMatchObject({
       code: ACTION_ERROR_PAGE_CHANGED,
     });
   });
@@ -562,7 +569,7 @@ describe("就绪轮询（issue #40）", () => {
     document.body.innerHTML = conversationHtml();
     const writes = stubLayer(document.querySelector(".ds-virtual-list")!, "auto", 100);
 
-    await readyWithin(fakeClock(1_000), instant);
+    await readyWithin(READY_DEADLINE, fakeClock(1_000), instant);
 
     expect(writes).toEqual([]); // 就绪只读行，不试写滚动
   });
@@ -657,5 +664,59 @@ describe("不可见页面：一屏也要扫得完", () => {
         value: original,
       });
     }
+  });
+});
+
+describe("预算：params.timeout 一份，就绪与扫描共用", () => {
+  it("就绪花掉的时间从扫描里扣（最坏恒等于预算，不顶中继的锁）", async () => {
+    // 曾经的坑：就绪 5s + 扫描 25s = 30s，正顶着中继 30s 的锁 → 真原因被吞成 timeout。
+    // 现在一份预算：deadline 算一次，两段共用。
+    const view = virtualScreens([
+      [keyRow(1, "user")],
+      [keyRow(2, "assistant")],
+      [keyRow(3, "user")],
+    ]);
+    let clock = 0;
+    const now = (): number => clock;
+    const settle = (): Promise<void> => {
+      clock += 5_000; // 每滚一屏花 5s
+      return Promise.resolve();
+    };
+
+    // 预算 12s：第一屏吃掉 5s、第二屏吃掉 5s，第三屏时 clock=10s 还没到 12s → 扫完。
+    const messages = await readMessages(view, settle, 12_000, now);
+    expect(messages).toHaveLength(3);
+    expect(clock).toBeLessThanOrEqual(12_000);
+  });
+
+  it("预算耗尽：抛 read-failed（读到了也读不完），不是 page-changed", async () => {
+    const view = virtualScreens([
+      [keyRow(1, "user")],
+      [keyRow(2, "assistant")],
+      [keyRow(3, "user")],
+      [keyRow(4, "assistant")],
+    ]);
+    let clock = 0;
+    const settle = (): Promise<void> => {
+      clock += 5_000;
+      return Promise.resolve();
+    };
+
+    // 预算 12s：滚到第三屏时 clock 已到 15s > 12s → 到点收手。
+    await expect(readMessages(view, settle, 12_000, () => clock)).rejects.toMatchObject({
+      code: ACTION_ERROR_READ_FAILED,
+    });
+  });
+
+  it("timeout 缺省 25 / 非法按 25 / 超上限 25 / 低于下限 1（与 wait.* 同口径）", () => {
+    const of = (params: Record<string, unknown>): number =>
+      parseWaitSeconds({ type: "action", id: "x", action: "messages.list", params, target: "42" });
+    expect(of({})).toBe(25);
+    expect(of({ timeout: Number.NaN })).toBe(25);
+    expect(of({ timeout: "8" })).toBe(25); // 非数
+    expect(of({ timeout: 999 })).toBe(25);
+    expect(of({ timeout: 0 })).toBe(1);
+    expect(of({ timeout: -5 })).toBe(1);
+    expect(of({ timeout: 8 })).toBe(8);
   });
 });
