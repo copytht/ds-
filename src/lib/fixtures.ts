@@ -14,7 +14,8 @@ export type FixtureFile<T> = {
 export type FenceCase = {
   readonly name: string;
   readonly input: string;
-  readonly expectedQuestion: string | null;
+  /** send 围栏里的正文（一段工具调用 JSON）；没排围栏是 null。 */
+  readonly expectedCall: string | null;
 };
 
 /** 回灌组装对拍（`reply.json`）。 */
@@ -24,17 +25,11 @@ export type ReplyCase = {
   readonly expectedMessage: string;
 };
 
-/** 中继结果 → 载荷对拍（`opencode.json`）。 */
-export type OpencodeCase = {
-  readonly name: string;
-  readonly outcome: { readonly kind: string; readonly body?: unknown; readonly status?: number };
-  readonly expectedPayload: ReplyPayload;
-};
-
 /** 配置解析对拍（`config.json`）。 */
 export type ConfigCase = {
   readonly name: string;
   readonly kind: string;
+  readonly key: string;
   readonly input: string;
   readonly expected: Readonly<Record<string, unknown>>;
 };
@@ -46,10 +41,9 @@ export type ActionRequest = {
   readonly target: string | null;
 };
 
-/** 页面动作的响应（`action.json`）：成功与失败同构到 `action` 一条，失败码另在册。 */
+/** 页面动作的响应（`action.json`）：成功与失败同构到一条，失败码另在册。 */
 export type ActionResponse =
-  | { readonly ok: true; readonly action: string; readonly result: unknown }
-  | { readonly ok: false; readonly action: string; readonly error: string };
+  { readonly ok: true; readonly result: unknown } | { readonly ok: false; readonly error: string };
 
 /** 页面动作对拍（`action.json`）。 */
 export type ActionCase = {
@@ -93,8 +87,8 @@ export function fixtureCases<T>(filename: string): readonly T[] {
 }
 
 /**
- * 页面动作的失败码册子（`action.json` 的 `errorCodes`）——与 `dsb/actions.py` 的
- * `ACTION_ERRORS` 同一份。线上只认册子里的码。
+ * 页面动作的失败码册子（`action.json` 的 `errorCodes`）——与 `src/lib/action.ts`
+ * 的 `ACTION_ERROR_*` 常量同一份。线上只认册子里的码。
  */
 export function actionErrorCodes(): readonly string[] {
   const file = fixtureFile("action.json") as ActionFixtureFile;

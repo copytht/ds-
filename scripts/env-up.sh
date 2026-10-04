@@ -10,11 +10,16 @@ CHROME=/Applications/Chromium.app/Contents/MacOS/Chromium
 PROFILE="$HOME/Library/Application Support/ds-browser"
 MV3="$PWD/.output/chrome-mv3"
 PORT=8787
-EXT_ID=lebhdfhpogojdocfeicgaffejombnmfl   # 由 MV3 路径算出，路径不变就恒定
+MCP="http://127.0.0.1:$PORT/mcp"
 
 say() { printf '  %-8s %s\n' "$1" "$2"; }
 
-# ---- 1) 扩展构建：源码比产物新才重建（老产物 = 名册缺动作 = 一串 unknown-action）----
+# 一行 JSON-RPC 打 /mcp：唯一端点，探活 ping、查表 tools/list 都走它（ADR-0011）。
+rpc() {
+  curl -s -m 10 -X POST "$MCP" -H 'Content-Type: application/json' -d "$1"
+}
+
+# ---- 1) 扩展构建：源码比产物新才重建（老产物 = 协议说明旧、名册缺动作）----
 REBUILT=0
 if [ ! -f "$MV3/background.js" ]; then
   pnpm build >/tmp/dsb-build.log 2>&1 && { say 构建 "缺产物，已重建"; REBUILT=1; } || { say 构建 "重建失败 → /tmp/dsb-build.log"; exit 1; }
@@ -25,12 +30,11 @@ else
 fi
 
 # ---- 2) 中继 ----
-if curl -sf -m 3 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+if curl -s -m 3 -X POST "$MCP" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":"env-up","method":"ping"}' | grep -q '"result"'; then
   say 中继 "已在跑"
-  # dsb 是长驻进程、不重载代码：源码比进程新时跑的是旧代码
-  # （实测撞过：名册加了动作，提交还落 unknown-action）。
-  # 只提示、不擅自动——重启中继会断动作流，子会话的跨问
-  # 上下文也丢（「起一次、跨问复用」）。
+  # dsb 是长驻进程、不重载代码：源码比进程新时跑的是旧代码。
+  # 只提示、不擅自动——重启会丢子进程（mcp.json 里起着的 server 要重拉一遍）。
   RELAY_PID=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1)
   NEWEST_PY=$(find dsb -name '*.py' -exec stat -f %m {} + 2>/dev/null | sort -rn | head -1)
   STARTED_AT=$(ps -p "${RELAY_PID:-0}" -o lstart= 2>/dev/null | python3 -c '
@@ -50,17 +54,9 @@ else
   say 中继 "已起 → /tmp/dsb-relay.log"
 fi
 
-# ---- 3) 宿主 ----
-if pgrep -f 'native/host\.mjs' >/dev/null 2>&1; then
-  say 宿主 "已在跑"
-else
-  nohup node native/host.mjs >/tmp/dsb-host.log 2>&1 &
-  disown
-  say 宿主 "已起 → /tmp/dsb-host.log"
-fi
-
-# ---- 4) 浏览器：只认独立 profile；已活着绝不重启（重启 = 掉 --load-extension）----
+# ---- 3) 浏览器：只认独立 profile；已活着绝不重启（重启 = 掉 --load-extension）----
 # 主进程的首个 flag 是 --user-data-dir，子进程是 --type=，据此只数主进程。
+STARTED_BROWSER=0
 if ps ax -o command= | grep -E '^/Applications/Chromium\.app/Contents/MacOS/Chromium --user-data-dir=.*ds-browser' >/dev/null 2>&1; then
   say 浏览器 "已在跑（独立 profile）"
   if [ "$REBUILT" = 1 ]; then
@@ -75,106 +71,62 @@ else
   "$CHROME" --user-data-dir="$PROFILE" --load-extension="$MV3" \
     --no-first-run --no-default-browser-check >/tmp/dsb-browser.log 2>&1 &
   disown
+  STARTED_BROWSER=1
   say 浏览器 "已起 → 独立 profile（清过 SW 脚本缓存）"
 fi
 
-# ---- 5) 判据：中继健康 + 动作流有订阅者 ----
+# ---- 4) 判据 ----
+# 扩展不再有外露的探针面（POST /action 与动作流随 ADR-0007 一起废了）：
+# 这里只验本机这一半，扩展那一半看图标与控制台。
 sleep 3
-TOKEN=$(cat .dsb-token 2>/dev/null || true)
-probe() {
-  curl -s -m 10 -X POST "http://127.0.0.1:$PORT/action" \
-    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$1"
-}
 
-echo
-health=$(curl -s -m 5 "http://127.0.0.1:$PORT/health" 2>/dev/null)
-case "$health" in
-  *'"ok"'*|*'status": "ok"'*) say 判据1 "中继健康 $health" ;;
-  *) say 判据1 "中继不健康：$health" ; exit 1 ;;
+ping_out=$(rpc '{"jsonrpc":"2.0","id":"env-up","method":"ping"}')
+case "$ping_out" in
+  *'"result"'*) say 判据1 "中继健康（ping 回话）" ;;
+  *) say 判据1 "中继不健康：$ping_out" ; exit 1 ;;
 esac
 
-t=$(probe '{"action":"toggle.get","params":{},"target":null}')
-case "$t" in
-  *'"ok": true'*) say 判据2 "扩展已连上（动作流通了）" ;;
-  *no-subscriber*) say 判据2 "扩展没连上：多半是 --load-extension 掉了 → 重启本脚本" ; exit 1 ;;
-  *) say 判据2 "探针异常：$t" ; exit 1 ;;
-esac
+list_out=$(rpc '{"jsonrpc":"2.0","id":"env-up","method":"tools/list"}')
+tools=$(printf '%s' "$list_out" | python3 -c '
+import json, sys
+try:
+    payload = json.load(sys.stdin)
+except ValueError:
+    print("")
+    raise SystemExit
+tools = payload.get("result", {}).get("tools")
+if isinstance(tools, list):
+    print(" ".join(t.get("name", "?") for t in tools))')
+if [ -n "$tools" ]; then
+  say 判据2 "工具表取得到：$tools"
+else
+  say 判据2 "工具表取不到 / 是空的：$list_out"
+  say 判据2 "空 = mcp.json 没配 server（只剩自家 said_*）；取不到 = 网关有毛病 → /tmp/dsb-relay.log"
+fi
 
-# 总开关关着时，判据 3/4 读不了 —— action.ts:143 是总开关管一切、toggle.* 除外，
-# tabs.list 也在内。而开它就等于把页面世界的 fetch/XHR 钩子装上（inject.content.ts:209），
-# 那是 issue #31 那条。这笔账摆出来，开不开由人定。
-case "$t" in
-  *'"enabled": true'*) ;;
-  *)
-    say 提示 "总开关关着 → 判据 3/4 跳过（tabs.list 与 page.state 都会回 disabled）"
-    say 提示 "开它 = 装上页面世界的 fetch/XHR 钩子（#31）；要开说一声，一条命令的事"
-    exit 0
-    ;;
-esac
-
-# ---- 5) 会话标签页：没有就开一个（同 profile 二次调用 → 转给已在跑的实例，**不重启**）----
-tabs_now=$(probe '{"action":"tabs.list","params":{},"target":null}')
-case "$tabs_now" in
-  *'"tabs": []'*)
-    "$CHROME" --user-data-dir="$PROFILE" --no-first-run \
-      "https://chat.deepseek.com/" >/tmp/dsb-open.log 2>&1
-    sleep 2
-    say 会话页 "已开 chat.deepseek.com（转给在跑的实例）"
-    ;;
-  *) say 会话页 "已有" ;;
-esac
-
-tabs=$(probe '{"action":"tabs.list","params":{},"target":null}')
-# JSON 里冒号后有空格（python 出的），模式必须留空，否则抠出空串 → target="" → tab-gone
-tab_id=$(printf '%s' "$tabs" | sed -n 's/.*"id":[[:space:]]*\([0-9]\{1,\}\).*/\1/p')
-# 抠空了就响着退出：静默的空串会变成 target=""，下游只回 tab-gone，看不出是哪一步坏了
-[ -n "$tab_id" ] || { say 判据3 "从 tabs.list 抠不出标签页 id：$tabs" ; exit 1; }
-case "$tabs" in
-  *'"tabs": []'*) say 判据3 "标签页没出来 → /tmp/dsb-open.log" ; exit 1 ;;
-  *) say 判据3 "有会话标签页 id=${tab_id}，可直接带 target 打动作" ;;
-esac
-
-# 判据4：**能不能开工** —— 写作框在不在；不在的话扩展现在能说清是禁言还是没登录
-state=$(probe "{\"action\":\"page.state\",\"params\":{},\"target\":\"$tab_id\"}")
-case "$state" in
-  *'"composerPresent": true'*) say 判据4 "写作框在，能写能发" ;;
-  *'"kind": "muted"'*)
-    until=$(printf '%s' "$state" | sed -n 's/.*"until": *"\([^"]*\)".*/\1/p')
-    if [ -n "$until" ]; then
-      say 判据4 "**账号禁言至 ${until}** —— 站点不渲染写作框，写动作全部无效"
-    else
-      say 判据4 "**账号禁言**（站点没写解封时刻）—— 写作框不渲染，写动作全部无效"
-    fi
-    say 判据4 "禁言是账号在站点的处罚，不是扩展坏了，也别去修选择器"
-    say 判据4 "读类动作仍可用：messages.* / page.state / composer.read 都通"
-    ;;
-  *'"kind": "signed-out"'*)
-    say 判据4 "**未登录** —— 站点把人导到了登录页"
-    say 判据4 "登录在**独立 profile** 这个窗口里做（跟主浏览器两套登录态）"
-    ;;
-  *'"composerPresent": false'*)
-    say 判据4 "无写作框，扩展也没认出处境（account=unknown）—— 页面结构变了，报给人"
-    say 判据4 "读类动作仍可用，写类一律会失败"
-    ;;
-  *) say 判据4 "读不到页面状态：$state"
-    say 判据4 "若是 disabled —— 总开关关着。判据 4 要读 DOM 就得开它，而开它同时"
-    say 判据4 "会把页面世界的 fetch/XHR 钩子装上（issue #31 那条）。开不开你定。"
-    ;;
-esac
+if [ "$STARTED_BROWSER" = 1 ]; then
+  "$CHROME" --user-data-dir="$PROFILE" --no-first-run \
+    "https://chat.deepseek.com/" >/tmp/dsb-open.log 2>&1
+  sleep 2
+  say 判据3 "已开 chat.deepseek.com（浏览器是本脚本起的，转给在跑的实例）"
+else
+  say 判据3 "浏览器是先起的：有没有会话标签页这里问不到（扩展没有外露探针面）"
+  say 判据3 "要开一个就：open -a Chromium 'https://chat.deepseek.com/'"
+fi
 
 cat <<EOF
 
-  别再用 target:null 打页面动作：
-    page.state / composer.read / messages.* / chat.new 需要 target=标签页 id，
-    先 tabs.list 拿 id。target:null 只有 tabs.list 和 toggle.* 答得出，其余落
-    src/lib/action.ts:172 的 unknown-action——那是探针错了，不是链子坏了。
+  扩展那一半怎么验（本机探不到，看这三处）：
+    1. 图标三态：关 / 绿(可达) / 红(带原因与 uv run dsb 启动命令)；转框 = 调用在途
+    2. 悬停：总开关、账号处境、上次故障（时刻·环节·原因）都在标题里
+    3. 页面控制台 [ds-] 开头的行：认出围栏、协议说明注入、回灌发没发出去
 
   人做的（只第一次，之后永久生效）：
     登录 DeepSeek 与勾「替人开口」都在**独立 profile** 这个窗口里做（跟主浏览器
     两套登录态）。勾「替人开口」那一步故意没有动作口（agent 不能自授发言权，
     围栏别拆）；不勾则 composer.type / send.* 回 disabled，属预期不是故障。
 
-  查某动作为什么失败，两步就够（不用再往产物里塞诊断表）：
+  查某动作为什么失败，两步就够：
     1. page.state 的 account 说清处境 —— muted(带解封时刻) / signed-out / unknown
     2. 失败码本身就说清是哪一步 —— composer-absent(没有写作框) / page-changed
        (页面上找不到认得的东西) / read-failed(读不完) / tab-gone(这一跳走不通)

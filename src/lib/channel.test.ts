@@ -23,11 +23,21 @@ import {
   parseSendRequest,
   parseSendResponse,
   parseChainMessage,
-  questionMessage,
+  parseSaidReport,
+  parseToolsRequest,
+  parseToolsResponse,
+  callMessage,
   resultMessage,
+  saidMessage,
+  saidReportMessage,
+  SAID_MESSAGE_TYPE,
+  TOOLS_REQUEST_MESSAGE_TYPE,
+  toolsMessage,
+  toolsRequestMessage,
+  toolsResponseMessage,
   unreachableResult,
 } from "./channel";
-import type { ActionFrame } from "./actionstream";
+import type { ActionFrame } from "./action";
 import { ACTION_ERROR_COMPOSER_ABSENT, PageError } from "./action";
 import { actionErrorCodes } from "./fixtures";
 
@@ -37,13 +47,13 @@ function requestFor(action: string): unknown {
 }
 
 describe("页面世界 ↔ 隔离世界的信封", () => {
-  it("问题信封原样过", () => {
-    const message = questionMessage("send-1", "仓库结构是什么");
+  it("围栏正文信封原样过", () => {
+    const message = callMessage("send-1", '{"tool":"fs_read_file","arguments":{}}');
     expect(message).toEqual({
       source: CHAIN_MESSAGE_SOURCE,
-      kind: "question",
+      kind: "call",
       id: "send-1",
-      question: "仓库结构是什么",
+      call: '{"tool":"fs_read_file","arguments":{}}',
     });
     expect(parseChainMessage(message)).toEqual(message);
   });
@@ -52,7 +62,7 @@ describe("页面世界 ↔ 隔离世界的信封", () => {
     const message = resultMessage("send-1", { status: "ok", answer: "答复" });
     expect(parseChainMessage(message)).toEqual(message);
 
-    const failed = resultMessage("send-1", { status: "error", error: "opencode-timeout" });
+    const failed = resultMessage("send-1", { status: "error", error: "relay-unreachable" });
     expect(parseChainMessage(failed)).toEqual(failed);
   });
 
@@ -60,23 +70,16 @@ describe("页面世界 ↔ 隔离世界的信封", () => {
     expect(parseChainMessage(undefined)).toBeNull();
     expect(parseChainMessage(null)).toBeNull();
     expect(parseChainMessage("ds-/chain")).toBeNull();
-    expect(
-      parseChainMessage({ source: "page", kind: "question", id: "1", question: "q" }),
-    ).toBeNull();
+    expect(parseChainMessage({ source: "page", kind: "call", id: "1", call: "{}" })).toBeNull();
     expect(parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "ping" })).toBeNull();
     expect(
-      parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "question", id: "", question: "q" }),
+      parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "call", id: "", call: "{}" }),
     ).toBeNull();
     expect(
-      parseChainMessage({
-        source: CHAIN_MESSAGE_SOURCE,
-        kind: "question",
-        id: "send-1",
-        question: "   ",
-      }),
+      parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "call", id: "send-1", call: "   " }),
     ).toBeNull();
     expect(
-      parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "question", id: "send-1" }),
+      parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "call", id: "send-1" }),
     ).toBeNull();
   });
 
@@ -110,20 +113,21 @@ describe("页面世界 ↔ 隔离世界的信封", () => {
 
 describe("隔离世界 ↔ background 的信封", () => {
   it("请求与响应原样过", () => {
-    const request = sendRequestMessage("send-2", "问题");
+    const request = sendRequestMessage("send-2", '{"tool":"ping_now","arguments":{}}');
     expect(parseSendRequest(request)).toEqual(request);
 
     const response = sendResponseMessage("send-2", {
       status: "error",
-      error: "opencode-not-running",
+      error: "relay-unreachable",
     });
     expect(parseSendResponse(response)).toEqual(response);
   });
 
   it("认不出的请求与响应不收", () => {
     expect(parseSendRequest({})).toBeNull();
-    expect(parseSendRequest({ type: "ds-/other", id: "1", question: "q" })).toBeNull();
-    expect(parseSendRequest({ type: "ds-/send", id: "1", question: "" })).toBeNull();
+    expect(parseSendRequest({ type: "ds-/other", id: "1", call: "{}" })).toBeNull();
+    expect(parseSendRequest({ type: "ds-/send", id: "1", call: "" })).toBeNull();
+    expect(parseSendRequest({ type: "ds-/send", id: "1" })).toBeNull();
     expect(parseSendResponse(undefined)).toBeNull();
     expect(parseSendResponse({ id: "1", payload: { status: "error" } })).toBeNull();
     expect(parseSendResponse({ payload: { status: "ok", answer: "a" } })).toBeNull();
@@ -133,6 +137,68 @@ describe("隔离世界 ↔ background 的信封", () => {
     const result = unreachableResult("send-2");
     expect(result.payload).toEqual({ status: "error", error: "relay-unreachable" });
     expect(parseChainMessage(result)).toEqual(result);
+  });
+});
+
+describe("said 上报（围栏之外的话）", () => {
+  it("链消息与 runtime 上报都原样过", () => {
+    const chain = saidMessage("said-1", "先跟人说一句。");
+    expect(chain).toEqual({
+      source: CHAIN_MESSAGE_SOURCE,
+      kind: "said",
+      id: "said-1",
+      text: "先跟人说一句。",
+    });
+    expect(parseChainMessage(chain)).toEqual(chain);
+
+    const report = saidReportMessage("先跟人说一句。");
+    expect(report).toEqual({ type: SAID_MESSAGE_TYPE, text: "先跟人说一句。" });
+    expect(parseSaidReport(report)).toEqual(report);
+  });
+
+  it("空文本 / 错 type 不收", () => {
+    expect(
+      parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "said", id: "1", text: "" }),
+    ).toBeNull();
+    expect(parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "said", id: "1" })).toBeNull();
+    expect(parseSaidReport({ type: SAID_MESSAGE_TYPE, text: "   " })).toBeNull();
+    expect(parseSaidReport({ type: "ds-/other", text: "x" })).toBeNull();
+    expect(parseSaidReport(undefined)).toBeNull();
+  });
+});
+
+describe("工具目录（协议说明照它拼）", () => {
+  const TOOLS = [
+    { name: "fs_read_file", description: "[fs] 读文件内容", params: ["path", "encoding?"] },
+    { name: "shell_run", description: "[sh] 跑命令", params: [] },
+  ];
+
+  it("广播消息原样过", () => {
+    const message = toolsMessage("tools-1", TOOLS);
+    expect(parseChainMessage(message)).toEqual(message);
+  });
+
+  it("请求只认标记，回话带目录或 null（取不到沿用上一份）", () => {
+    expect(parseToolsRequest(toolsRequestMessage())).toEqual(toolsRequestMessage());
+    expect(parseToolsRequest({ type: TOOLS_REQUEST_MESSAGE_TYPE })).toEqual(toolsRequestMessage());
+    expect(parseToolsRequest({ type: "ds-/other" })).toBeNull();
+
+    expect(parseToolsResponse(toolsResponseMessage(TOOLS))).toEqual(toolsResponseMessage(TOOLS));
+    expect(parseToolsResponse(toolsResponseMessage(null))).toEqual(toolsResponseMessage(null));
+    expect(parseToolsResponse({})).toBeNull();
+    expect(parseToolsResponse({ tools: [{ name: "" }] })).toBeNull();
+  });
+
+  it("目录条目缺一项就不收", () => {
+    expect(parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "tools", id: "1" })).toBeNull();
+    expect(
+      parseChainMessage({
+        source: CHAIN_MESSAGE_SOURCE,
+        kind: "tools",
+        id: "1",
+        tools: [{ name: "x", description: "y" }],
+      }),
+    ).toBeNull();
   });
 });
 

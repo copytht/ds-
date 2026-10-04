@@ -1,12 +1,12 @@
 [project]
 name = "dsb"
 version = "0.1.0"
-description = "本机 HTTP 中继：把扩展的问题转给 opencode、把答复转回扩展（不是 MCP 服务）"
+description = "本机 MCP 网关：把配好的 MCP servers 汇总给扩展转调用（被动式接受命令）"
 readme = "README.md"
 authors = [{ name = "as", email = "as@given.su" }]
 requires-python = ">=3.13"
-# 中继只用标准库（http.server + urllib）：opencode 的 HTTP API 由 dsb/client.py 直连，
-# 不引 MCP，也不引任何 TOON 库（编码归扩展）。
+# 网关只用标准库（http.server + subprocess 说 JSON-RPC）：不引 MCP SDK、不引任何
+# TOON 库（编码归扩展），依赖表因此一直是空的。
 dependencies = []
 
 [project.scripts]

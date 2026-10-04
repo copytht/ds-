@@ -1,40 +1,40 @@
 {
-  "description": "围栏对拍：页面 → agent 的 ```send 围栏解析（扩展侧解析，中继只收到已提取的问题正文）。",
+  "description": "围栏对拍：页面 → 本机的 ```send 围栏提取。围栏里装的是工具调用 JSON（扩展提取后再解析成 tool/arguments，围栏解析本身只管取正文）；```ask 是网页向人举手，另走 parseAskFence。",
   "cases": [
     {
       "name": "有效围栏",
-      "input": "先等一下：\n```send\nrepo 里 dsb 的入口在哪？\n```\n然后继续。",
-      "expectedQuestion": "repo 里 dsb 的入口在哪？"
+      "input": "先等一下：\n```send\n{\"tool\": \"fs_read_file\", \"arguments\": {\"path\": \"README.md\"}}\n```\n然后继续。",
+      "expectedCall": "{\"tool\": \"fs_read_file\", \"arguments\": {\"path\": \"README.md\"}}"
     },
     {
-      "name": "多行问题正文",
-      "input": "```send\n第一行问题\n第二行问题\n```",
-      "expectedQuestion": "第一行问题\n第二行问题"
+      "name": "多行工具调用（pretty JSON 也认，解析归上一层）",
+      "input": "```send\n{\n  \"tool\": \"fs_read_file\",\n  \"arguments\": {\n    \"path\": \"README.md\"\n  }\n}\n```",
+      "expectedCall": "{\n  \"tool\": \"fs_read_file\",\n  \"arguments\": {\n    \"path\": \"README.md\"\n  }\n}"
     },
     {
       "name": "普通代码块不算围栏",
       "input": "```py\nprint('hi')\n```",
-      "expectedQuestion": null
+      "expectedCall": null
     },
     {
       "name": "非 send 围栏不认",
       "input": "```note\n随手记\n```",
-      "expectedQuestion": null
+      "expectedCall": null
     },
     {
       "name": "一次排多块只认第一块",
-      "input": "```send\n第一个问题\n```\n中间的话\n```send\n第二个问题\n```",
-      "expectedQuestion": "第一个问题"
+      "input": "```send\n{\"tool\": \"a\", \"arguments\": {}}\n```\n中间的话\n```send\n{\"tool\": \"b\", \"arguments\": {}}\n```",
+      "expectedCall": "{\"tool\": \"a\", \"arguments\": {}}"
     },
     {
       "name": "没有围栏",
       "input": "今天天气不错。",
-      "expectedQuestion": null
+      "expectedCall": null
     },
     {
       "name": "围栏没闭合",
-      "input": "```send\n问题还没写完",
-      "expectedQuestion": null
+      "input": "```send\n{\"tool\": \"a\"",
+      "expectedCall": null
     }
   ]
 }

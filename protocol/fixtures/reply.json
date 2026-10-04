@@ -21,9 +21,9 @@
       "name": "回灌失败载荷",
       "payload": {
         "status": "error",
-        "error": "opencode-not-running"
+        "error": "relay-unreachable"
       },
-      "expectedMessage": "agent:\nstatus: error\nerror: opencode-not-running"
+      "expectedMessage": "agent:\nstatus: error\nerror: relay-unreachable"
     }
   ]
 }

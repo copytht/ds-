@@ -1,12 +1,12 @@
 /**
- * 工具栏图标即状态位（spec #9 配置与 UI）：三态 —— 关 / 开且中继可达 / 开但中继不可达。
+ * 工具栏图标即状态位：三态 —— 关 / 开且中继可达 / 开但中继不可达。
  *
  * 图标由纯函数现画像素（不带图片资源），悬停文案由纯函数现拼，
  * 所以三态长什么样、悬停说不说得出原因与启动命令，都能被单测断言。
  * background 只负责把结果交给 `browser.action`，并把点击接到总开关上。
  */
 
-import { FAILURE_RELAY_UNREACHABLE, type SendPhase, type SendStatus } from "./relay";
+import { FAILURE_RELAY_UNREACHABLE } from "./relay";
 import { failureNotice, RELAY_START_COMMAND, type FailureNotice } from "./reply";
 import { ASK_BADGE_TEXT } from "./ask";
 import type { AccountState } from "./page";
@@ -32,7 +32,7 @@ const GLYPHS: Readonly<Record<IconState, readonly string[]>> = {
   "on-unreachable": ["..###..", "..###..", "..###..", "..###..", ".......", "..###..", "......."],
 };
 
-/** 角标转速帧（#28）：问句在途时按这个顺序循环转，读法同 `scripts/watch-status.py`。 */
+/** 角标转速帧：工具调用在途时按这个顺序循环转。 */
 export const SPIN_FRAMES = ["|", "/", "-", "\\"] as const;
 
 /**
@@ -46,51 +46,27 @@ export function spinFrame(tick: number): string {
 
 const CLICK_HINT = "点击打开开关面板。";
 
-/** 等待期各阶段的一句话：角标只取头一个字，悬停说全。 */
-function phaseText(phase: SendPhase): string {
-  if (phase === "queued") return "子会话已送出，等模型开工";
-  if (phase === "running") return "模型在想";
-  if (phase === "writing") return "正在写答复";
-  return "答复已写完";
-}
-
-/**
- * 等待现场的一句话：走到哪一步、写了多少字、静默窗口还剩多久。
- *
- * 只出现在悬停里（进度不上对话流），所以怎么措辞都归这儿管；
- * 剩余时间是负数或缺着就干脆不提——报一个错的数比不报更糟。
- */
-export function describeSend(progress: SendStatus): string {
-  const bits = [phaseText(progress.phase)];
-  if (progress.phase === "writing" && progress.written > 0) {
-    bits.push(`已写 ${progress.written} 字`);
-  }
-  const remaining = progress.remaining;
-  if (remaining !== null && remaining > 0) bits.push(`还剩 ${Math.ceil(remaining)} 秒`);
-  return bits.join("，");
-}
-
 /**
  * 角标文字。
  *
  * 关与不可达是**硬状态**，压过一切：像素图标万一画不出来，角标要独自把三态撑住，
- * 所以前两个分支绝不能被等待中的阶段盖掉。开着且可达时，才轮到「等人回」与等待
- * 现场；等人回压过在途进度——进度是暂时的，人等着是定住的，不看到「人」就没人回。
+ * 所以前两个分支绝不能被在途转框盖掉。开着且可达时，才轮到「等人回」与
+ * 调用在途；等人回压过在途——进度是暂时的，人等着是定住的，不看到「人」就没人回。
  *
- * 问句在途时（给了转速帧）角标转起来；没传帧的调用方仍拿到阶段字作回退。
+ * 工具调用在途时（给了转速帧）角标转起来；没传帧的调用方仍拿「调」字作回退。
  */
 export function badgeText(
   state: IconState,
-  progress?: SendStatus | null,
+  inFlight = false,
   pendingAsk = false,
   spin?: number,
 ): string {
   if (state === "off") return "关";
   if (state === "on-unreachable") return "!";
   if (pendingAsk) return ASK_BADGE_TEXT;
-  if (!progress || progress.phase === "done") return "";
+  if (!inFlight) return "";
   if (spin !== undefined) return spinFrame(spin);
-  return { queued: "等", running: "想", writing: "写" }[progress.phase];
+  return "调";
 }
 
 /**
@@ -109,6 +85,9 @@ export function describeAccount(account: AccountState): string {
 /**
  * 悬停文案：关与可达各自一句话，不可达必须带上原因与启动命令。
  *
+ * 第三个参数是**调用在途**：开着且可达时，悬停说一句「工具调用在途」，
+ * 让用户知道角标为什么在转（进度不上对话流）。
+ *
  * 第四个参数是**上次故障的一句话**（`describeLastFailure` 产出）：红过又自己绿了之后，
  * 原因就不再写在标题里了，只有把历史摆出来，「为什么红过」才查得到。当前正红着时
  * 不摆——那时候第一句就是原因，重复一遍只是噪音。
@@ -122,14 +101,14 @@ export function describeAccount(account: AccountState): string {
 export function iconTitle(
   state: IconState,
   notice?: FailureNotice | null,
-  progress?: SendStatus | null,
+  inFlight = false,
   lastFailure?: string | null,
   pendingAsk?: string | null,
   account: AccountState | null = null,
 ): string {
   if (state === "off") return `ds-：总开关已关，扩展没有接管页面。${CLICK_HINT}`;
-  // 等待现场与等人回只在「开着且可达」时才有意义：不可达时手里那份进度已经作废了。
-  const waiting = state === "on-reachable" && progress ? `${describeSend(progress)}。` : "";
+  // 在途与等人回只在「开着且可达」时才有意义：不可达时手里没有正经在途的东西。
+  const waiting = state === "on-reachable" && inFlight ? "工具调用在途。" : "";
   const ask = state === "on-reachable" && pendingAsk ? `${pendingAsk}。` : "";
   const accountLine =
     state === "on-reachable" && account !== null && account.kind !== "ready"
@@ -150,7 +129,7 @@ export function iconTitle(
 }
 
 /**
- * 一次周期探活（`GET /health`）之后的状态位：总开关关着就原样不动，
+ * 一次周期探活（JSON-RPC `ping`）之后的状态位：总开关关着就原样不动，
  * 可达就把原因清掉，不可达才挂上原因与启动命令。
  *
  * 探测结果 → 状态的映射放这儿，是为了让「图标该不该翻脸」可被单测断言；

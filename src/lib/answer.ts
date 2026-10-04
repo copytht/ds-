@@ -1,9 +1,10 @@
 /**
  * 检测点：模型回答里的协议围栏（回灌链的第一环）。```send 是页面 →
- * agent 的线协议；```ask（#26）是页面向人举手，认出后不转给中继。
+ * 扩展的线协议，围栏里装一段工具调用 JSON，扩展经本机网关转给 MCP servers；
+ * ```ask（#26）是页面向人举手，认出后不转给网关。
  *
  * 取回答的地方固定是「发消息那条出站的响应体」——模型的回答只有这一个来源，
- * 用户自己在页面里敲的围栏在请求侧，进不到这里（spec #9 user story 9）。
+ * 用户自己在页面里敲的围栏在请求侧，进不到这里。
  *
  * 响应可能是流式（一行一个 `data:` 载荷）也可能是整块 JSON，两条形状都先还原成
  * 回答正文，再交给 `parseSendFence`；围栏怎么切只有一条路径，这里不自己再切一遍。
@@ -253,12 +254,12 @@ function detectFence(
   return parse(cutFencedBlock(restored.slice(start), opening));
 }
 
-/** 响应原文 → send 围栏里的问题（转给中继的那条）。 */
-export function detectSendQuestion(raw: string): string | null {
+/** 响应原文 → send 围栏里的正文（一段工具调用 JSON，转给网关的那条）。 */
+export function detectToolCall(raw: string): string | null {
   return detectFence(raw, SEND_FENCE_OPENING, parseSendFence);
 }
 
-/** 响应原文 → ask 围栏里的问题（网页向人举手，不转给中继）。 */
+/** 响应原文 → ask 围栏里的问题（网页向人举手，不转给网关）。 */
 export function detectAskQuestion(raw: string): string | null {
   return detectFence(raw, ASK_FENCE_OPENING, parseAskFence);
 }

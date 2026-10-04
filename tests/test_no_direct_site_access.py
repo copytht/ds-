@@ -17,11 +17,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-#: 要体检的源码面；构建产物（.output/）、vendor/、node_modules/ 不算代码。
-SCANNED = ("src", "entrypoints", "native", "dsb", "wxt.config.ts")
+#: 要体检的源码面；构建产物（.output/）不算代码。
+SCANNED = ("src", "entrypoints", "dsb", "wxt.config.ts")
 
 #: 站点地址只许活在这几处：manifest 钉权限、两个内容脚本钉 matches、两个常量认标签页。
-#: 本机这两半（dsb/、native/）不在册——中继与宿主必须对站点全盲。
+#: 本机这半（dsb/）不在册——网关必须对站点全盲。
 SITE_ADDRESS_ALLOWED = frozenset(
     {
         "wxt.config.ts",
@@ -99,7 +99,7 @@ def test_host_permissions_are_the_site_and_this_machine_only() -> None:
 def test_the_site_address_only_lives_in_a_handful_of_known_places() -> None:
     """站点地址只许在钉权限、钉 matches、认标签页那几处出现。
 
-    这条同时把本机两半钉死：dsb/ 与 native/ 不在册，它们一旦提到站点当场红。
+    这条同时把本机这半钉死：dsb/ 不在册，它一旦提到站点当场红。
     """
     seen = {name for name, text in _sources().items() if SITE_API.search(text)}
     assert seen <= SITE_ADDRESS_ALLOWED, sorted(seen - SITE_ADDRESS_ALLOWED)

@@ -4,9 +4,9 @@ import { fixtureCases, type FenceCase } from "./fixtures";
 import { parseAskFence, parseSendFence } from "./fence";
 
 describe("parseSendFence · 共享 fixture", () => {
-  for (const { name, input, expectedQuestion } of fixtureCases<FenceCase>("fence.json")) {
+  for (const { name, input, expectedCall } of fixtureCases<FenceCase>("fence.json")) {
     it(name, () => {
-      expect(parseSendFence(input)).toBe(expectedQuestion);
+      expect(parseSendFence(input)).toBe(expectedCall);
     });
   }
 });

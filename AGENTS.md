@@ -23,8 +23,8 @@
 
 ## 环境准备
 
-**跑 `scripts/env-up.sh`**，别现拼命令：它起缺的、**活的一律不重启**，末尾三条判据（中继健康 /
-动作流有订阅者 / 有无会话标签页）。幂等，随时可重跑。
+**跑 `scripts/env-up.sh`**，别现拼命令：它起缺的、**活的一律不重启**，末尾三条判据（中继 ping 健康 /
+`tools/list` 取得到工具表 / 会话标签页——浏览器是它刚起的才代开）。幂等，随时可重跑。
 
 **动作探针别拿 `target: null` 打页面动作**：`page.state` / `composer.read` / `messages.*` /
 `chat.new` 要先 `tabs.list` 拿标签页 id 再带上。`target: null` 只有 `tabs.list` 与 `toggle.*`

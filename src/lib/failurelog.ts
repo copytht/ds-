@@ -15,7 +15,7 @@ export const FAILURE_LOG_STORAGE_KEY = "ds-/failures";
 export const FAILURE_LOG_CAP = 20;
 
 /** 失败发生在哪一环——排查方向完全不同，所以必须留。 */
-export type FailureWhere = "health" | "status" | "send" | "watchdog";
+export type FailureWhere = "health" | "call" | "watchdog";
 
 export type FailureRecord = {
   /** 故障**开始**的时刻（同一次故障的延续不另起一条）。 */
@@ -29,8 +29,7 @@ export type FailureRecord = {
 
 const WHERE_LABELS: Readonly<Record<FailureWhere, string>> = {
   health: "周期探活",
-  status: "等待期问现场",
-  send: "问句",
+  call: "工具调用",
   watchdog: "看门狗",
 };
 
@@ -45,7 +44,7 @@ function isFailureWhere(value: unknown): value is FailureWhere {
 /**
  * `storage.local` 里那份 → 记录数组。
  *
- * 存储是外部输入，跟 `parseStatusResponse` 一个脾气：长得不对的一条条丢掉，
+ * 存储是外部输入，跟中继那批响应一个脾气：长得不对的一条条丢掉，
  * 不猜也不补——宁可少一条历史，也不要一条会误导的。
  */
 export function readFailureLog(raw: unknown): FailureRecord[] {

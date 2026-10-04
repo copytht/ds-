@@ -3,20 +3,22 @@ import { defineBackground } from "wxt/utils/define-background";
 
 import {
   isDeepSeekUrl,
-  postActionResult,
   runAction,
   sendMessageSendToTab,
   type ActionContext,
+  type ActionFrame,
 } from "../src/lib/action";
 import { readBackoff, BACKOFF_STORAGE_KEY } from "../src/lib/backoff";
-import { createActionStream, type ActionFrame } from "../src/lib/actionstream";
 import {
   actionRequestMessage,
   parseAccountReport,
   parseAskClearedReport,
   parseAskReport,
   parseSendRequest,
+  parseSaidReport,
+  parseToolsRequest,
   sendResponseMessage,
+  toolsResponseMessage,
   type AccountReport,
   type AskClearedReport,
   type AskReport,
@@ -43,30 +45,30 @@ import { nextMessageId } from "../src/lib/id";
 import type { AccountState } from "../src/lib/page";
 import {
   FAILURE_RELAY_UNREACHABLE,
-  FAILURE_UNEXPECTED_RESPONSE,
+  MALFORMED_CALL_HINT,
+  MCP_CALL_TIMEOUT_MS,
+  MCP_LIST_TIMEOUT_MS,
+  MCP_PING_TIMEOUT_MS,
+  callToolBody,
+  describeBadResponse,
   describeFetchFailure,
-  describeStatusFailure,
-  parseRelayResponse,
-  parseStatusResponse,
-  relaySendBody,
-  relaySendUrl,
-  relayHealthUrl,
-  relayStatusUrl,
-  RELAY_HEALTH_TIMEOUT_MS,
-  RELAY_POLL_TIMEOUT_MS,
-  RELAY_STATUS_POLL_INTERVAL_MS,
-  RELAY_STATUS_TIMEOUT_MS,
-  RELAY_TIMEOUT_MS,
-  type SendStatus,
-  type RelaySendPoll,
-  type StatusSnapshot,
+  listToolsBody,
+  parseMcpPing,
+  parseMcpResponse,
+  parseToolCall,
+  parseToolsList,
+  pingBody,
+  relayMcpUrl,
+  type ToolInfo,
 } from "../src/lib/relay";
 import {
   errorPayload,
   failureNotice,
+  okPayload,
   type FailureNotice,
   type ReplyPayload,
 } from "../src/lib/reply";
+import { SAID_ADD_TOOL } from "../src/lib/said";
 import { readSpeak, readToggle, SPEAK_STORAGE_KEY, TOGGLE_STORAGE_KEY } from "../src/lib/toggle";
 import {
   ASKS_STORAGE_KEY,
@@ -87,17 +89,20 @@ import {
 } from "../src/lib/watchdog";
 
 /**
- * background 这一侧干三件事：
+ * background 这一侧干这几件事：
  *
- * 1. 打中继（`POST /send`）——网络层的失败也折成同构载荷，解析只有一条路径；
+ * 1. 打中继（`POST /mcp`，JSON-RPC 2.0）——探活是 `ping`，干活是 `tools/call`，
+ *    一次 fetch 打到底（超时见 `MCP_*_TIMEOUT_MS`）；网络层的失败也折成同构载荷，
+ *    解析只有一条路径；
  * 2. 工具栏图标即状态位：关 / 开且中继可达 / 开但中继不可达，悬停给原因与启动命令；
+ *    工具调用在途时角标转起来（进度不上对话流）；
  * 3. 点图标开开关面板（popup）——总开关在面板里改，本身还是只存在
  *    `storage.local`，默认关；
- * 4. 问句在途时轮询 `GET /status`，把等待现场（阶段 / 字数 / 剩余时间）摆上角标与悬停，
- *    中继答不上来当场翻红——进度只走图标，**不进对话流**；
- * 5. 每次翻红都留一笔（时刻 / 环节 / 原因）进 `storage.local`，自己绿了再补上恢复时刻，
- *    悬停回看——否则红过就蒸发，事后没人答得出「为什么红」。
+ * 4. 每次翻红都留一笔（时刻 / 环节 / 原因）进 `storage.local`，自己绿了再补上恢复时刻，
+ *    悬停回看——否则红过就蒸发，事后没人答不出「为什么红」。
  *
+ * 两条通知式的小路也在这一层：`said_add`（围栏之外的话报给协调者，报不上不碍事）与
+ * `tools/list`（工具目录，协议说明照它拼，60s 由隔离世界来取一次）。
  * 不建面板；popup 只放总开关（#28），选项页管「代你发言」闸。
  */
 export default defineBackground(() => {
@@ -105,28 +110,22 @@ export default defineBackground(() => {
   const HEALTH_ALARM_NAME = "relay-health";
   const HEALTH_ALARM_PERIOD_MINUTES = 0.5;
 
-  /** 订阅期间的保活间隔：MV3 的 service worker 空闲约 30s 就被收走，挂着的流也跟着没。 */
-  const KEEPALIVE_INTERVAL_MS = 20_000;
-
   /** 角标转速帧的间隔（#28）：够看出在转，又不狂刷。 */
   const SPIN_INTERVAL_MS = 250;
 
   /**
-   * 一趟轮询没打上时，最多重试几次、每次隔多久。
-   *
-   * 答复算好后留在中继手里（同一个轮询 id 随时能取），所以「一趟失败就整趟放弃」纯属白扔；
-   * 真机上那正是「页面以为没问成、反复重发同一块」的来源。20 次 × 1s ≈ 20s 的容错。
+   * 工具目录的保鲜期：隔离世界 60s 才来取一次，这里缓着省一趟 `tools/list`；
+   * 过期才重取，取坏的沿用上一份（不拿坏数据换）。
    */
-  const MAX_POLL_MISSES = 20;
-  const POLL_RETRY_DELAY_MS = 1_000;
+  const TOOLS_CACHE_TTL_MS = 60_000;
 
   /** 图标三态。 */
   let state: IconState = "off";
   /** 不可达时的原因与启动命令，进悬停文案。 */
   let notice: FailureNotice | null = null;
-  /** 问句在途时的现场（阶段/字数/剩余时间），由 `/status` 轮询喂；空档恒为 null。 */
-  let sendProgress: SendStatus | null = null;
-  /** 角标转速（#28）：在途期间 250ms 一帧，问完即停；timer 只在在途时排。 */
+  /** 工具调用在途（一次 `tools/call` 出门到回话）：角标转速与悬停靠它。 */
+  let inFlight = false;
+  /** 角标转速（#28）：在途期间 250ms 一帧，回话即停；timer 只在在途时排。 */
   let spinTick = 0;
   let spinTimer: ReturnType<typeof setInterval> | undefined;
   /**
@@ -145,7 +144,7 @@ export default defineBackground(() => {
    * service worker 一收走就没人知道网页在等谁。
    */
   let pendingAsks: PendingAsks = {};
-  /** 往 storage 写留痕的串行队列：轮询每 3s 失败一次，并发的读改写会互相踩。 */
+  /** 往 storage 写留痕的串行队列：探活每 30s 失败一次，并发的读改写会互相踩。 */
   let persistQueue: Promise<unknown> = Promise.resolve();
   /** 往 storage 写「等人回」分表的串行队列：并发上报的读改写会互相踩。 */
   let persistAsksQueue: Promise<unknown> = Promise.resolve();
@@ -191,7 +190,7 @@ export default defineBackground(() => {
 
   /**
    * 记一笔故障。同一环节同一原因、且上一笔还没恢复的**不重复记**——那只是同一次
-   * 故障在延续（探活每 30s、轮询每 3s 会再失败一次），留下的是故障开始的时刻。
+   * 故障在延续（探活每 30s 会再失败一次），留下的是故障开始的时刻。
    */
   function recordFailure(where: FailureWhere, cause: string): void {
     const next = rememberFailure(failureLog, { at: Date.now(), where, cause });
@@ -217,13 +216,12 @@ export default defineBackground(() => {
    * 上图标：先拼悬停文案，再画像素；像素画不出来就退回角标，三态至少还分得开。
    *
    * 角标每次上屏都写一遍——它不再只是「画不出来时的兜底」：开着且可达时还背着
-   * 等待现场（等 / 想 / 写），这是「等着的时候什么都不知道」那个缺口的出口。
+   * 调用在途的转框，这是「等着的时候什么都不知道」那个缺口的出口。
    */
   async function paintIcon(): Promise<void> {
     // 角标转速（#28）：在途期间才转。paintIcon 是所有状态变化的漏斗，
     // 排/清都在这儿，转速的生死不用每个调用点各自管。
-    const spinInFlight =
-      state === "on-reachable" && sendProgress !== null && sendProgress.phase !== "done";
+    const spinInFlight = state === "on-reachable" && inFlight;
     if (spinInFlight) {
       spinTimer ??= setInterval(() => {
         spinTick += 1;
@@ -238,14 +236,14 @@ export default defineBackground(() => {
       title: iconTitle(
         state,
         notice,
-        sendProgress,
+        inFlight,
         describeLastFailure(failureLog, Date.now()),
         describePendingAsks(pendingAsks),
         account,
       ),
     });
     await browser.action.setBadgeText({
-      text: badgeText(state, sendProgress, hasPendingAsk(pendingAsks), spinTick),
+      text: badgeText(state, inFlight, hasPendingAsk(pendingAsks), spinTick),
     });
     try {
       await browser.action.setIcon({
@@ -258,12 +256,20 @@ export default defineBackground(() => {
     }
   }
 
+  /** 在途开关：一进门、一收摊各拨一次，转框跟着走（每次上屏都会重排转速）。 */
+  function setInFlight(next: boolean): void {
+    if (inFlight === next) return;
+    inFlight = next;
+    void paintIcon();
+  }
+
   /**
-   * 中继的结果 → 图标状态：成功即可达，失败把原因放进失败提示（扩展侧唯一出口）。
-   * 成功顺手把留痕收尾，失败另记一笔——问句这一环跟探活不一样，它带的是中继自己
-   * 的错误码（opencode 没起 / 超时 / 响应异常），比「中继不可达」有信息量得多。
+   * 中继的回话 → 图标状态：有回话即可达，没有回话把原因放进失败提示（扩展侧唯一出口）。
+   *
+   * 成功顺手把留痕收尾，失败另记一笔——工具调用这一环跟探活不一样，`cause` 带的是
+   * 具体事实（超时多少毫秒、HTTP 几、响应多少字），比「中继不可达」有信息量得多。
    */
-  function applyOutcome(payload: ReplyPayload): void {
+  function applyOutcome(payload: ReplyPayload, cause: string | null = null): void {
     if (state === "off") return;
     if (payload.status === "ok") {
       state = "on-reachable";
@@ -272,8 +278,8 @@ export default defineBackground(() => {
     } else {
       state = "on-unreachable";
       notice = failureNotice(payload.error);
-      recordFailure("send", notice.reason);
-      console.log(`[ds-] 问句没成（${payload.error}），已记一笔：${notice.reason}`);
+      recordFailure("call", cause ?? notice.reason);
+      console.log(`[ds-] 工具调用没成（${payload.error}），已记一笔：${cause ?? notice.reason}`);
     }
     void paintIcon();
   }
@@ -293,98 +299,31 @@ export default defineBackground(() => {
   }
 
   /**
-   * 探活：开关打开时先看中继在不在（`GET /health`）。
+   * 探活：开关打开时先看中继在不在（JSON-RPC `ping`）。
    *
    * 顺带把**为什么**不可达带回来。以前这里是 `catch { return false }`，超时、连不上、
-   * 非 2xx 三件事被折成同一件，图标一红就再没有下文了。
+   * 认不出三件事被折成同一件，图标一红就再没有下文了。
    */
   async function pingRelay(): Promise<{ reachable: boolean; cause: string | null }> {
+    const id = nextMessageId("ping");
     try {
-      const response = await fetchWithTimeout(relayHealthUrl(), RELAY_HEALTH_TIMEOUT_MS);
-      if (!response.ok) return { reachable: false, cause: `HTTP ${response.status}` };
-      return { reachable: true, cause: null };
-    } catch (error) {
-      return { reachable: false, cause: describeFetchFailure(error, RELAY_HEALTH_TIMEOUT_MS) };
-    }
-  }
-
-  /**
-   * 问一次现场：读不到体面的答案一律当「这条不可信」，不猜；同样把读不到的原因带回来。
-   */
-  async function readStatus(): Promise<{ snapshot: StatusSnapshot; cause: string | null }> {
-    try {
-      const response = await fetchWithTimeout(relayStatusUrl(), RELAY_STATUS_TIMEOUT_MS);
+      const response = await fetchWithTimeout(relayMcpUrl(), MCP_PING_TIMEOUT_MS, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: pingBody(id),
+      });
       const text = await response.text();
-      const snapshot = parseStatusResponse(response.status, text);
-      return {
-        snapshot,
-        cause: snapshot.reachable ? null : describeStatusFailure(response.status, text),
-      };
+      return parseMcpPing(response.status, text, id)
+        ? { reachable: true, cause: null }
+        : { reachable: false, cause: describeBadResponse(response.status, text) };
     } catch (error) {
-      return {
-        snapshot: { reachable: false, send: null },
-        cause: describeFetchFailure(error, RELAY_STATUS_TIMEOUT_MS),
-      };
+      return { reachable: false, cause: describeFetchFailure(error, MCP_PING_TIMEOUT_MS) };
     }
-  }
-
-  /**
-   * 现场快照 → 图标。不可达就翻红挂原因；达就先把状态拨回可达，再把等待现场摆上去。
-   *
-   * 每回都重画是故意的：现场的价值就在「每 3s 变一次」（字数在涨、预算在走），
-   * 去重反而把它省没了；真正贵的那条 30s 探活另有 `healthProbe` 自己的去重。
-   */
-  function applyStatus(snapshot: StatusSnapshot, cause: string | null): void {
-    if (state === "off") return;
-    if (!snapshot.reachable) {
-      state = "on-unreachable";
-      notice = failureNotice(FAILURE_RELAY_UNREACHABLE);
-      sendProgress = null; // 手里那份进度已经作废，留着只会误导
-      recordFailure("status", cause ?? "读不到现场");
-      console.log(`[ds-] 等待期问现场没答上来（${cause ?? "读不到现场"}），图标翻红`);
-      void paintIcon();
-      return;
-    }
-    if (state === "on-unreachable") {
-      state = "on-reachable";
-      notice = null;
-      recoverFailure();
-    }
-    sendProgress = snapshot.send;
-    void paintIcon();
-  }
-
-  /**
-   * 等待期的现场轮询：每 3s 打一次 `GET /status`，把中继看到的阶段 / 字数 / 剩余时间
-   * 摆到角标与悬停上。
-   *
-   * 「中继死了要多快发现」不需要另外立一条静默判死的规矩——每次轮询自带 5s 超时，
-   * 问不到当场就红（最坏 8s），比攒到 30s 快得多。用 setTimeout 串成链，避免
-   * 上一趟还没回来下一趟又压上去。
-   */
-  function startStatusPolling(): () => void {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    async function tick(): Promise<void> {
-      if (stopped) return;
-      const result = await readStatus();
-      if (stopped) return;
-      applyStatus(result.snapshot, result.cause);
-      if (stopped) return;
-      timer = setTimeout(() => void tick(), RELAY_STATUS_POLL_INTERVAL_MS);
-    }
-
-    void tick();
-    return () => {
-      stopped = true;
-      if (timer !== undefined) clearTimeout(timer);
-    };
   }
 
   /**
    * 周期探活的排班：开着才排、关了就撤——总开关关着时扩展不该每 30s 白被叫醒一次。
-   * 这条只管「中继还在不在」；问句在途时的存活另有 keepAliveWhileSending 兜着。
+   * 这条只管「中继还在不在」；工具调用在途时的存活另有 keepAliveWhileSending 兜着。
    */
   async function syncHealthAlarm(enabled: boolean): Promise<void> {
     if (enabled) {
@@ -397,7 +336,7 @@ export default defineBackground(() => {
   }
 
   /**
-   * 到点探一次：中继死了图标当场翻脸，不必等下一次问句失败才暴露。
+   * 到点探一次：中继死了图标当场翻脸，不必等下一次工具调用失败才暴露。
    * 状态没变就不重画——每 30s 一次，重画是白做的功。
    */
   async function healthProbe(): Promise<void> {
@@ -428,8 +367,9 @@ export default defineBackground(() => {
   });
 
   /**
-   * MV3 的 service worker 闲置 30 秒就会被收走，而中继这一趟可能更久；
-   * 答复在途时点一下扩展 API 把它按住，不改任何业务行为。
+   * MV3 的 service worker 闲置 30 秒就会被收走，而工具调用这一趟可能更久
+   * （`MCP_CALL_TIMEOUT_MS` 是 130s）；在途时点一下扩展 API 把它按住，
+   * 不改任何业务行为。
    */
   function keepAliveWhileSending(): () => void {
     const timer = setInterval(() => {
@@ -439,7 +379,7 @@ export default defineBackground(() => {
   }
 
   /**
-   * 围栏（页面模型排出 send 围栏、问句送进隔离世界）或回灌
+   * 围栏（页面模型排出 send 围栏、围栏正文送进隔离世界）或回灌
    * （答复送回内容脚本）落地：这是一条动静，刷新标签页的
    * 动静时刻——连催计数与停手随之清零。
    */
@@ -449,8 +389,8 @@ export default defineBackground(() => {
   }
 
   /**
-   * 催办投递：固定正文打进取页作框并发送。两步都走与动作流
-   * 同一套执行门（`runAction`）——总开关 / 替人发言 / 退避
+   * 催办投递：固定正文打进取页作框并发送。两步都走同一套执行门
+   * （`runAction`）——总开关 / 替人发言 / 退避
    * 三道闸照样拦，拦着就回 false（不算催，下扫再试）；前半句
    * 没成就不发后半句，免得空消息上屏。
    */
@@ -527,101 +467,100 @@ export default defineBackground(() => {
   }
 
   /**
-   * 打中继：网络层的失败（没起、被拦、超时）也折成同构载荷。
+   * 打中继：一段围栏正文 → 一次 `tools/call`，一次 fetch 打到底。
    *
-   * 在途期间另开一条 `/status` 轮询，让等待期不再是黑箱；收摊时无论成败都先把
-   * 现场清掉，再由调用方上屏，免得答案都回来了角标还挂着个「写」。
-   */
-  /**
-   * 打中继：一趟长问句拆成几趟**短 fetch**（带同一个 id 轮询），每趟最多挂
-   * `RELAY_POLL_TIMEOUT_MS`。
+   * 不轮询、不重试：dsb 是本机服务，答不上来是「连不上 / 认不出」这两件有信息量的事，
+   * 中间态不存在；正在跑的调用也不该再发第二个请求去问它（同一 id 只起一份活，
+   * 但扩展先 abort 报出来的只会是没信息量的「中继不可达」，还会白扔一次调用）。
    *
-   * 不这么做的话：一条 fetch 挂十分钟，MV3 的 service worker 半路被浏览器收走，连接断掉、
-   * 答复丢掉（真机撞过两次），页面永远等不到回灌、整条链就静默停摆。轮询的每一趟都是短的，
-   * 后台线程一直有事做；结果留在中继手里，掉线也能再取。
+   * 在途期间另开保活（`keepAliveWhileSending`），收摊时无论成败都先下在途标记，
+   * 再由调用方上屏，免得答案都回来了角标还挂着转框。
    */
-  async function sendRelay(question: string, page: string | null = null): Promise<ReplyPayload> {
+  async function sendCall(call: string): Promise<ReplyPayload> {
+    const toolCall = parseToolCall(call);
+    // 排坏了不出门：没问过网关，图标状态别动，把改法回灌给模型自己改。
+    if (toolCall === null) return okPayload(MALFORMED_CALL_HINT);
+
     const releaseKeepAlive = keepAliveWhileSending();
-    const stopStatusPolling = startStatusPolling();
-    // 轮询 id 必须**跨 SW 重载唯一**：中继按 id 缓存结果（同一 id 只起一份活），
-    // 而 nextMessageId 的计数器在 service worker 重启后从 0 重来——再用 `poll-1`
-    // 就会把上一轮的缓存结果当成这一轮的答复送回来（真机撞过：连发不同指令、回灌永远是同一条）。
-    const id = `poll-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-    const deadline = Date.now() + RELAY_TIMEOUT_MS;
-    let misses = 0;
+    const id = nextMessageId("call");
+    setInFlight(true);
     try {
-      for (;;) {
-        let outcome: RelaySendPoll;
-        try {
-          const response = await fetchWithTimeout(relaySendUrl(), RELAY_POLL_TIMEOUT_MS, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: relaySendBody(question, id, page),
-          });
-          try {
-            outcome = parseRelayResponse(response.status, await response.text());
-          } catch {
-            return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
-          }
-          misses = 0;
-        } catch {
-          // 一趟没打上（中继短暂抽风、或 SW 刚被唤醒）：**带同一个 id 重试**。
-          // 答复已经算好、留在中继手里，一趟失败就整趟放弃等于白扔一次调用
-          // ——真机上这就是「页面以为没问成、反复重发」的来源。
-          misses += 1;
-          if (misses >= MAX_POLL_MISSES) return errorPayload(FAILURE_RELAY_UNREACHABLE);
-          await new Promise((resolve) => setTimeout(resolve, POLL_RETRY_DELAY_MS));
-          continue;
-        }
-        if (outcome.status !== "pending") return outcome;
-        if (Date.now() >= deadline) return errorPayload(FAILURE_RELAY_UNREACHABLE);
-      }
+      const response = await fetchWithTimeout(relayMcpUrl(), MCP_CALL_TIMEOUT_MS, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: callToolBody(id, toolCall.tool, toolCall.arguments),
+      });
+      const text = await response.text();
+      const payload = parseMcpResponse(response.status, text, id);
+      applyOutcome(
+        payload,
+        payload.status === "error" ? describeBadResponse(response.status, text) : null,
+      );
+      return payload;
+    } catch (error) {
+      const cause = describeFetchFailure(error, MCP_CALL_TIMEOUT_MS);
+      console.log(`[ds-] 工具调用没连上（${cause}）`);
+      const failure = errorPayload(FAILURE_RELAY_UNREACHABLE);
+      applyOutcome(failure, cause);
+      return failure;
     } finally {
-      stopStatusPolling();
-      sendProgress = null;
+      setInFlight(false);
       releaseKeepAlive();
     }
   }
 
   /**
-   * 动作流（ADR-0007）：总开关开着才订 `GET /actions`，关了当场断——关着时通道不活着，
-   * 和「站点范围钉死」同一条思路。中继侧另有 `disabled`，执行前这边再读一次开关。
+   * 工具目录：先看保鲜期内的缓存，过期才打 `tools/list`。
    *
-   * 断线重连在 `actionStream` 里自己排（开着才排），这里只管开关与保活：
-   * 保活是个定闹钟的空转调用（同 `keepAliveWhileSending`），只为了别让 SW 30s 被收走。
+   * 取坏的**沿用上一份**（不拿坏数据换）；一份都没有就是 null——隔离世界拿不到
+   * 也就不会广播，页面世界继续说「工具表暂未取到」。
+   * `said_*` 是自家工具（记话/读话，协调者用的），不进模型的目录。
    */
-  const actionStream = createActionStream({
-    open: async (url, signal) => {
-      const response = await fetch(url, { signal });
-      if (!response.ok || response.body === null) {
-        throw new Error(`动作流没接上（HTTP ${response.status}）`);
-      }
-      return response.body;
-    },
-    onFrame: (frame) => {
-      void handleAction(frame);
-    },
-  });
-
-  let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
+  let toolsCache: { at: number; tools: readonly ToolInfo[] } | null = null;
+  async function serveTools(): Promise<readonly ToolInfo[] | null> {
+    if (toolsCache !== null && Date.now() - toolsCache.at < TOOLS_CACHE_TTL_MS) {
+      return toolsCache.tools;
+    }
+    const id = nextMessageId("tools");
+    try {
+      const response = await fetchWithTimeout(relayMcpUrl(), MCP_LIST_TIMEOUT_MS, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: listToolsBody(id),
+      });
+      const tools = parseToolsList(response.status, await response.text(), id);
+      if (tools === null) return toolsCache?.tools ?? null;
+      const visible = tools.filter((tool) => !tool.name.startsWith("said_"));
+      toolsCache = { at: Date.now(), tools: visible };
+      return visible;
+    } catch (error) {
+      console.log("[ds-] 工具表没取到", describeFetchFailure(error, MCP_LIST_TIMEOUT_MS));
+      return toolsCache?.tools ?? null;
+    }
+  }
 
   /**
-   * 动作流**常开**：总开关关掉之后，扩展还得能收 `toggle.set true` 把它翻回来——
-   * 「把遥控器锁进被遥控的盒子」是反模式。开关的执行门在 `runAction` / 中继 `submit` 那两处。
+   * 报一段「说给人听」的话（`said_add`）：报不上不碍事——这条只是让人看见，
+   * 不是问答回路，所以不翻图标、不留痕、也不进对话流。
    */
-  function syncActionStream(): void {
-    actionStream.sync(true);
-    if (keepAliveTimer === undefined) {
-      keepAliveTimer = setInterval(() => {
-        void browser.runtime.getPlatformInfo().catch(() => undefined);
-      }, KEEPALIVE_INTERVAL_MS);
+  async function reportSaid(text: string): Promise<void> {
+    const id = nextMessageId("said");
+    try {
+      const response = await fetchWithTimeout(relayMcpUrl(), MCP_LIST_TIMEOUT_MS, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: callToolBody(id, SAID_ADD_TOOL, { text }),
+      });
+      const payload = parseMcpResponse(response.status, await response.text(), id);
+      if (payload.status === "error") console.log(`[ds-] said 没报上去（${payload.error}）`);
+    } catch (error) {
+      console.log("[ds-] said 没报上去", describeFetchFailure(error, MCP_LIST_TIMEOUT_MS));
     }
   }
 
   /**
    * 动作执行的门面：总开关 / 替人发言 / 退避现读 storage（同一处真源）。
-   * 动作流收到的动作与看门狗的催办走同一套门——催办也是替人发言，
-   * 闸拦着就不喊。
+   * 看门狗的催办也走同一套门——催办也是替人发言，闸拦着就不喊。
    */
   async function actionContext(): Promise<ActionContext> {
     const stored = await browser.storage.local.get([
@@ -639,7 +578,7 @@ export default defineBackground(() => {
       },
       tabs: { query: (query) => browser.tabs.query(query) },
       // 总开关读写口：真源就是 storage.local（同一条真源，图标与武装都跟着它走）。
-      // 写入触发 storage.onChanged → syncFromStorage，武装/断流随之生效。
+      // 写入触发 storage.onChanged → syncFromStorage，武装随之生效。
       toggle: {
         get: async () => {
           const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
@@ -658,20 +597,6 @@ export default defineBackground(() => {
     };
   }
 
-  /** 收到一件动作：现读总开关 → 执行 → 把结果交回中继。**每条路都当场回一个册子里的码**
-   * （`disabled` / `unknown-action` / `tab-gone` / 成功的 `result`），只有回传本身失败
-   * 才留给中继按 timeout 收场。 */
-  async function handleAction(frame: ActionFrame): Promise<void> {
-    try {
-      const context = await actionContext();
-      const outcome = await runAction(frame, context);
-      await postActionResult((url, init) => fetch(url, init), frame.id, outcome);
-    } catch (error) {
-      // 回传失败不冒泡：这条流上的失败由中继按 timeout 收场，不进对话流。
-      console.log("[ds-] 动作没成", frame.action, error);
-    }
-  }
-
   /** 总开关变了就跟图标：关了即「关」，开了先按可达摆、再探一次中继。 */
   async function syncFromStorage(): Promise<void> {
     const stored = await browser.storage.local.get([
@@ -682,12 +607,11 @@ export default defineBackground(() => {
     const enabled = readToggle(stored[TOGGLE_STORAGE_KEY]);
     failureLog = readFailureLog(stored[FAILURE_LOG_STORAGE_KEY]); // 留痕先上手，标题才拼得出历史
     pendingAsks = readPendingAsks(stored[ASKS_STORAGE_KEY]); // 等人回先上手，角标与悬停才拼得出
-    syncActionStream(); // 动作流常开（关了总开关也留着，好把开关翻回来）；图标跟着探测结果走
     await syncHealthAlarm(enabled); // 排班先跟着开关走，图标再跟着探测结果走
     if (!enabled) {
       state = "off";
       notice = null;
-      sendProgress = null; // 关了就不该再揣着上一次等待的现场
+      inFlight = false; // 关了就不该再揣着上一次调用的在途
       watches.clear(); // 看门狗全停：不导航、不催办、不留痕；重武装时重新记住
       await paintIcon();
       return;
@@ -716,19 +640,29 @@ export default defineBackground(() => {
     void syncFromStorage();
   });
 
-  // 隔离世界送来的问句：打中继，把同构载荷原路交回。
+  // 隔离世界送来的围栏：打中继，把同构载荷原路交回。
   browser.runtime.onMessage.addListener((message, sender) => {
     const request = parseSendRequest(message);
     if (request !== null) {
-      // 问句进了中继 = 页面模型排出了围栏：这是一条动静。
+      // 围栏进了中继 = 页面模型排出了围栏：这是一条动静。
       const tabId = sender.tab?.id;
       if (tabId !== undefined) watchdogSeen(tabId);
-      return sendRelay(request.question, request.page).then((payload) => {
-        applyOutcome(payload);
+      return sendCall(request.call).then((payload) => {
         // 答复送回内容脚本 = 回灌落地（送进作框由页面世界自己完成）。
         if (tabId !== undefined) watchdogSeen(tabId);
         return sendResponseMessage(request.id, payload);
       });
+    }
+    // said 上报（通知式，不等回话）：围栏之外的话记进协调者的记录本。
+    const said = parseSaidReport(message);
+    if (said !== null) {
+      void reportSaid(said.text);
+      return undefined;
+    }
+    // 工具目录（隔离世界 60s 来取一次）：回话带目录，取不到回 null。
+    const toolsRequest = parseToolsRequest(message);
+    if (toolsRequest !== null) {
+      return serveTools().then((tools) => toolsResponseMessage(tools));
     }
     // ask 上报与清除（#26）：都是通知、不等回话，挂「等人回」或清掉它。
     const ask = parseAskReport(message);

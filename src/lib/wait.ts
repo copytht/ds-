@@ -1,5 +1,5 @@
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_TIMEOUT, PageError } from "./action";
-import type { ActionFrame } from "./actionstream";
+import type { ActionFrame } from "./action";
 import { parseSendFence } from "./fence";
 import {
   ROW_SELECTOR,

@@ -6,7 +6,7 @@ from typing import Any
 
 from conftest import load_fixture, load_fixture_filenames
 
-EXPECTED_FILES = ["action.json", "config.json", "fence.json", "opencode.json", "reply.json"]
+EXPECTED_FILES = ["action.json", "config.json", "fence.json", "reply.json"]
 REPLY_ANCHOR = "agent:"
 
 
@@ -50,13 +50,13 @@ def test_case_names_are_unique_within_each_file() -> None:
 
 
 def test_fence_cases_are_coherent() -> None:
-    """抽出问题的输入里必须排着 send 围栏；其余输入只能落空。"""
+    """抽出围栏内容的输入里必须排着 send 围栏；其余输入只能落空。"""
     for case in raw_cases("fence.json"):
         assert isinstance(case["input"], str)
-        question = case["expectedQuestion"]
-        assert question is None or isinstance(question, str)
-        if question is not None:
-            assert question
+        call = case["expectedCall"]
+        assert call is None or isinstance(call, str)
+        if call is not None:
+            assert call
             assert "```send" in case["input"], case["name"]
 
 
@@ -78,27 +78,16 @@ def test_reply_message_has_no_newline_escapes() -> None:
         assert "\\n" not in case["expectedMessage"], case["name"]
 
 
-def test_opencode_payloads_follow_the_schema() -> None:
-    for case in raw_cases("opencode.json"):
-        assert_reply_payload(case["expectedPayload"])
-
-
-def test_reply_payloads_come_from_the_relay_mapping() -> None:
-    """对拍：回灌侧用到的载荷，中继侧的映射必须产得出（反之亦然的那半在 vitest）。"""
-    relay_payloads = [case["expectedPayload"] for case in raw_cases("opencode.json")]
-    for case in raw_cases("reply.json"):
-        assert case["payload"] in relay_payloads, case["name"]
-
-
 def test_config_cases_cover_known_kinds() -> None:
     for case in raw_cases("config.json"):
-        assert case["kind"] in {"port", "password", "session-id"}
+        assert case["kind"] in {"value"}
         assert isinstance(case["input"], str)
+        assert isinstance(case["key"], str)
         assert isinstance(case["expected"], dict)
 
 
 def test_action_error_codes_are_unique() -> None:
-    """动作失败码册子（ADR-0007）：code 不重样、when 非空。"""
+    """动作失败码册子：code 不重样、when 非空（页面动作的执行器还活着——出站与看门狗用它）。"""
     codes = load_fixture("action.json")["errorCodes"]
     assert isinstance(codes, list) and codes
     names = [entry["code"] for entry in codes]
@@ -108,15 +97,14 @@ def test_action_error_codes_are_unique() -> None:
 
 
 def test_action_cases_are_coherent() -> None:
-    """每个 case：请求体三条字段在场、响应回同一个 action；
-    成功不带 error、失败只带册子上的码（与 vitest 那半对拍）。"""
+    """每个 case：请求体三条字段在场、响应回 {ok,result} / {ok,error} 两条同构形状
+    （与 vitest 那半对拍；扩展不再回显 action——那曾是 relay 回传端点的账面）。"""
     error_codes = [entry["code"] for entry in load_fixture("action.json")["errorCodes"]]
     for case in raw_cases("action.json"):
         request, response = case["request"], case["response"]
         assert isinstance(request["action"], str) and request["action"]
         assert isinstance(request["params"], dict)
         assert request["target"] is None or isinstance(request["target"], str)
-        assert response["action"] == request["action"], case["name"]
         assert isinstance(response["ok"], bool)
         if response["ok"]:
             assert "error" not in response, case["name"]

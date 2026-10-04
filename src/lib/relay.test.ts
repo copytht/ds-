@@ -1,167 +1,236 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  SEND_PHASES,
   FAILURE_RELAY_UNREACHABLE,
   FAILURE_UNEXPECTED_RESPONSE,
+  MALFORMED_CALL_HINT,
+  MCP_CALL_TIMEOUT_MS,
+  MCP_LIST_TIMEOUT_MS,
+  MCP_PING_TIMEOUT_MS,
+  callToolBody,
+  describeBadResponse,
   describeFetchFailure,
-  describeStatusFailure,
-  parseRelayResponse,
-  parseStatusResponse,
-  relaySendBody,
-  relaySendUrl,
-  relayHealthUrl,
-  relayStatusUrl,
+  isToolInfo,
+  listToolsBody,
+  mcpBody,
+  parseMcpPing,
+  parseMcpResponse,
+  parseToolCall,
+  parseToolsList,
+  pingBody,
+  relayMcpUrl,
 } from "./relay";
 
 describe("端点与请求体", () => {
-  it("打的是本机中继的 /send、/health 与 /status", () => {
-    expect(relaySendUrl()).toBe("http://127.0.0.1:8787/send");
-    expect(relayHealthUrl()).toBe("http://127.0.0.1:8787/health");
-    expect(relayStatusUrl()).toBe("http://127.0.0.1:8787/status");
+  it("打的是本机中继的唯一端点 /mcp", () => {
+    expect(relayMcpUrl()).toBe("http://127.0.0.1:8787/mcp");
   });
 
-  it("请求体是 question + 轮询 id", () => {
-    expect(relaySendBody("问题正文", "poll-1")).toBe('{"question":"问题正文","id":"poll-1"}');
-    expect(JSON.parse(relaySendBody("问题正文", "poll-1"))).toEqual({
-      question: "问题正文",
-      id: "poll-1",
+  it("请求体是标准 JSON-RPC 2.0（jsonrpc + id + method）", () => {
+    expect(JSON.parse(mcpBody("1-ping", "ping"))).toEqual({
+      jsonrpc: "2.0",
+      id: "1-ping",
+      method: "ping",
     });
+    expect(JSON.parse(pingBody("1-ping")).method).toBe("ping");
+    expect(JSON.parse(listToolsBody("2-list")).method).toBe("tools/list");
+    expect(JSON.parse(callToolBody("3-call", "fs_read_file", { path: "a.ts" }))).toEqual({
+      jsonrpc: "2.0",
+      id: "3-call",
+      method: "tools/call",
+      params: { name: "fs_read_file", arguments: { path: "a.ts" } },
+    });
+  });
+
+  it("超时三档：调用宽、list 居中、探活最急（先到的必须是中继）", () => {
+    expect(MCP_CALL_TIMEOUT_MS).toBeGreaterThan(MCP_LIST_TIMEOUT_MS);
+    expect(MCP_LIST_TIMEOUT_MS).toBeGreaterThan(MCP_PING_TIMEOUT_MS);
   });
 });
 
-describe("parseRelayResponse · 响应 → 载荷", () => {
-  it("200 + status ok → ok 载荷，answer 原样", () => {
-    const payload = parseRelayResponse(200, JSON.stringify({ status: "ok", answer: "答复" }));
-    expect(payload).toEqual({ status: "ok", answer: "答复" });
-  });
-
-  it("200 + status pending → 还没出结果（扩展带同一个 id 再问）", () => {
-    expect(parseRelayResponse(200, JSON.stringify({ status: "pending", id: "poll-1" }))).toEqual({
-      status: "pending",
+describe("parseToolCall · 围栏正文 → 工具调用", () => {
+  it("只有 tool + arguments 两个键的形状收下", () => {
+    expect(parseToolCall('{"tool":"fs_read_file","arguments":{"path":"a.ts"}}')).toEqual({
+      tool: "fs_read_file",
+      arguments: { path: "a.ts" },
     });
   });
 
-  it("200 + status error → 同构的 error 载荷，错误码原样带出", () => {
-    for (const error of [
-      "opencode-not-running",
-      "opencode-timeout",
-      "unexpected-response",
-      "某个还没在册的新错误码",
-    ]) {
-      expect(parseRelayResponse(200, JSON.stringify({ status: "error", error }))).toEqual({
-        status: "error",
-        error,
-      });
-    }
+  it("arguments 缺着当空对象（没有参数的工具就该这么排）", () => {
+    expect(parseToolCall('{"tool":"ping_now"}')).toEqual({ tool: "ping_now", arguments: {} });
   });
 
-  it("非 2xx 一律按中继响应异常，不猜", () => {
-    expect(parseRelayResponse(400, JSON.stringify({ status: "ok", answer: "x" }))).toEqual({
-      status: "error",
-      error: FAILURE_UNEXPECTED_RESPONSE,
-    });
-    expect(parseRelayResponse(500, "").status).toBe("error");
-    expect(parseRelayResponse(404, JSON.stringify({ status: "error", error: "x" }))).toEqual({
-      status: "error",
-      error: FAILURE_UNEXPECTED_RESPONSE,
-    });
+  it("排得不成形一律 null，不猜", () => {
+    expect(parseToolCall("不是 JSON")).toBeNull();
+    expect(parseToolCall('["fs_read_file"]')).toBeNull();
+    expect(parseToolCall('{"tool":""}')).toBeNull();
+    expect(parseToolCall('{"tool": 42}')).toBeNull();
+    expect(parseToolCall('{"tool":"x","arguments":"没参数"}')).toBeNull();
+    expect(parseToolCall("{}")).toBeNull();
   });
 
-  it("响应体不是 JSON、不是对象、字段缺着，都落中继响应异常", () => {
-    const unexpected = { status: "error", error: FAILURE_UNEXPECTED_RESPONSE };
-    expect(parseRelayResponse(200, "不是 JSON")).toEqual(unexpected);
-    expect(parseRelayResponse(200, '"ok"')).toEqual(unexpected);
-    expect(parseRelayResponse(200, "[]")).toEqual(unexpected);
-    expect(parseRelayResponse(200, JSON.stringify({ answer: "只有 answer" }))).toEqual(unexpected);
-    expect(parseRelayResponse(200, JSON.stringify({ status: "ok" }))).toEqual(unexpected);
-    expect(parseRelayResponse(200, JSON.stringify({ status: "ok", answer: "   " }))).toEqual(
+  it("围栏排坏时的回灌正文自带正确形状（status: ok 的一条）", () => {
+    expect(MALFORMED_CALL_HINT).toContain('{"tool": "工具名", "arguments": {…');
+    expect(MALFORMED_CALL_HINT).toContain("{}");
+  });
+});
+
+describe("parseMcpResponse · 响应 → 载荷", () => {
+  const id = "9-call";
+  const reply = (body: unknown) => JSON.stringify(body);
+
+  it("2xx + 对得上号的 result → ok，文本块依次拼上", () => {
+    const payload = parseMcpResponse(
+      200,
+      reply({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [
+            { type: "text", text: "第一块" },
+            { type: "text", text: "第二块" },
+            { type: "image", data: "…" },
+          ],
+        },
+      }),
+      id,
+    );
+    expect(payload).toEqual({ status: "ok", answer: "第一块\n\n第二块" });
+  });
+
+  it("JSON-RPC 的 error 也是有回话 → ok，正文是 `code: message`", () => {
+    const payload = parseMcpResponse(
+      200,
+      reply({ jsonrpc: "2.0", id, error: { code: -32601, message: "Unknown tool: x" } }),
+      id,
+    );
+    expect(payload).toEqual({ status: "ok", answer: "-32601: Unknown tool: x" });
+  });
+
+  it("`isError` 的结果照旧是正文（模型看得到才接得着往下答）", () => {
+    const payload = parseMcpResponse(
+      200,
+      reply({
+        jsonrpc: "2.0",
+        id,
+        result: { isError: true, content: [{ type: "text", text: "tool-not-running" }] },
+      }),
+      id,
+    );
+    expect(payload).toEqual({ status: "ok", answer: "tool-not-running" });
+  });
+
+  it("一个文本块都没有就把整个结果交成 JSON（不猜、不丢）", () => {
+    const payload = parseMcpResponse(
+      200,
+      reply({ jsonrpc: "2.0", id, result: { content: [], tools: [] } }),
+      id,
+    );
+    expect(payload.status).toBe("ok");
+    expect(payload.status === "ok" && payload.answer).toBe('{"content":[],"tools":[]}');
+  });
+
+  it("非 2xx / 认不出的响应体 → 意外响应（不进对话流）", () => {
+    const unexpected = { status: "error" as const, error: FAILURE_UNEXPECTED_RESPONSE };
+    expect(parseMcpResponse(500, reply({ jsonrpc: "2.0", id, result: {} }), id)).toEqual(
       unexpected,
     );
-    expect(parseRelayResponse(200, JSON.stringify({ status: "error" }))).toEqual(unexpected);
-    expect(parseRelayResponse(200, JSON.stringify({ status: "wat", error: "x" }))).toEqual(
+    expect(parseMcpResponse(404, "找不到", id)).toEqual(unexpected);
+    expect(parseMcpResponse(200, "不是 JSON", id)).toEqual(unexpected);
+    expect(parseMcpResponse(200, '"ok"', id)).toEqual(unexpected);
+    expect(parseMcpResponse(200, reply({ jsonrpc: "2.0", id }), id)).toEqual(unexpected);
+    expect(parseMcpResponse(200, reply({ jsonrpc: "1.0", id, result: {} }), id)).toEqual(
       unexpected,
     );
   });
 
-  it("网络层失败（没起 / 超时 / 被拦）也有一个在册的载荷可用", () => {
+  it("回话对不上号一律不认（多条请求各排各的号，防领错回话）", () => {
+    const body = reply({ jsonrpc: "2.0", id: "别人家的", result: {} });
+    expect(parseMcpResponse(200, body, id).status).toBe("error");
+  });
+
+  it("error 载荷只有两个在册码", () => {
     expect(FAILURE_RELAY_UNREACHABLE).toBe("relay-unreachable");
+    expect(FAILURE_UNEXPECTED_RESPONSE).toBe("unexpected-response");
   });
 });
 
-describe("parseStatusResponse · 等待期的现场快照", () => {
-  function snapshot(body: unknown, status = 200) {
-    return parseStatusResponse(status, JSON.stringify(body));
-  }
+describe("parseMcpPing · 探活", () => {
+  const id = "1-ping";
 
-  it("中继答得体面但没有问句在途 → 可信、现场为空", () => {
-    expect(snapshot({ status: "ok", send: null })).toEqual({ reachable: true, send: null });
+  it("2xx + 对得上号的 result → 可达", () => {
+    expect(parseMcpPing(200, JSON.stringify({ jsonrpc: "2.0", id, result: {} }), id)).toBe(true);
   });
 
-  it("有问句在途 → 阶段、字数、剩余时间原样带出", () => {
+  it("答不上来就不可达，不猜", () => {
+    const body = JSON.stringify({ jsonrpc: "2.0", id, result: {} });
+    expect(parseMcpPing(200, body, "别的号")).toBe(false);
+    expect(parseMcpPing(500, body, id)).toBe(false);
+    expect(parseMcpPing(200, "不是 JSON", id)).toBe(false);
     expect(
-      snapshot({ status: "ok", send: { phase: "writing", written: 128, remaining: 107.5 } }),
-    ).toEqual({ reachable: true, send: { phase: "writing", written: 128, remaining: 107.5 } });
+      parseMcpPing(
+        200,
+        JSON.stringify({ jsonrpc: "2.0", id, error: { code: 1, message: "x" } }),
+        id,
+      ),
+    ).toBe(false);
   });
+});
 
-  it("remaining 为 null 合法（还没定下用哪一段），缺着就同罪", () => {
-    expect(
-      snapshot({ status: "ok", send: { phase: "queued", written: 0, remaining: null } }),
-    ).toEqual({
-      reachable: true,
-      send: { phase: "queued", written: 0, remaining: null },
-    });
-    expect(snapshot({ status: "ok", send: { phase: "running", written: 0 } })).toEqual({
-      reachable: false,
-      send: null,
-    });
-  });
+describe("parseToolsList · 工具表", () => {
+  const id = "2-list";
+  const body = (tools: unknown) => JSON.stringify({ jsonrpc: "2.0", id, result: { tools } });
 
-  it("四个阶段都认", () => {
-    for (const phase of SEND_PHASES) {
-      expect(
-        snapshot({ status: "ok", send: { phase, written: 0, remaining: 1 } }).send?.phase,
-      ).toBe(phase);
-    }
-  });
-
-  it("认不得的一律当「这条不可信」——快照是拿去上屏的，不猜", () => {
-    const offline = { reachable: false, send: null };
-    expect(parseStatusResponse(500, JSON.stringify({ status: "ok", send: null }))).toEqual(offline);
-    expect(parseStatusResponse(200, "不是 JSON")).toEqual(offline);
-    expect(parseStatusResponse(200, "[]")).toEqual(offline);
-    expect(parseStatusResponse(200, JSON.stringify({ status: "wat", send: null }))).toEqual(
-      offline,
+  it("按 schema 压成一行：必带原名、可选加 ?", () => {
+    const tools = parseToolsList(
+      200,
+      body([
+        {
+          name: "fs_read_file",
+          description: "[fs] 读文件内容",
+          inputSchema: {
+            type: "object",
+            properties: { path: { type: "string" }, encoding: { type: "string" } },
+            required: ["path"],
+          },
+        },
+        { name: "ping_now", description: "", inputSchema: {} },
+      ]),
+      id,
     );
-    expect(snapshot({ status: "ok" })).toEqual(offline); // 字段缺着跟字段坏了同罪
-    for (const send of [
-      "不是对象",
-      { phase: "跑步", written: 0, remaining: 1 }, // 没在册的阶段
-      { phase: "queued", written: -1, remaining: 1 },
-      { phase: "queued", written: "128", remaining: 1 },
-      { phase: "queued", written: 0, remaining: "快好了" },
-      { phase: "queued" }, // 缺 written
-      true,
-    ]) {
-      expect(snapshot({ status: "ok", send })).toEqual(offline);
-    }
-    // 唯独 send: null 不在此列——那是「中继在、只是没问句在途」。
-    expect(snapshot({ status: "ok", send: null })).toEqual({ reachable: true, send: null });
+    expect(tools).toEqual([
+      { name: "fs_read_file", description: "[fs] 读文件内容", params: ["path", "encoding?"] },
+      { name: "ping_now", description: "", params: [] },
+    ]);
+  });
+
+  it("认不出返回 null（调用方沿用上一份，不拿坏数据换）", () => {
+    expect(parseToolsList(200, JSON.stringify({ jsonrpc: "2.0", id, result: {} }), id)).toBeNull();
+    expect(parseToolsList(200, body([{ description: "没有名字" }]), id)).toBeNull();
+    expect(parseToolsList(500, body([]), id)).toBeNull();
+    expect(parseToolsList(200, "不是 JSON", id)).toBeNull();
+    expect(parseToolsList(200, body([]), "别的号")).toBeNull();
+  });
+
+  it("isToolInfo 是信封那边的判据：缺一项就不收", () => {
+    expect(isToolInfo({ name: "x", description: "y", params: [] })).toBe(true);
+    expect(isToolInfo({ name: "", description: "y", params: [] })).toBe(false);
+    expect(isToolInfo({ name: "x", description: "y", params: [1] })).toBe(false);
+    expect(isToolInfo(null)).toBe(false);
   });
 });
 
-describe("失败原因的折算 · 翻红之后总得说得出为什么", () => {
-  it("自己掐表超时和连都没连上，是两件排查方向相反的事", () => {
-    expect(
-      describeFetchFailure(new DOMException("The operation was aborted.", "AbortError"), 5000),
-    ).toBe("超时（5000ms 没回）");
-    expect(describeFetchFailure(new TypeError("Failed to fetch"), 5000)).toBe("连接失败");
-    expect(describeFetchFailure("没头没尾的", 5000)).toBe("连接失败");
+describe("失败的措辞", () => {
+  it("超时与连不上分开说（排查方向相反）", () => {
+    expect(describeFetchFailure(new DOMException("aborted", "AbortError"), 5_000)).toBe(
+      "超时（5000ms 没回）",
+    );
+    expect(describeFetchFailure(new TypeError("Failed to fetch"), 5_000)).toBe("连接失败");
+    expect(describeFetchFailure("别的", 5_000)).toBe("连接失败");
   });
 
-  it("响应到了但读不出现场：报状态码，2xx 就报正文规模——不报正文本身", () => {
-    expect(describeStatusFailure(500, "Internal Server Error")).toBe("HTTP 500");
-    expect(describeStatusFailure(200, "不是 JSON")).toBe("响应读不出来（7 字）");
-    expect(describeStatusFailure(200, "")).toBe("响应读不出来（0 字）");
+  it("响应认不出时报状态码，2xx 报正文规模（不记正文本身）", () => {
+    expect(describeBadResponse(502, "Bad Gateway")).toBe("HTTP 502");
+    expect(describeBadResponse(200, "五个字的乱码")).toBe("响应读不出来（6 字）");
   });
 });

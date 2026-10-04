@@ -10,13 +10,19 @@ import {
   pageSessionIdOf,
   parseSendResponse,
   parseChainMessage,
+  parseToolsResponse,
   resultMessage,
+  saidReportMessage,
+  toolsMessage,
+  toolsRequestMessage,
   unreachableResult,
   type ActionRoster,
   type AskClearedMessage,
   type AskMessage,
-  type QuestionMessage,
+  type CallMessage,
+  type SaidMessage,
 } from "../src/lib/channel";
+import { nextMessageId } from "../src/lib/id";
 import {
   clearComposer,
   clickSend,
@@ -39,7 +45,8 @@ import {
 
 /**
  * 隔离世界这一层握着 `browser.*`，页面世界没有：总开关从 `storage.local` 读了广播过去，
- * 页面世界认出的围栏也从这里转给 background 打中继，结果原样送回页面世界。
+ * 页面世界认出的围栏从这里转给 background 打本机网关（`POST /mcp`），结果原样送回
+ * 页面世界；工具目录反过来每分钟问 background 要一次，广播给页面世界拼协议说明。
  *
  * 站点范围在 manifest 权限里钉死为 chat.deepseek.com（权限钉死），
  * 总开关不参与站点判定，只决定页面世界要不要接管。
@@ -53,22 +60,27 @@ export default defineContentScript({
       window.postMessage(stateMessage(readToggle(stored[TOGGLE_STORAGE_KEY])), "*");
     };
 
-    /** 页面世界认出的围栏 → background 打中继 → 结果按同一条信封原路回去。 */
-    const forwardToRelay = async (question: QuestionMessage): Promise<void> => {
+    /** 页面世界认出的围栏 → background 打网关 → 结果按同一条信封原路回去。 */
+    const forwardToRelay = async (call: CallMessage): Promise<void> => {
       try {
-        const response = await browser.runtime.sendMessage(
-          sendRequestMessage(question.id, question.question, pageSessionIdOf(location.href)),
-        );
+        const response = await browser.runtime.sendMessage(sendRequestMessage(call.id, call.call));
         const parsed = parseSendResponse(response);
         window.postMessage(
-          parsed === null
-            ? unreachableResult(question.id)
-            : resultMessage(question.id, parsed.payload),
+          parsed === null ? unreachableResult(call.id) : resultMessage(call.id, parsed.payload),
           "*",
         );
       } catch (error) {
-        console.log("[ds-] 中继请求没有送出去", error);
-        window.postMessage(unreachableResult(question.id), "*");
+        console.log("[ds-] 工具调用没有送出去", error);
+        window.postMessage(unreachableResult(call.id), "*");
+      }
+    };
+
+    /** 页面世界报上来的围栏之外的话 → background 记进 said；不等回话。 */
+    const reportSaid = async (said: SaidMessage): Promise<void> => {
+      try {
+        await browser.runtime.sendMessage(saidReportMessage(said.text));
+      } catch (error) {
+        console.log("[ds-] said 上报没有送出去", error);
       }
     };
 
@@ -93,6 +105,34 @@ export default defineContentScript({
       } catch (error) {
         console.log("[ds-] ask 清除没有送出去", error);
       }
+    };
+
+    /**
+     * 工具目录同步（协议说明要照着它拼）：总开关开着时 60s 问 background 要一次，
+     * 取到就广播给页面世界；没取到（网关没连上）一声不吭——页面世界沿用上一份，
+     * 说明里写着「工具表暂未取到」。
+     */
+    const TOOLS_SYNC_INTERVAL_MS = 60_000;
+    let toolsTimer: ReturnType<typeof setInterval> | undefined;
+    const syncTools = async (): Promise<void> => {
+      try {
+        const response = await browser.runtime.sendMessage(toolsRequestMessage());
+        const parsed = parseToolsResponse(response);
+        if (parsed === null || parsed.tools === null) return;
+        window.postMessage(toolsMessage(nextMessageId("tools"), parsed.tools), "*");
+      } catch {
+        // 目录是通知：送不出去不重试，下一轮还在。
+      }
+    };
+    const startToolsSync = (): void => {
+      if (toolsTimer !== undefined) return;
+      void syncTools();
+      toolsTimer = setInterval(syncTools, TOOLS_SYNC_INTERVAL_MS);
+    };
+    const stopToolsSync = (): void => {
+      if (toolsTimer === undefined) return;
+      clearInterval(toolsTimer);
+      toolsTimer = undefined;
     };
 
     /**
@@ -126,8 +166,12 @@ export default defineContentScript({
       if (event.source !== window) return;
 
       const chain = parseChainMessage(event.data);
-      if (chain?.kind === "question") {
+      if (chain?.kind === "call") {
         void forwardToRelay(chain);
+        return;
+      }
+      if (chain?.kind === "said") {
+        void reportSaid(chain);
         return;
       }
       if (chain?.kind === "ask") {
@@ -175,14 +219,19 @@ export default defineContentScript({
       // 账号处境上报跟着总开关走：关着时内容脚本不发声。
       if (readToggle(changes[TOGGLE_STORAGE_KEY].newValue)) {
         startAccountReporting();
+        startToolsSync();
       } else {
         stopAccountReporting();
+        stopToolsSync();
       }
     });
 
     await broadcast();
     // 总开关现在开着就立刻开始上报（刷新与重启靠 storage 自己保持）。
     const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
-    if (readToggle(stored[TOGGLE_STORAGE_KEY])) startAccountReporting();
+    if (readToggle(stored[TOGGLE_STORAGE_KEY])) {
+      startAccountReporting();
+      startToolsSync();
+    }
   },
 });

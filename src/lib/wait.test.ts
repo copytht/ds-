@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_TIMEOUT } from "./action";
-import type { ActionFrame } from "./actionstream";
+import type { ActionFrame } from "./action";
 import { baselineKey, parseWaitSeconds, waitFence, waitReply, waitUntilNewMessage } from "./wait";
 import type { ListViewport } from "./messages";
 

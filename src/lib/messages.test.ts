@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ActionFrame } from "./actionstream";
+import type { ActionFrame } from "./action";
 import {
   lastMessage,
   listMessages,

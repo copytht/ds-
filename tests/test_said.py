@@ -1,40 +1,38 @@
-"""网页说给人听的话：`/said` 的收与取。"""
+"""网页说给人听的话：两件工具的收与取（原来那条 `/said` 路随 HTTP 面一起废了）。"""
 
 from __future__ import annotations
 
-import json
-
-from dsb.said import SaidLog, parse_said
+from dsb.said import SaidLog
 
 
-def test_parse_only_accepts_the_wire_shape() -> None:
-    assert parse_said(json.dumps({"text": "你好"}).encode()) == "你好"
-    assert parse_said(json.dumps({"text": "   "}).encode()) is None
-    assert parse_said(json.dumps({"text": 42}).encode()) is None
-    assert parse_said(json.dumps({"nope": "字段名反了"}).encode()) is None
-    assert parse_said("中文不是 json".encode()) is None
-    assert parse_said(b"[]") is None
+def test_add_only_accepts_a_real_string() -> None:
+    log = SaidLog()
+    assert log.tool_add({"text": "你好"}) == ({"status": "ok"}, False)
+    assert log.tool_add({"text": "   "})[1] is True
+    assert log.tool_add({"text": 42})[1] is True
+    assert log.tool_add({"nope": "字段名反了"})[1] is True
+    assert log.tool_add({})[1] is True
 
 
 def test_add_then_read_roundtrip() -> None:
     log = SaidLog()
-    assert log.add(json.dumps({"text": "第一条"}).encode()) == (200, {"status": "ok"})
+    assert log.tool_add({"text": "第一条"}) == ({"status": "ok"}, False)
 
-    status, payload = log.read()
-    assert status == 200
+    payload, failed = log.tool_read({})
+    assert failed is False
     assert [item["text"] for item in payload["said"]] == ["第一条"]
 
 
 def test_keeps_only_the_last_ones() -> None:
     log = SaidLog(limit=2)
     for i in range(3):
-        log.add(json.dumps({"text": f"第{i}条"}).encode())
+        log.tool_add({"text": f"第{i}条"})
 
-    assert [item["text"] for item in log.read()[1]["said"]] == ["第1条", "第2条"]
+    payload, _ = log.tool_read({})
+    assert [item["text"] for item in payload["said"]] == ["第1条", "第2条"]
 
 
-def test_a_bad_body_is_a_400() -> None:
-    status, payload = SaidLog().add(b'{"nope": 1}')
-
-    assert status == 400
-    assert payload["status"] == "error"
+def test_a_bad_add_is_marked_failed_with_the_codebook_payload() -> None:
+    payload, failed = SaidLog().tool_add({"text": 42})
+    assert failed is True
+    assert payload == {"status": "error", "error": "unexpected-response"}

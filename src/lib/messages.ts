@@ -1,5 +1,5 @@
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_READ_FAILED, PageError } from "./action";
-import type { ActionFrame } from "./actionstream";
+import type { ActionFrame } from "./action";
 
 /**
  * 读对话（`messages.list` / `messages.last`）：**只读页面渲染出来的 DOM**。

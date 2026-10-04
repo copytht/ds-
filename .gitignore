@@ -27,3 +27,5 @@ vendor/
 # dsh 子会话的持久日志
 .dsh-state/
 .agents/skills/.openspec-target
+# 本机 MCP servers 配置（形状见 dsb/gateway.py；不进版本库）
+mcp.json

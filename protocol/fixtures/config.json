@@ -1,21 +1,40 @@
 {
-  "description": "中继配置对拍：端口与口令现读、sessionID 读 .env（只做解析纯函数，不发任何请求）。",
+  "description": ".env 解析对拍：键值现读、注释与别的变量忽略（只做解析纯函数，不发任何请求）。",
   "cases": [
     {
-      "name": ".env 读 sessionID",
-      "kind": "session-id",
-      "input": "# 本机配置，不进版本库\nOPENSESS_ID=ses_abc123\n",
-      "expected": {
-        "session_id": "ses_abc123"
-      }
+      "name": ".env 读端口",
+      "kind": "value",
+      "key": "DSB_PORT",
+      "input": "# 本机配置，不进版本库\nDSB_PORT=1234\n",
+      "expected": { "value": "1234" }
     },
     {
-      "name": ".env 里没有 sessionID",
-      "kind": "session-id",
-      "input": "# 只有别的变量\nDSB_PORT=1234\n",
-      "expected": {
-        "session_id": null
-      }
+      "name": "该键不在 .env 里",
+      "kind": "value",
+      "key": "DSB_PORT",
+      "input": "# 只有别的变量\nOTHER=1\n",
+      "expected": { "value": null }
+    },
+    {
+      "name": "带引号的值",
+      "kind": "value",
+      "key": "DSB_TOOL_TIMEOUT",
+      "input": "DSB_TOOL_TIMEOUT=\"30\"\n",
+      "expected": { "value": "30" }
+    },
+    {
+      "name": "注释行不算数",
+      "kind": "value",
+      "key": "DSB_TOOL_TIMEOUT",
+      "input": "# DSB_TOOL_TIMEOUT=99\nOTHER=1\n",
+      "expected": { "value": null }
+    },
+    {
+      "name": "值是空的等于没有",
+      "kind": "value",
+      "key": "DSB_TOOL_TIMEOUT",
+      "input": "DSB_TOOL_TIMEOUT=\n",
+      "expected": { "value": null }
     }
   ]
 }

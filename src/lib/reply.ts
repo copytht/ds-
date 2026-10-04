@@ -64,9 +64,11 @@ export function isInjectableReply(payload: ReplyPayload): boolean {
   return payload.status === "ok";
 }
 
-/** 扩展侧失败提示能显示的原因；dsb 吐出的每个错误码都必须在册。 */
-export type FailureKind =
-  "relay-unreachable" | "opencode-not-running" | "opencode-timeout" | "unexpected-response";
+/**
+ * 扩展侧失败提示能显示的原因；只有两类——连不上、响应认不出
+ * （JSON-RPC 的 error 与工具自己的报错都进对话流，不在这里）。
+ */
+export type FailureKind = "relay-unreachable" | "unexpected-response";
 
 export type FailureNotice = {
   /** 工具栏图标的悬停标题。 */
@@ -81,16 +83,6 @@ const NOTICES: Record<FailureKind, FailureNotice> = {
   "relay-unreachable": {
     title: "中继不可达",
     reason: "本机中继 dsb 没有响应。",
-    command: RELAY_START_COMMAND,
-  },
-  "opencode-not-running": {
-    title: "中继不可达",
-    reason: "opencode 后台服务没有运行。",
-    command: RELAY_START_COMMAND,
-  },
-  "opencode-timeout": {
-    title: "中继超时",
-    reason: "opencode 没有在超时前给出答复。",
     command: RELAY_START_COMMAND,
   },
   "unexpected-response": {

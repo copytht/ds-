@@ -8,15 +8,14 @@ import {
   type ActionFixtureFile,
   type ConfigCase,
   type FenceCase,
-  type OpencodeCase,
   type ReplyCase,
 } from "./fixtures";
 import { isKnownFailureKind, REPLY_ANCHOR } from "./reply";
 
-const EXPECTED_FILES = ["action.json", "config.json", "fence.json", "opencode.json", "reply.json"];
+const EXPECTED_FILES = ["action.json", "config.json", "fence.json", "reply.json"];
 
-const KNOWN_OUTCOME_KINDS = ["success", "not-running", "timeout", "http-error"];
-const KNOWN_CONFIG_KINDS = ["port", "password", "session-id"];
+/** 配置只有一种解析分支：认端口 / 会话号那套已随问答后端废掉（ADR-0011）。 */
+const KNOWN_CONFIG_KINDS = ["value"];
 
 function rawCases(filename: string): Record<string, unknown>[] {
   return fixtureFile(filename).cases.map((oneCase) => {
@@ -47,7 +46,7 @@ function rawPayload(value: unknown): Record<string, unknown> {
 }
 
 describe("共享 fixture 完整性", () => {
-  it("五个 fixture 都在，且两半按同一份清单读", () => {
+  it("四个 fixture 都在，且两半按同一份清单读", () => {
     expect(FIXTURE_FILENAMES).toEqual(EXPECTED_FILES);
   });
 
@@ -65,9 +64,9 @@ describe("共享 fixture 完整性", () => {
 });
 
 describe("围栏 fixture 自洽", () => {
-  it("抽出问题的输入里必须排着 ```send 围栏", () => {
-    for (const { input, expectedQuestion } of fixtureCases<FenceCase>("fence.json")) {
-      if (expectedQuestion !== null) expect(input).toContain("```send");
+  it("抽出围栏正文的输入里必须排着 ```send 围栏", () => {
+    for (const { input, expectedCall } of fixtureCases<FenceCase>("fence.json")) {
+      if (expectedCall !== null) expect(input).toContain("```send");
     }
   });
 });
@@ -92,46 +91,21 @@ describe("回灌 fixture 自洽", () => {
       expect(expectedMessage).not.toMatch(/\\n/);
     }
   });
-});
 
-describe("中继 fixture 自洽", () => {
-  it("预期载荷符合 status + answer/error 的同构形状", () => {
-    for (const { expectedPayload } of fixtureCases<OpencodeCase>("opencode.json")) {
-      expectReplyPayload(expectedPayload);
-    }
-  });
-
-  it("只覆盖已知的 outcome 分支", () => {
-    for (const { outcome } of fixtureCases<OpencodeCase>("opencode.json")) {
-      expect(KNOWN_OUTCOME_KINDS).toContain(outcome.kind);
-    }
-  });
-
-  it("error 分支的错误码扩展侧都有失败提示（对拍）", () => {
-    for (const { expectedPayload } of fixtureCases<OpencodeCase>("opencode.json")) {
-      if (expectedPayload.status === "error") {
-        expect(isKnownFailureKind(expectedPayload.error)).toBe(true);
-      }
-    }
-  });
-});
-
-describe("回灌载荷与中继载荷对拍", () => {
-  it("回灌 fixture 里的载荷都能由中继的映射产出", () => {
-    const relayPayloads = fixtureCases<OpencodeCase>("opencode.json").map(
-      ({ expectedPayload }) => expectedPayload,
-    );
+  it("error 分支的错误码扩展侧都有失败提示（对拍：两码在册）", () => {
     for (const { payload } of fixtureCases<ReplyCase>("reply.json")) {
-      expect(relayPayloads).toContainEqual(payload);
+      if (payload.status === "error") expect(isKnownFailureKind(payload.error)).toBe(true);
     }
   });
 });
 
 describe("配置 fixture 自洽", () => {
-  it("只覆盖已知的解析分支，且输入输出都是字符串", () => {
-    for (const { name, kind, input, expected } of fixtureCases<ConfigCase>("config.json")) {
+  it("只覆盖已知的解析分支，key 与输入输出都在场", () => {
+    for (const { name, kind, key, input, expected } of fixtureCases<ConfigCase>("config.json")) {
       expect(KNOWN_CONFIG_KINDS).toContain(kind);
       expect(typeof name).toBe("string");
+      expect(typeof key).toBe("string");
+      expect(key.length).toBeGreaterThan(0);
       expect(typeof input).toBe("string");
       expect(typeof expected).toBe("object");
     }
@@ -151,12 +125,13 @@ describe("动作 fixture 自洽", () => {
     expect(new Set(codes).size).toBe(codes.length);
   });
 
-  it("每个 case：请求体三条字段在场，响应回同一个 action", () => {
+  it("每个 case：请求体三条字段在场，响应是同构的两条之一", () => {
     for (const { request, response } of fixtureCases<ActionCase>("action.json")) {
       expect(typeof request.action).toBe("string");
       expect(request.params).toBeTypeOf("object");
       expect(request.target === null || typeof request.target === "string").toBe(true);
-      expect(response.action).toBe(request.action);
+      expect(typeof response.ok).toBe("boolean");
+      expect(response).not.toHaveProperty("action"); // 扩展只回 {ok,result} / {ok,error}
     }
   });
 

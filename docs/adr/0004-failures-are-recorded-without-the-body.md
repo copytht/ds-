@@ -28,4 +28,9 @@ service worker 一重启，连挂在内存里的原因也蒸发了，中继日�
 - 事件名固定：中继 `ask-ok` / `ask-fail` / `ask-broke` / `spawn-missing` / `probe-broke` /
   `bad-request` / `slow`；扩展按环节分 `health` / `status` / `ask`。探活与现场轮询超过 1s 才记 `slow`
   （它们各有 5s 预算，慢了就是翻红的前兆）。
+  **（2026-10-04 补记，随 ADR-0011 换过一轮）**：中继那半现在记
+  `bad-request` / `mcp-broke` / `tool-fail` / `tool-slow` / `server-down` / `tool-clash` /
+  `config-broke` / `server-start-broke`（`dsb/log.py` 的 `log_event`，仍是具名字段、不带正文）；
+  扩展的环节只剩 `health`（周期探活）/ `call`（工具调用）/ `watchdog`（看门狗停手）——
+  等待现场那条轮询已废，「现场轮询超过 1s 记 slow」不再存在。
 - 悬停在**当前红着**时不摆历史——第一句就是原因，重复一遍只是噪音；绿着才回看。

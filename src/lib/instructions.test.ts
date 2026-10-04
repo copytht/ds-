@@ -1,50 +1,92 @@
 import { describe, expect, it } from "vitest";
 
-import { prependInstructions, PROTOCOL_INSTRUCTIONS } from "./instructions";
+import { INSTRUCTIONS_HEADER, prependInstructions, protocolInstructions } from "./instructions";
+import type { ToolInfo } from "./relay";
 
-// spec #9 正文里的文案，逐字抄一份当黄金值：改写一个字这里就红。
-const SPEC_WORDING = `【ds 协议】需要写代码、查本机或需要第二双眼时，可以把问题交给本机的编码 agent。
-把问题排成一个围栏块，然后停止回答、等待回灌：
+/** 黄金值：改写一个字这里就红（目录段另有一份带工具的黄金值）。 */
+const TOOLS: readonly ToolInfo[] = [
+  { name: "fs_read_file", description: "[fs] 读文件内容", params: ["path", "encoding?"] },
+  { name: "shell_run", description: "[sh] 跑一条命令", params: [] },
+];
 
-\`\`\`send <question>
+const GOLDEN_NULL = `【ds 协议】需要查本机、跑工具或要第二双眼时，把要调的工具排成一个围栏块，然后停止回答、等待回灌：
+
+\`\`\`send
+{"tool": "工具名", "arguments": {…}}
 \`\`\`
 
-- <question> 换成问题正文，可以多行，用单独一行 \`\`\` 结束。
+- 围栏里是一段 JSON：只有 \`tool\` 与 \`arguments\` 两个键；\`arguments\` 是该工具的入参对象（没有参数写 \`{}\`）。
 - 一次回答最多排一块；排完就停，不要替它往下写。
-- 它的回答以 \`agent:\` 开头，第二行是 \`status: ok\`（没问成则是 \`status: error\` 加 \`error: <code>\`）。
-- \`status: ok\` 时跟着 \`answer[N]{text}:\`，底下每行一条（缩进两格）：第 1 条就是正文第 1 行，依次连起来即完整正文；行首行尾的双引号是包裹，去掉即可，行内偶见的反斜杠只用来包住双引号和反斜杠自己、还原成原字符。换行原样保留，不会被转义。
-- 若没有收到 \`agent:\` 回灌，说明这次没问成：不要追问、不要重排，当作没问过，继续别的内容。
+- 工具表暂未取到（网关没连上或还没答上来）：先别排围栏，等下一条消息再试。
+- 它的回答以 \`agent:\` 开头，第二行是 \`status: ok\`；\`answer\` 是工具结果正文——工具自己报的错也在正文里（如 \`tool-not-running\`：子进程没起），照着往下答。
+- \`answer\` 的读法：跟着 \`answer[N]{text}:\`，底下每行一条（缩进两格），第 1 条就是正文第 1 行，依次连起来即完整正文；行首行尾的双引号是包裹，去掉即可，行内偶见的反斜杠只用来包住双引号和反斜杠自己、还原成原字符。换行原样保留，不会被转义。
+- 若没有收到 \`agent:\` 回灌，说明网关没连上：不要追问、不要重排，当作没排过，继续别的内容。
 - 需要人拍板（选哪个、答什么）时，把问题排成另一种围栏块，然后停止回答、等人的回答：
 
-\`\`\`ask <question>
+\`\`\`ask
+<question>
 \`\`\`
 
 - 规则同上：多行以单独一行 \`\`\` 结束，一次最多一块，排完就停。
 - 人的回答会作为普通消息进来，收到后继续回答；不要追问、不要重排。
-- 用不到 agent 时忽略本说明。`;
+- 用不到工具时忽略本说明。`;
 
-describe("PROTOCOL_INSTRUCTIONS", () => {
-  it("与 spec #9 的文案逐字一致", () => {
-    expect(PROTOCOL_INSTRUCTIONS).toBe(SPEC_WORDING);
+const GOLDEN_TOOLS = `【ds 协议】需要查本机、跑工具或要第二双眼时，把要调的工具排成一个围栏块，然后停止回答、等待回灌：
+
+\`\`\`send
+{"tool": "工具名", "arguments": {…}}
+\`\`\`
+
+- 围栏里是一段 JSON：只有 \`tool\` 与 \`arguments\` 两个键；\`arguments\` 是该工具的入参对象（没有参数写 \`{}\`）。
+- 一次回答最多排一块；排完就停，不要替它往下写。
+- 可用工具（排目录之外的名字，网关会当场报错）：
+  - fs_read_file(path, encoding?) — [fs] 读文件内容
+  - shell_run — [sh] 跑一条命令
+- 它的回答以 \`agent:\` 开头，第二行是 \`status: ok\`；\`answer\` 是工具结果正文——工具自己报的错也在正文里（如 \`tool-not-running\`：子进程没起），照着往下答。
+- \`answer\` 的读法：跟着 \`answer[N]{text}:\`，底下每行一条（缩进两格），第 1 条就是正文第 1 行，依次连起来即完整正文；行首行尾的双引号是包裹，去掉即可，行内偶见的反斜杠只用来包住双引号和反斜杠自己、还原成原字符。换行原样保留，不会被转义。
+- 若没有收到 \`agent:\` 回灌，说明网关没连上：不要追问、不要重排，当作没排过，继续别的内容。
+- 需要人拍板（选哪个、答什么）时，把问题排成另一种围栏块，然后停止回答、等人的回答：
+
+\`\`\`ask
+<question>
+\`\`\`
+
+- 规则同上：多行以单独一行 \`\`\` 结束，一次最多一块，排完就停。
+- 人的回答会作为普通消息进来，收到后继续回答；不要追问、不要重排。
+- 用不到工具时忽略本说明。`;
+
+describe("protocolInstructions", () => {
+  it("目录还没取到时逐字一致", () => {
+    expect(protocolInstructions(null)).toBe(GOLDEN_NULL);
   });
 
-  it("以围栏用法开头，收在忽略说明上", () => {
-    expect(PROTOCOL_INSTRUCTIONS.startsWith("【ds 协议】")).toBe(true);
-    expect(PROTOCOL_INSTRUCTIONS.endsWith("用不到 agent 时忽略本说明。")).toBe(true);
-    expect(PROTOCOL_INSTRUCTIONS).toContain("```send <question>");
-    expect(PROTOCOL_INSTRUCTIONS).toContain("```ask <question>");
+  it("取到目录时逐字一致（一行一件工具，格式化好的参数名）", () => {
+    expect(protocolInstructions(TOOLS)).toBe(GOLDEN_TOOLS);
+  });
+
+  it("以稳定首行开头、收在忽略说明上", () => {
+    expect(protocolInstructions(null).startsWith(INSTRUCTIONS_HEADER)).toBe(true);
+    expect(protocolInstructions(null).endsWith("用不到工具时忽略本说明。")).toBe(true);
+    expect(protocolInstructions(null)).toContain("```send");
+    expect(protocolInstructions(null)).toContain("```ask");
+  });
+
+  it("没取到 ≠ 没有：两种说法分开讲", () => {
+    expect(protocolInstructions(null)).toContain("工具表暂未取到");
+    expect(protocolInstructions([])).toContain("没有可用工具");
+    expect(protocolInstructions([])).not.toContain("工具表暂未取到");
   });
 });
 
 describe("prependInstructions", () => {
-  it("把协议说明拼在消息开头", () => {
-    const message = prependInstructions("帮我看看这个报错");
-    expect(message.startsWith(`${SPEC_WORDING}\n\n`)).toBe(true);
+  it("把协议说明拼在消息开头（用的是同一份目录）", () => {
+    const message = prependInstructions("帮我看看这个报错", TOOLS);
+    expect(message.startsWith(`${GOLDEN_TOOLS}\n\n`)).toBe(true);
     expect(message.endsWith("帮我看看这个报错")).toBe(true);
   });
 
   it("原文一个字不丢", () => {
-    expect(prependInstructions("原文")).toContain("\n\n原文");
-    expect(prependInstructions("原文").slice(SPEC_WORDING.length)).toBe("\n\n原文");
+    const message = prependInstructions("原文", null);
+    expect(message.slice(GOLDEN_NULL.length)).toBe("\n\n原文");
   });
 });

@@ -3,9 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACTION_ERROR_DISABLED,
   ACTION_ERROR_UNKNOWN,
-  ACTION_RESULT_URL,
   listSessionTabs,
-  postActionResult,
   runAction,
   sendMessageSendToTab,
   isActionOutcome,
@@ -16,7 +14,7 @@ import {
   type TabsApi,
   type ToggleApi,
 } from "./action";
-import type { ActionFrame } from "./actionstream";
+import type { ActionFrame } from "./action";
 import { fixtureCases, fixtureFile, type ActionCase, type ActionFixtureFile } from "./fixtures";
 
 function tabsApi(tabs: readonly TabCandidate[]): TabsApi & { calls: number } {
@@ -284,28 +282,6 @@ describe("名册有、扩展还没实现的动作", () => {
     )?.response;
     if (!sample || sample.ok) throw new Error("fixture 里没有未知动作的失败样例");
     expect(sample.error).toBe(ACTION_ERROR_UNKNOWN);
-  });
-});
-
-describe("结果回传", () => {
-  it("成功带 result、失败带 error，id 原样还回去", async () => {
-    const calls: Array<{ url: string; body: unknown }> = [];
-    const post = async (url: string, init: { body: string }) => {
-      calls.push({ url, body: JSON.parse(init.body) });
-      return {};
-    };
-
-    await postActionResult(post, "7-x", { ok: true, result: { tabs: [] } });
-    await postActionResult(post, "7-x", { ok: false, error: "tab-gone" });
-
-    expect(calls[0]).toEqual({
-      url: ACTION_RESULT_URL,
-      body: { id: "7-x", ok: true, result: { tabs: [] } },
-    });
-    expect(calls[1]).toEqual({
-      url: ACTION_RESULT_URL,
-      body: { id: "7-x", ok: false, error: "tab-gone" },
-    });
   });
 });
 

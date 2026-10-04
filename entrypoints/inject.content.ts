@@ -1,11 +1,12 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 
-import { detectAskQuestion, detectSendQuestion, extractAssistantAnswer } from "../src/lib/answer";
+import { detectAskQuestion, detectToolCall, extractAssistantAnswer } from "../src/lib/answer";
 import {
   askClearedMessage,
   askMessage,
+  callMessage,
   parseChainMessage,
-  questionMessage,
+  saidMessage,
   type ResultMessage,
 } from "../src/lib/channel";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
@@ -13,7 +14,8 @@ import { isOutgoingChatRequest, rewriteOutgoingBody } from "../src/lib/inject";
 import { findSendButton } from "../src/lib/page";
 import { nextMessageId } from "../src/lib/id";
 import { buildReply, hasReplyAnchor, isInjectableReply } from "../src/lib/reply";
-import { outsideFences, reportSaid } from "../src/lib/said";
+import type { ToolInfo } from "../src/lib/relay";
+import { outsideFences } from "../src/lib/said";
 import { parseToggleMessage, wantStateMessage } from "../src/lib/toggle";
 
 type XhrTarget = { readonly method: string; readonly url: string };
@@ -21,9 +23,10 @@ type XhrTarget = { readonly method: string; readonly url: string };
 /**
  * 页面世界这一侧有两件事（总开关关着时一件都不做：不接管、不注入、不检测、不回灌）：
  *
- * 1. **协议说明注入**：把 `fetch` 与 `XMLHttpRequest` 包一层，在请求体离开页面之前改写它。
+ * 1. **协议说明注入**：把 `fetch` 与 `XMLHttpRequest` 包一层，在请求体离开页面之前改写它，
+ *    说明里那份工具目录是隔离世界广播下来的（`tools` 信封）。
  * 2. **回灌链**：同一次包下来的**响应体**就是检测点（模型回答的唯一来源）→ 认出 ```send 围栏 →
- *    问题交给隔离世界去打中继 → 结果进**唯一出站口**排队，出站窗口到点放行（ADR-0002）→
+ *    围栏正文交给隔离世界去打本机网关 → 结果进**唯一出站口**排队，出站窗口到点放行（ADR-0002）→
  *    回灌作为一条真实用户消息发进当前会话。
  *
  * 失败一律不进对话流：中继没问成时这里只留一行日志，页面里不出现任何新消息。
@@ -47,13 +50,16 @@ export default defineContentScript({
     /** 网页排了 ask 围栏问人（#26）：挂着等「对话继续」来清。 */
     let pendingAsk = false;
 
+    /** 隔离世界广播下来的工具目录（`tools/list`）；null = 还没取到，说明里会写明。 */
+    let catalog: readonly ToolInfo[] | null = null;
+
     const xhrTargets = new WeakMap<XMLHttpRequest, XhrTarget>();
     const watchingXhrs = new WeakSet<XMLHttpRequest>();
 
     /** 判断逻辑在 src/lib/inject.ts，这里只认它那句「null 就原样放行」。 */
     const rewriteBody = (body: string, method: string, url: string): string | null => {
       if (!isOutgoingChatRequest(method, url)) return null;
-      const next = rewriteOutgoingBody(body);
+      const next = rewriteOutgoingBody(body, catalog);
       if (next !== null) console.log("[ds-] 已把协议说明拼到这条消息开头");
       return next;
     };
@@ -98,9 +104,9 @@ export default defineContentScript({
     }
 
     /**
-     * 检测：只从「发消息那条出站的响应体」里认围栏，认出就把问题交出去。
+     * 检测：只从「发消息那条出站的响应体」里认围栏，认出就把围栏正文交出去。
      *
-     * send 围栏照旧转给中继；ask 围栏（#26）**不转**——它是网页向人
+     * send 围栏（一段工具调用 JSON）照旧转给网关；ask 围栏（#26）**不转**——它是网页向人
      * 举手，交给隔离世界上报 background 挂「等人回」。同一回答里两种
      * 围栏都排了以 send 为准（一次最多一块的口径）；本轮没有任何围栏、
      * 而此前挂着 ask，说明对话继续了（人答了或模型自己往下走了），
@@ -108,15 +114,17 @@ export default defineContentScript({
      */
     function detect(raw: string): void {
       if (!enabled) return;
-      const question = detectSendQuestion(raw);
-      // **围栏之外的话**一律报给协调者：有围栏时围栏转子 agent，围栏以外那些别的话不能被吞掉。
+      const call = detectToolCall(raw);
+      // **围栏之外的话**一律报给协调者：有围栏时围栏转网关，围栏以外那些别的话不能被吞掉。
       // 回灌自己（首行是 `agent:`）不算：那是桥送回去的，再报就成了回声。
       const said = outsideFences(extractAssistantAnswer(raw));
-      if (said !== "" && !hasReplyAnchor(said)) void reportSaid(said);
-      if (question !== null) {
+      if (said !== "" && !hasReplyAnchor(said)) {
+        window.postMessage(saidMessage(nextMessageId("said"), said), "*");
+      }
+      if (call !== null) {
         const id = nextMessageId("send");
-        console.log(`[ds-] 认出 send 围栏（${id}），问题交给中继`);
-        window.postMessage(questionMessage(id, question), "*");
+        console.log(`[ds-] 认出 send 围栏（${id}），交给中继`);
+        window.postMessage(callMessage(id, call), "*");
         pendingAsk = false;
         return;
       }
@@ -178,7 +186,8 @@ export default defineContentScript({
         const outgoing = isOutgoingChatRequest(method, url);
 
         const bodyText = init !== undefined && typeof init.body === "string" ? init.body : null;
-        const nextBody = outgoing && bodyText !== null ? rewriteOutgoingBody(bodyText) : null;
+        const nextBody =
+          outgoing && bodyText !== null ? rewriteOutgoingBody(bodyText, catalog) : null;
         if (nextBody !== null) console.log("[ds-] 已把协议说明拼到这条消息开头");
         const requestInit =
           nextBody !== null && init !== undefined ? { ...init, body: nextBody } : init;
@@ -259,6 +268,11 @@ export default defineContentScript({
       const chain = parseChainMessage(event.data);
       if (chain?.kind === "result") {
         handleResult(chain);
+        return;
+      }
+      if (chain?.kind === "tools") {
+        // 没取到时隔离世界不吭声（content.ts 只广播拿得到的目录），这里因此只进不退。
+        catalog = chain.tools;
         return;
       }
 

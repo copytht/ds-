@@ -1,11 +1,14 @@
 /**
- * 回灌链的信封：问题与结果在页面世界、隔离世界、background 三处之间怎么走。
+ * 回灌链的信封：工具调用与结果在页面世界、隔离世界、background 三处之间怎么走。
  *
  * 页面世界看得到模型的回答但碰不到 `storage` 与扩展 API，background 打中继却看不到页面，
  * 中间隔着隔离世界那一层；三段路各认各的信封，形状不对的一律不猜（返回 null）。
  *
- * - `question` / `result`：页面世界 ↔ 隔离世界，走 `window.postMessage`；
- * - `send` 请求 / 响应：隔离世界 ↔ background，走 `browser.runtime`；
+ * - `call` / `result` / `ask` / `ask-cleared` / `said`：页面世界 ↔ 隔离世界，走
+ *   `window.postMessage`（`said` 是页面世界报给协调者的话，`tools` 是隔离世界
+ *   广播下来的工具目录）；
+ * - `send` 请求 / 响应、`said` 上报、`tools` 请求 / 响应：隔离世界 ↔ background，
+ *   走 `browser.runtime`；
  * - `action` 请求与执行结果：background ↔ 内容脚本，走 `browser.tabs.sendMessage`，
  *   认不出的信封一声不吭（`actionListener` 返回 undefined），不抢 send 那条路的消息。
  */
@@ -14,12 +17,12 @@ import {
   ACTION_ERROR_TAB_GONE,
   ACTION_ERROR_UNKNOWN,
   PageError,
+  type ActionFrame,
   type ActionOutcome,
 } from "./action";
 import { isAccountState, type AccountState } from "./page";
 import { actionErrorCodes } from "./fixtures";
-import type { ActionFrame } from "./actionstream";
-import { FAILURE_RELAY_UNREACHABLE } from "./relay";
+import { FAILURE_RELAY_UNREACHABLE, isToolInfo, type ToolInfo } from "./relay";
 import { errorPayload, type ReplyPayload } from "./reply";
 
 /** 页面世界与隔离世界共用的信封标记；认不出这个标记的一概不收。 */
@@ -28,12 +31,17 @@ export const CHAIN_MESSAGE_SOURCE = "ds-/chain";
 export const SEND_MESSAGE_TYPE = "ds-/send";
 /** background → 内容脚本的动作信封标记（照 send 的套路，各认各的 type）。 */
 export const ACTION_MESSAGE_TYPE = "ds-/action";
+/** 隔离世界 → background 的 said 上报信封标记。 */
+export const SAID_MESSAGE_TYPE = "ds-/said";
+/** 隔离世界 → background 的工具目录请求信封标记。 */
+export const TOOLS_REQUEST_MESSAGE_TYPE = "ds-/tools";
 
-export type QuestionMessage = {
+export type CallMessage = {
   readonly source: typeof CHAIN_MESSAGE_SOURCE;
-  readonly kind: "question";
+  readonly kind: "call";
   readonly id: string;
-  readonly question: string;
+  /** 围栏正文：一段工具调用 JSON（解析归上一层，这里只管运送）。 */
+  readonly call: string;
 };
 
 export type ResultMessage = {
@@ -58,14 +66,33 @@ export type AskClearedMessage = {
   readonly id: string;
 };
 
-export type ChainMessage = QuestionMessage | ResultMessage | AskMessage | AskClearedMessage;
+/**
+ * 页面世界认出围栏之外的话：报给 background 记进 said（`said_add`）。
+ * 报不上不碍事——这条只是「让人看见」，不是问答回路。
+ */
+export type SaidMessage = {
+  readonly source: typeof CHAIN_MESSAGE_SOURCE;
+  readonly kind: "said";
+  readonly id: string;
+  readonly text: string;
+};
+
+/** 隔离世界广播下来的工具目录（`tools/list`，喂协议说明用）。 */
+export type ToolsMessage = {
+  readonly source: typeof CHAIN_MESSAGE_SOURCE;
+  readonly kind: "tools";
+  readonly id: string;
+  readonly tools: readonly ToolInfo[];
+};
+
+export type ChainMessage =
+  CallMessage | ResultMessage | AskMessage | AskClearedMessage | SaidMessage | ToolsMessage;
 
 export type SendRequest = {
   readonly type: typeof SEND_MESSAGE_TYPE;
   readonly id: string;
-  readonly question: string;
-  /** 页面会话 id（`/a/chat/s/<id>` 里那段）；认不出是 null，中继落到默认那一份（ADR-0005）。 */
-  readonly page: string | null;
+  /** 围栏正文：一段工具调用 JSON。 */
+  readonly call: string;
 };
 
 export type SendResponse = {
@@ -83,7 +110,7 @@ export type AskReport = {
   readonly type: typeof ASK_MESSAGE_TYPE;
   readonly id: string;
   readonly question: string;
-  /** 页面会话 id；认不出是 null（与 send 的口径一致）。 */
+  /** 页面会话 id；认不出是 null。 */
   readonly page: string | null;
 };
 
@@ -92,6 +119,22 @@ export type AskClearedReport = {
   readonly type: typeof ASK_CLEARED_MESSAGE_TYPE;
   readonly id: string;
   readonly page: string | null;
+};
+
+/** 隔离世界 → background 的 said 上报：一段说给人听的话。 */
+export type SaidReport = {
+  readonly type: typeof SAID_MESSAGE_TYPE;
+  readonly text: string;
+};
+
+/** 隔离世界 → background 的工具目录请求（空请求，回话带目录）。 */
+export type ToolsRequest = {
+  readonly type: typeof TOOLS_REQUEST_MESSAGE_TYPE;
+};
+
+/** background → 隔离世界的工具目录回话；`null` = 这次没取到（沿用上一份）。 */
+export type ToolsResponse = {
+  readonly tools: readonly ToolInfo[] | null;
 };
 
 /** 隔离世界 → background 的账号处境上报信封标记。 */
@@ -113,8 +156,8 @@ export type ActionRequest = {
 };
 
 /**
- * 内容脚本的本地名册：动作名 → 执行器。本轮空着（页面里的只读动作还没实现），
- * 实现第一个就往里加一项——认不出的动作由收信那层当场回 `unknown-action`。
+ * 内容脚本的本地名册：动作名 → 执行器。实现的就往这里加一项——
+ * 认不出的动作由收信那层当场回 `unknown-action`。
  */
 export type ActionRoster = Readonly<Record<string, (frame: ActionFrame) => unknown>>;
 
@@ -130,8 +173,8 @@ export function isReplyPayload(value: unknown): value is ReplyPayload {
   return false;
 }
 
-export function questionMessage(id: string, question: string): QuestionMessage {
-  return { source: CHAIN_MESSAGE_SOURCE, kind: "question", id, question };
+export function callMessage(id: string, call: string): CallMessage {
+  return { source: CHAIN_MESSAGE_SOURCE, kind: "call", id, call };
 }
 
 export function resultMessage(id: string, payload: ReplyPayload): ResultMessage {
@@ -148,21 +191,27 @@ export function askClearedMessage(id: string): AskClearedMessage {
   return { source: CHAIN_MESSAGE_SOURCE, kind: "ask-cleared", id };
 }
 
+/** 页面世界认出围栏之外的话 → 隔离世界 → background 记进 said。 */
+export function saidMessage(id: string, text: string): SaidMessage {
+  return { source: CHAIN_MESSAGE_SOURCE, kind: "said", id, text };
+}
+
+/** 隔离世界问 background 要来工具目录 → 广播给页面世界。 */
+export function toolsMessage(id: string, tools: readonly ToolInfo[]): ToolsMessage {
+  return { source: CHAIN_MESSAGE_SOURCE, kind: "tools", id, tools };
+}
+
 /**
  * 从页面地址里抠出页面会话 id（/a/chat/s/<id> 里那段）；认不出返回 null。
- * 中继按它分表：每条页面会话各自一个子会话、各自的锁（ADR-0005）。
+ * 只服务于 ask 的分表（每条页面会话各自挂着「等人回」）。
  */
 export function pageSessionIdOf(url: string): string | null {
   const match = /\/a\/chat\/s\/([^/?#]+)/.exec(url);
   return match?.[1] ?? null;
 }
 
-export function sendRequestMessage(
-  id: string,
-  question: string,
-  page: string | null = null,
-): SendRequest {
-  return { type: SEND_MESSAGE_TYPE, id, question, page };
+export function sendRequestMessage(id: string, call: string): SendRequest {
+  return { type: SEND_MESSAGE_TYPE, id, call };
 }
 
 export function sendResponseMessage(id: string, payload: ReplyPayload): SendResponse {
@@ -181,6 +230,18 @@ export function askClearedReportMessage(id: string, page: string | null = null):
   return { type: ASK_CLEARED_MESSAGE_TYPE, id, page };
 }
 
+export function saidReportMessage(text: string): SaidReport {
+  return { type: SAID_MESSAGE_TYPE, text };
+}
+
+export function toolsRequestMessage(): ToolsRequest {
+  return { type: TOOLS_REQUEST_MESSAGE_TYPE };
+}
+
+export function toolsResponseMessage(tools: readonly ToolInfo[] | null): ToolsResponse {
+  return { tools };
+}
+
 export function accountReportMessage(account: AccountState): AccountReport {
   return { type: ACCOUNT_REPORT_MESSAGE_TYPE, account };
 }
@@ -189,13 +250,13 @@ function isValidId(id: unknown): id is string {
   return typeof id === "string" && id !== "";
 }
 
-function isValidQuestion(question: unknown): question is string {
-  return typeof question === "string" && question.trim() !== "";
+function isValidText(text: unknown): text is string {
+  return typeof text === "string" && text.trim() !== "";
 }
 
 /**
  * 信封里的页面会话 id：缺省是 null；非空字符串以外的一律作废
- * （空串、数值都不收）——三条上报共用的判据。
+ *（空串、数值都不收）——ask 两条上报共用的判据。
  */
 function pageSessionOf(data: Record<string, unknown>): string | null | undefined {
   const raw = data["page"];
@@ -211,10 +272,10 @@ export function parseChainMessage(data: unknown): ChainMessage | null {
   const id = data["id"];
   if (!isValidId(id)) return null;
 
-  if (data["kind"] === "question") {
-    const question = data["question"];
-    if (!isValidQuestion(question)) return null;
-    return questionMessage(id, question);
+  if (data["kind"] === "call") {
+    const call = data["call"];
+    if (!isValidText(call)) return null;
+    return callMessage(id, call);
   }
   if (data["kind"] === "result") {
     const payload = data["payload"];
@@ -223,11 +284,21 @@ export function parseChainMessage(data: unknown): ChainMessage | null {
   }
   if (data["kind"] === "ask") {
     const question = data["question"];
-    if (!isValidQuestion(question)) return null;
+    if (!isValidText(question)) return null;
     return askMessage(id, question);
   }
   if (data["kind"] === "ask-cleared") {
     return askClearedMessage(id);
+  }
+  if (data["kind"] === "said") {
+    const text = data["text"];
+    if (!isValidText(text)) return null;
+    return saidMessage(id, text);
+  }
+  if (data["kind"] === "tools") {
+    const tools = data["tools"];
+    if (!Array.isArray(tools) || !tools.every(isToolInfo)) return null;
+    return toolsMessage(id, tools);
   }
   return null;
 }
@@ -237,11 +308,9 @@ export function parseSendRequest(data: unknown): SendRequest | null {
   if (!isPlainObject(data)) return null;
   if (data["type"] !== SEND_MESSAGE_TYPE) return null;
   const id = data["id"];
-  const question = data["question"];
-  if (!isValidId(id) || !isValidQuestion(question)) return null;
-  const page = pageSessionOf(data);
-  if (page === undefined) return null;
-  return sendRequestMessage(id, question, page);
+  const call = data["call"];
+  if (!isValidId(id) || !isValidText(call)) return null;
+  return sendRequestMessage(id, call);
 }
 
 /** 认隔离世界 → background 的 ask 上报（#26）。 */
@@ -250,7 +319,7 @@ export function parseAskReport(data: unknown): AskReport | null {
   if (data["type"] !== ASK_MESSAGE_TYPE) return null;
   const id = data["id"];
   const question = data["question"];
-  if (!isValidId(id) || !isValidQuestion(question)) return null;
+  if (!isValidId(id) || !isValidText(question)) return null;
   const page = pageSessionOf(data);
   if (page === undefined) return null;
   return askReportMessage(id, question, page);
@@ -267,6 +336,31 @@ export function parseAskClearedReport(data: unknown): AskClearedReport | null {
   return askClearedReportMessage(id, page);
 }
 
+/** 认隔离世界 → background 的 said 上报：一段非空文本。 */
+export function parseSaidReport(data: unknown): SaidReport | null {
+  if (!isPlainObject(data)) return null;
+  if (data["type"] !== SAID_MESSAGE_TYPE) return null;
+  const text = data["text"];
+  if (!isValidText(text)) return null;
+  return saidReportMessage(text);
+}
+
+/** 认隔离世界 → background 的工具目录请求（空请求，只认标记）。 */
+export function parseToolsRequest(data: unknown): ToolsRequest | null {
+  if (!isPlainObject(data)) return null;
+  if (data["type"] !== TOOLS_REQUEST_MESSAGE_TYPE) return null;
+  return toolsRequestMessage();
+}
+
+/** 认 background → 隔离世界的工具目录回话；`tools` 是数组或 null。 */
+export function parseToolsResponse(data: unknown): ToolsResponse | null {
+  if (!isPlainObject(data)) return null;
+  const tools = data["tools"];
+  if (tools === null) return toolsResponseMessage(null);
+  if (!Array.isArray(tools) || !tools.every(isToolInfo)) return null;
+  return toolsResponseMessage(tools);
+}
+
 /** 认账号处境上报：account 过一遍 `isAccountState` 再收，认不出就 null。 */
 export function parseAccountReport(data: unknown): AccountReport | null {
   if (!isPlainObject(data)) return null;
@@ -276,7 +370,7 @@ export function parseAccountReport(data: unknown): AccountReport | null {
   return accountReportMessage(account);
 }
 
-/** 认 background → 隔离世界的响应；响应丢了按中继没响应兜底交给调用方。 */
+/** 认隔离世界 → background 的响应；响应丢了按中继没响应兜底交给调用方。 */
 export function parseSendResponse(data: unknown): SendResponse | null {
   if (!isPlainObject(data)) return null;
   const id = data["id"];
@@ -316,7 +410,7 @@ export function parseActionRequest(data: unknown): ActionRequest | null {
  * sendResponse 的通道，结果异步交回），认不出的消息返回 `undefined` 一声不吭——
  * send 那条路的信封也在这条 runtime 通道上，不能抢。
  *
- * 执行器在本地名册里查：没有就当场回 `unknown-action`，不让 background 白等 30s。
+ * 执行器在本地名册里查：没有就当场回 `unknown-action`。
  */
 export function actionListener(
   roster: ActionRoster,

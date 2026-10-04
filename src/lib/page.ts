@@ -1,5 +1,5 @@
 import { ACTION_ERROR_COMPOSER_ABSENT, ACTION_ERROR_PAGE_CHANGED, PageError } from "./action";
-import type { ActionFrame } from "./actionstream";
+import type { ActionFrame } from "./action";
 
 /**
  * 当前页面的最小状态。这个执行器跑在目标标签页的内容脚本（ISOLATED 世界）里，

@@ -1,86 +1,153 @@
 /**
- * 中继的调用契约（#11）：`POST /send`，成功与失败一律 HTTP 200，
- * 载荷是 `{"status":"ok","answer"}` 或 `{"status":"error","error"}`。
+ * 中继的调用契约（MCP 版，ADR-0011）：`POST /mcp`，JSON-RPC 2.0，无会话、无流。
  *
- * 端点与请求体在这儿定死（扩展没有输入面，端口只认 dsb 的默认值）；
- * 响应 → 载荷的映射是纯函数，网络层的失败由调用方折成同样的载荷形状。
+ * dsb 被动到底：探活是 `ping`，干活是 `tools/call`，别的方法一概没有——`/send`
+ * `/health` `/status` 那批 HTTP 路随问答后端一起废了。端点与请求体在这儿定死
+ * （扩展没有输入面，端口只认 dsb 的默认值）；响应 → 载荷的映射是纯函数，网络层
+ * 的失败由调用方折成同样的载荷形状，解析只有一条路径。
+ *
+ * 载荷的口径分两半：**中继有回话就是 ok**——JSON-RPC 的 error 也是给模型看的正文
+ * （它得知道自己哪一步没成）；只有连不上、响应认不出才是 `error` 载荷，那种不进
+ * 对话流（`isInjectableReply` 挡着），图标翻红、留痕补一笔。
  */
 
 import { errorPayload, okPayload, type ReplyPayload } from "./reply";
 
-/** 中继是本机服务，端口走 dsb 的默认值 `DSB_PORT` 改不了扩展侧（无输入面）。 */
+/** 中继是本机服务，端口走 dsb 的默认值 `DSB_PORT`（扩展无输入面，改不了）。 */
 export const RELAY_ORIGIN = "http://127.0.0.1:8787";
-export const RELAY_SEND_PATH = "/send";
-export const RELAY_HEALTH_PATH = "/health";
-/** 等待期的现场（只读）：中继在问句在途时把「走到哪一步了」放在这儿。 */
-export const RELAY_STATUS_PATH = "/status";
+/** 唯一端点：JSON-RPC 从这儿进，别处一律 404（一条 CORS 头都没有）。 */
+export const MCP_PATH = "/mcp";
+
+export function relayMcpUrl(): string {
+  return `${RELAY_ORIGIN}${MCP_PATH}`;
+}
 
 /**
- * 扩展侧自己掐表的超时，只当「中继真死了」的兜底。先到的必须是中继：中继按**静默**计时
- * （`DSB_IDLE_TIMEOUT`，默认 240s 没动静才判；opencode 在动就一直等），只在硬顶
- * `DSB_MAX_TIMEOUT`（默认 1800s）上兜底——那时它回一个 `opencode-timeout`，是个有信息量
- * 的错误码；扩展一旦先 abort，报出来的只有没信息量的「中继不可达」，还会白扔掉一次正在跑
- * 的调用。所以这个值要宽过中继的硬顶一个 HTTP 往返的量级。
- *
- * 两个数分处 TS 与 Python 两套代码，没有共同的运行时事实来源，只能靠跨语言断言对齐：
- * `tests/test_relay_server.py` 直接读这一行的字面量。别只改一边。
+ * 一次 `tools/call` 的扩展侧兜底超时：dsb 侧等子进程的上限是 `DSB_TOOL_TIMEOUT`
+ * （默认 120s，见 `dsb/gateway.py`），这里宽一个 HTTP 往返的量级——先到的必须是
+ * 中继：扩展先 abort 报出来的只有没信息量的「中继不可达」，还会白扔一次正在跑的
+ * 调用。dsb 没挂时它自己会回 `tool-timeout`，那是有信息量的码。
  */
-export const RELAY_TIMEOUT_MS = 1_920_000;
-/** 探活（`GET /health`）只问在不在，快点回来。 */
-export const RELAY_HEALTH_TIMEOUT_MS = 5_000;
-/**
- * 一趟轮询最多挂多久。中继那侧最多让请求挂 15s（没出结果就回 `pending`），这里宽一点，
- * 免得网络抖动把一趟正常轮询掐了。
- */
-export const RELAY_POLL_TIMEOUT_MS = 20_000;
-/**
- * 现场快照（`GET /status`）同样只要个「在不在 + 走到哪一步」，跟探活一样快。
- *
- * 中继一挂，这一条会在自己的超时内报错——所以「等着的时候中继死了」不用另外
- * 定一条静默判死的规矩：**每 3s 一问，问不到当场就红**，比攒到 30s 快得多。
- */
-export const RELAY_STATUS_TIMEOUT_MS = 5_000;
-/** 等待期问现场的节奏。3s 足够看出进展，又不至于把 service worker 叫醒个不停。 */
-export const RELAY_STATUS_POLL_INTERVAL_MS = 3_000;
+export const MCP_CALL_TIMEOUT_MS = 130_000;
+/** 探活（`ping`）只问在不在，快点回来。 */
+export const MCP_PING_TIMEOUT_MS = 5_000;
+/** `tools/list`（工具表，喂给协议说明）同样只要个「在不在 + 表在不在」。 */
+export const MCP_LIST_TIMEOUT_MS = 10_000;
 
 /** 网络层失败（没起、被拦、超时）折成的载荷：中继没有响应。 */
 export const FAILURE_RELAY_UNREACHABLE = "relay-unreachable";
 /** 非 2xx、认不出的响应体：中继响应异常。 */
 export const FAILURE_UNEXPECTED_RESPONSE = "unexpected-response";
 
-export function relaySendUrl(): string {
-  return `${RELAY_ORIGIN}${RELAY_SEND_PATH}`;
-}
-
-export function relayHealthUrl(): string {
-  return `${RELAY_ORIGIN}${RELAY_HEALTH_PATH}`;
-}
-
-/**
- * 问题进中继的请求体：问题逐字符原样送，另带一个**轮询 id**。
- *
- * 带 id 是为了把一趟长问句拆成几趟短 fetch：MV3 的 service worker 对一条在途 fetch 只保它
- * 约 5 分钟，更长的问句一过线就被浏览器连人带连接一起收走——中继算完了也写不回来（真机日志
- * 里两次 `BrokenPipe`）。带同一个 id 接着问，中继把结果交出来。
- */
-export function relaySendBody(question: string, id: string, page: string | null = null): string {
-  return page === null ? JSON.stringify({ question, id }) : JSON.stringify({ question, id, page });
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * 一趟轮询的回法：还没出结果（`pending`）或最终载荷。扩展拿 `pending` 就带同一个 id 再问。
- */
-export type RelaySendPoll = ReplyPayload | { readonly status: "pending" };
+/* -------------------------------------------------------------------------- */
+/* 请求体                                                                     */
+/* -------------------------------------------------------------------------- */
 
 /**
- * 中继的响应 → 回灌载荷（成功失败同构，解析只有一条路径）。
- * 状态码或载荷不合线协议，一律落 `unexpected-response`，不猜。
+ * 一条 JSON-RPC 请求体。`id` 必须与响应对上（对不上按认不出处理）——
+ * 多条请求各排各的号，靠它把回话领回自己手上。
  */
-export function parseRelayResponse(status: number, bodyText: string): RelaySendPoll {
+export function mcpBody(id: string, method: string, params?: Record<string, unknown>): string {
+  const message: Record<string, unknown> = { jsonrpc: "2.0", id, method };
+  if (params !== undefined) message["params"] = params;
+  return JSON.stringify(message);
+}
+
+export function pingBody(id: string): string {
+  return mcpBody(id, "ping");
+}
+
+export function listToolsBody(id: string): string {
+  return mcpBody(id, "tools/list");
+}
+
+export function callToolBody(id: string, name: string, args: Record<string, unknown>): string {
+  return mcpBody(id, "tools/call", { name, arguments: args });
+}
+
+/* -------------------------------------------------------------------------- */
+/* 围栏里的工具调用                                                           */
+/* -------------------------------------------------------------------------- */
+
+/** 模型在 ```send 围栏里排的东西：只有 `tool` 与 `arguments` 两个键。 */
+export type ToolCall = {
+  readonly tool: string;
+  readonly arguments: Record<string, unknown>;
+};
+
+/**
+ * 围栏正文 → 工具调用；排得不成形一律 null，不猜。
+ *
+ * 猜的代价不对称：猜错了会替模型选一个它没想选的工具，所以宁可把
+ * `MALFORMED_CALL_HINT` 回灌进去让它自己改，也不在这里修形状。
+ */
+export function parseToolCall(text: string): ToolCall | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) return null;
+  const tool = parsed["tool"];
+  if (typeof tool !== "string" || tool.trim() === "") return null;
+  const args = parsed["arguments"] ?? {};
+  if (!isPlainObject(args)) return null;
+  return { tool, arguments: args };
+}
+
+/** 围栏排坏了时回灌的正文（`status: ok` 的一条，进对话流，让模型自己改）。 */
+export const MALFORMED_CALL_HINT =
+  '围栏里不是合法的工具调用。期望形状：{"tool": "工具名", "arguments": {…按该工具的入参…}}，' +
+  "arguments 是对象（没有参数写 {}）；一次最多排一块。";
+
+/* -------------------------------------------------------------------------- */
+/* 响应 → 载荷                                                                */
+/* -------------------------------------------------------------------------- */
+
+/** 回话对没对上号：id 必须与发出的请求一致，否则这条回话不认。 */
+function isMatchingReply(parsed: Record<string, unknown>, id: string): boolean {
+  return parsed["jsonrpc"] === "2.0" && parsed["id"] === id;
+}
+
+/** JSON-RPC 的 error → 一句进对话的正文：码在前（好 grep），消息在后（模型读）。 */
+function rpcErrorText(error: Record<string, unknown>): string | null {
+  const message = error["message"];
+  if (typeof message !== "string" || message.trim() === "") return null;
+  const code = error["code"];
+  return typeof code === "number" ? `${code}: ${message}` : message;
+}
+
+/**
+ * `tools/call` 的结果 → 给模型看的一段正文：文本块依次拼上；一个文本块都没有
+ * 就把整个结果交成 JSON——**不猜、不丢**（与 `dsb/gateway.py` 的 `text_of_result`
+ * 同一口径）。`isError` 不改判载荷：失败也是正文，模型看得到才接得着往下答。
+ */
+function resultText(result: unknown): string {
+  if (isPlainObject(result)) {
+    const content = result["content"];
+    if (Array.isArray(content)) {
+      const texts = content
+        .filter((block): block is Record<string, unknown> => isPlainObject(block))
+        .filter((block) => block["type"] === "text" && typeof block["text"] === "string")
+        .map((block) => block["text"] as string)
+        .filter((text) => text !== "");
+      if (texts.length > 0) return texts.join("\n\n");
+    }
+    return JSON.stringify(result);
+  }
+  return String(result);
+}
+
+/**
+ * 中继的响应 → 回灌载荷：2xx + 对得上号的 JSON-RPC 回话（result 或 error）都算
+ * 「有回话」= ok；非 2xx、认不出的响应体落 `unexpected-response`（不进对话流）。
+ */
+export function parseMcpResponse(status: number, bodyText: string, id: string): ReplyPayload {
   if (status < 200 || status >= 300) return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
 
   let parsed: unknown;
@@ -89,86 +156,95 @@ export function parseRelayResponse(status: number, bodyText: string): RelaySendP
   } catch {
     return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
   }
-  if (!isPlainObject(parsed)) return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
+  if (!isPlainObject(parsed) || !isMatchingReply(parsed, id)) {
+    return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
+  }
 
-  const relayStatus = parsed["status"];
-  if (relayStatus === "pending") return { status: "pending" };
-  if (relayStatus === "ok") {
-    const answer = parsed["answer"];
-    if (typeof answer === "string" && answer.trim() !== "") return okPayload(answer);
-    return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
+  const error = parsed["error"];
+  if (isPlainObject(error)) {
+    const text = rpcErrorText(error);
+    return text === null ? errorPayload(FAILURE_UNEXPECTED_RESPONSE) : okPayload(text);
   }
-  if (relayStatus === "error") {
-    const error = parsed["error"];
-    if (typeof error === "string" && error.trim() !== "") return errorPayload(error);
-    return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
-  }
+  if ("result" in parsed) return okPayload(resultText(parsed["result"]));
   return errorPayload(FAILURE_UNEXPECTED_RESPONSE);
 }
 
-export function relayStatusUrl(): string {
-  return `${RELAY_ORIGIN}${RELAY_STATUS_PATH}`;
-}
-
-/** 等待期的四个阶段，与 dsb 侧 `SendProgress` 的取值一一对应。 */
-export const SEND_PHASES = ["queued", "running", "writing", "done"] as const;
-export type SendPhase = (typeof SEND_PHASES)[number];
-
-export type SendStatus = {
-  readonly phase: SendPhase;
-  /** 已经吐出来的正文字数——只数自己 spawn 的那个子会话。 */
-  readonly written: number;
-  /** 静默窗口还剩多少秒（也受硬顶约束）；`null` = 还没落定（排队时）。 */
-  readonly remaining: number | null;
-};
-
-/**
- * 一次现场快照。`reachable` 只回答「这条响应能不能信」——答不上来一律不信，
- * 宁可让图标翻红也不猜（跟 `parseRelayResponse` 一个脾气）。
- */
-export type StatusSnapshot = {
-  readonly reachable: boolean;
-  readonly send: SendStatus | null;
-};
-
-/** 中继没答上来的唯一样子。 */
-const STATUS_OFFLINE: StatusSnapshot = { reachable: false, send: null };
-
-function parseSendStatus(value: unknown): SendStatus | null {
-  if (!isPlainObject(value)) return null;
-  const phase = value["phase"];
-  const written = value["written"];
-  const remaining = value["remaining"];
-  if (typeof phase !== "string" || !SEND_PHASES.includes(phase as SendPhase)) return null;
-  if (typeof written !== "number" || !Number.isFinite(written) || written < 0) return null;
-  // remaining 必须在场：要么是 null（还没定下用哪一段），要么是个有限秒数。
-  if (remaining === null) return { phase: phase as SendPhase, written, remaining: null };
-  if (typeof remaining !== "number" || !Number.isFinite(remaining)) return null;
-  return { phase: phase as SendPhase, written, remaining };
-}
-
-/**
- * `GET /status` 的响应 → 现场快照。
- *
- * 非 2xx、不是 JSON、`status` 不是 ok、`send` 长得不对，一律落 `STATUS_OFFLINE`：
- * 快照是拿去上屏的，报一个看不懂的值不如报「这条不可信」。
- */
-export function parseStatusResponse(status: number, bodyText: string): StatusSnapshot {
-  if (status < 200 || status >= 300) return STATUS_OFFLINE;
-
+/** 探活：2xx 且回话对得上号就算可达；其余一律不可达（答不上来就不信）。 */
+export function parseMcpPing(status: number, bodyText: string, id: string): boolean {
+  if (status < 200 || status >= 300) return false;
   let parsed: unknown;
   try {
     parsed = JSON.parse(bodyText);
   } catch {
-    return STATUS_OFFLINE;
+    return false;
   }
-  if (!isPlainObject(parsed) || parsed["status"] !== "ok") return STATUS_OFFLINE;
-
-  const send = parsed["send"];
-  if (send === null) return { reachable: true, send: null }; // 空档：中继在，只是没问句在途
-  const sendStatus = parseSendStatus(send);
-  return sendStatus === null ? STATUS_OFFLINE : { reachable: true, send: sendStatus };
+  return isPlainObject(parsed) && isMatchingReply(parsed, id) && "result" in parsed;
 }
+
+/* -------------------------------------------------------------------------- */
+/* 工具表（协议说明里的目录）                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 一件工具的目录行：给协议说明拼进去的紧凑形态。
+ *
+ * `params` 是**格式化好**的参数名串（必带原名、可选带 `?` 后缀）——目录是拼给
+ * 模型读的文本，schema 全文塞进每条用户消息太贵，这里就地压成一行。
+ */
+export type ToolInfo = {
+  readonly name: string;
+  readonly description: string;
+  readonly params: readonly string[];
+};
+
+/** 入参 schema → 「参数名 / 参数名? …」那几样；认不出就当没有参数。 */
+function paramsOf(schema: unknown): string[] {
+  if (!isPlainObject(schema)) return [];
+  const properties = schema["properties"];
+  if (!isPlainObject(properties)) return [];
+  const required = Array.isArray(schema["required"]) ? schema["required"] : [];
+  return Object.keys(properties).map((name) => (required.includes(name) ? name : `${name}?`));
+}
+
+export function isToolInfo(value: unknown): value is ToolInfo {
+  if (!isPlainObject(value)) return false;
+  const { name, description, params } = value;
+  return (
+    typeof name === "string" &&
+    name !== "" &&
+    typeof description === "string" &&
+    Array.isArray(params) &&
+    params.every((param) => typeof param === "string")
+  );
+}
+
+/** `tools/list` 的响应 → 目录；认不出返回 null（调用方继续用上一份，不拿坏数据换）。 */
+export function parseToolsList(status: number, bodyText: string, id: string): ToolInfo[] | null {
+  if (status < 200 || status >= 300) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed) || !isMatchingReply(parsed, id)) return null;
+  const tools = parsed["result"];
+  if (!isPlainObject(tools) || !Array.isArray(tools["tools"])) return null;
+
+  const out: ToolInfo[] = [];
+  for (const entry of tools["tools"]) {
+    if (!isPlainObject(entry)) return null;
+    const name = entry["name"];
+    if (typeof name !== "string" || name === "") return null;
+    const description = typeof entry["description"] === "string" ? entry["description"] : "";
+    out.push({ name, description, params: paramsOf(entry["inputSchema"]) });
+  }
+  return out;
+}
+
+/* -------------------------------------------------------------------------- */
+/* 失败的措辞（进悬停与日志，不进对话流）                                     */
+/* -------------------------------------------------------------------------- */
 
 /**
  * 网络层的异常 → 一句能进日志、能上悬停的话。
@@ -185,12 +261,12 @@ export function describeFetchFailure(error: unknown, timeoutMs: number): string 
 }
 
 /**
- * 响应到了、但读不出体面的现场 → 一句话。
+ * 响应到了、但读不出体面的回话 → 一句话。
  *
  * 状态码能报就报码；2xx 却解析不出来，说明中继答了个看不懂的东西，这时正文规模是
  * 唯一有用的事实（几十个字和空响应不是一回事），**不记正文本身**。
  */
-export function describeStatusFailure(status: number, bodyText: string): string {
+export function describeBadResponse(status: number, bodyText: string): string {
   if (status < 200 || status >= 300) return `HTTP ${status}`;
   return `响应读不出来（${bodyText.length} 字）`;
 }
