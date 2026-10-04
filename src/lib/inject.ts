@@ -56,6 +56,58 @@ function prependOnce(text: string, tools: readonly ToolInfo[] | null): string | 
   return prependInstructions(text, tools);
 }
 
+/** 载荷里的一条消息（角色 + 正文）。刻意不引 `messages.ts` 的类型：MAIN 世界的包要轻。 */
+export type PayloadMessage = {
+  readonly role: "user" | "assistant";
+  readonly text: string;
+};
+
+/** 把我们自己拼进去的协议说明剥掉——账本记的是**用户原本说的话**。 */
+function stripInstructions(text: string, tools: readonly ToolInfo[] | null): string {
+  const prefix = prependInstructions("", tools);
+  return text.startsWith(prefix) ? text.slice(prefix.length) : text;
+}
+
+/**
+ * 从「发消息」的出站请求体里取出**整段对话**（角色 + 正文）——角色账本的原料。
+ *
+ * 站点发消息时会把**整段历史**一起带上（`messages: [{role, content}]`），或只带这一条新消息
+ * （`prompt`）。这些 `role` 就是站点消息模型的角色（站点代码里叫 `chat_message_role`，
+ * 见 `docs/adr/0014`）——**是数据**，比从 DOM 判角色硬，换版不影响它。
+ *
+ * 认不出的载荷回 `null`（不猜）；能认就回消息数组（可能为空）。
+ */
+export function extractOutgoingMessages(
+  bodyText: string,
+  tools: readonly ToolInfo[] | null = null,
+): readonly PayloadMessage[] | null {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(payload)) return null;
+  const hasMessages = Array.isArray(payload.messages);
+  if (!hasMessages && typeof payload.prompt !== "string") return null;
+
+  const out: PayloadMessage[] = [];
+  if (typeof payload.prompt === "string" && payload.prompt.trim() !== "") {
+    out.push({ role: "user", text: stripInstructions(payload.prompt, tools) });
+  }
+  if (hasMessages) {
+    for (const entry of payload.messages as unknown[]) {
+      if (!isPlainObject(entry)) continue;
+      const role = entry.role;
+      if (role !== "user" && role !== "assistant") continue;
+      if (typeof entry.content !== "string" || entry.content.trim() === "") continue;
+      const text = role === "user" ? stripInstructions(entry.content, tools) : entry.content;
+      out.push({ role, text });
+    }
+  }
+  return out;
+}
+
 /**
  * 改写一段即将发送的请求体。认得出的载荷有两条形状：
  * `prompt`（站点原生的发消息接口只带这一条新消息）与 `messages`（整段历史一起带的形状）。
