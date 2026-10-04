@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { INSTRUCTIONS_HEADER, prependInstructions, protocolInstructions } from "./instructions";
+import { LOCAL_TOOLS } from "./localtools";
 import type { ToolInfo } from "./relay";
 
 /** 黄金值：改写一个字这里就红（目录段另有一份带工具的黄金值）。 */
@@ -18,6 +19,9 @@ const GOLDEN_NULL = `【ds 协议】需要查本机、跑工具或要第二双�
 - 围栏里是一段 JSON：只有 \`tool\` 与 \`arguments\` 两个键；\`arguments\` 是该工具的入参对象（没有参数写 \`{}\`）。
 - 一次回答最多排一块；排完就停，不要替它往下写。
 - 工具表暂未取到（网关没连上或还没答上来）：先别排围栏，等下一条消息再试。
+- 另有扩展自带的本地工具（不占网关目录，排了就地执行）：
+  - send.page(question, seconds?) — 往页面发一个问题，等页面模型排围栏、等回灌，返回答复正文。
+- 本地工具被闸挡下 / 超时 / 页面不在时不回灌：与「网关没连上」同一处置，当作没排过，别重排。
 - 它的回答以 \`agent:\` 开头，第二行是 \`status: ok\`；\`answer\` 是工具结果正文——工具自己报的错也在正文里（如 \`tool-not-running\`：子进程没起），照着往下答。
 - \`answer\` 的读法：跟着 \`answer[N]{text}:\`，底下每行一条（缩进两格），第 1 条就是正文第 1 行，依次连起来即完整正文；行首行尾的双引号是包裹，去掉即可，行内偶见的反斜杠只用来包住双引号和反斜杠自己、还原成原字符。换行原样保留，不会被转义。
 - 若没有收到 \`agent:\` 回灌，说明网关没连上：不要追问、不要重排，当作没排过，继续别的内容。
@@ -42,6 +46,9 @@ const GOLDEN_TOOLS = `【ds 协议】需要查本机、跑工具或要第二双�
 - 可用工具（排目录之外的名字，网关会当场报错）：
   - fs_read_file(path, encoding?) — [fs] 读文件内容
   - shell_run — [sh] 跑一条命令
+- 另有扩展自带的本地工具（不占网关目录，排了就地执行）：
+  - send.page(question, seconds?) — 往页面发一个问题，等页面模型排围栏、等回灌，返回答复正文。
+- 本地工具被闸挡下 / 超时 / 页面不在时不回灌：与「网关没连上」同一处置，当作没排过，别重排。
 - 它的回答以 \`agent:\` 开头，第二行是 \`status: ok\`；\`answer\` 是工具结果正文——工具自己报的错也在正文里（如 \`tool-not-running\`：子进程没起），照着往下答。
 - \`answer\` 的读法：跟着 \`answer[N]{text}:\`，底下每行一条（缩进两格），第 1 条就是正文第 1 行，依次连起来即完整正文；行首行尾的双引号是包裹，去掉即可，行内偶见的反斜杠只用来包住双引号和反斜杠自己、还原成原字符。换行原样保留，不会被转义。
 - 若没有收到 \`agent:\` 回灌，说明网关没连上：不要追问、不要重排，当作没排过，继续别的内容。
@@ -75,6 +82,14 @@ describe("protocolInstructions", () => {
     expect(protocolInstructions(null)).toContain("工具表暂未取到");
     expect(protocolInstructions([])).toContain("没有可用工具");
     expect(protocolInstructions([])).not.toContain("工具表暂未取到");
+  });
+
+  it("本地工具段与名册一致：每件本地工具的名字 / 参数 / 说明都在（防两处漂移）", () => {
+    const text = protocolInstructions(null);
+    for (const tool of LOCAL_TOOLS) {
+      const params = tool.params.length > 0 ? `(${tool.params.join(", ")})` : "";
+      expect(text).toContain(`  - ${tool.name}${params} — ${tool.description}`);
+    }
   });
 });
 

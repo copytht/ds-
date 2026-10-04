@@ -17,7 +17,8 @@
   新模块照这个来，vitest 直接 `pnpm test`。
 - 主题分参考：`fence`（围栏）、`channel`（消息信封）、`relay`（MCP 客户端）、`gate`（唯一出站口）、
   `backoff`/`watchdog`/`wait`（催办与等待）、`icon`（角标）、`failurelog`（失败留痕）、
-  `instructions`（协议说明）、`fixtures`（读 `protocol/fixtures/`）。
+  `instructions`（协议说明）、`localtools`（本地工具名册，不过网关那批，见 `../frontend/local-tools.md`）、
+  `fixtures`（读 `protocol/fixtures/`）。
 - **不碰 console**：eslint 对 `src/**` 禁 console（仅许 `warn`/`error`），输出走返回值或 logger；
   console 留给 entrypoints——浏览器控制台就是那里的调试通道。
 - **不直接访问站点**：`tests/test_no_direct_site_access.py` 静态扫描 `src/`、`entrypoints/`、

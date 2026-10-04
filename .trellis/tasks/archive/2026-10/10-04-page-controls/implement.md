@@ -2,19 +2,19 @@
 
 ## 顺序清单
 
-- [ ] **1** `src/lib/page.ts`：加 `TOGGLE_SELECTOR` / `THINK_LABEL` / `SEARCH_LABEL`、
+- [x] **1** `src/lib/page.ts`：加 `TOGGLE_SELECTOR` / `THINK_LABEL` / `SEARCH_LABEL`、
   `findToggle(label)`、`readThink` / `setThink` / `readSearch` / `setSearch`。
   失败走 `PageError`：找不到 → `page-changed`；`set` 参数非布尔 → `unknown-action`。
-- [ ] **2** `entrypoints/content.ts`：import 四个执行器，`ACTION_ROSTER` 加 4 项。
-- [ ] **3** `src/lib/action.ts`：`BACKOFF_GATED_ACTIONS` 加 `think.set` / `search.set`，
+- [x] **2** `entrypoints/content.ts`：import 四个执行器，`ACTION_ROSTER` 加 4 项。
+- [x] **3** `src/lib/action.ts`：`BACKOFF_GATED_ACTIONS` 加 `think.set` / `search.set`，
   并把注释里的「新增写动作要记进来」对齐。
-- [ ] **4** `protocol/fixtures/action.json`：加 4 条成功样例（`think.get` / `think.set` /
+- [x] **4** `protocol/fixtures/action.json`：加 4 条成功样例（`think.get` / `think.set` /
   `search.get` / `search.set`），与现有样例同写法。
-- [ ] **5** `docs/page-actions.md`：候补控件登记表（含 v1 / 只登记 / 待查）。
-- [ ] **6** `src/lib/page.test.ts`：新增开关执行器测试（读 / 写 / 幂等 / 找不到 / 参数形状）。
-- [ ] **7** `src/lib/action.test.ts`：退避闸覆盖两个 `set`；确认 `SPEAK_GATED_ACTIONS` 不含它们。
-- [ ] **8** 跑 `pnpm quality`，修到绿。
-- [ ] **9**（可选，真机）`bash scripts/env-up.sh` 重建产物 → 在真页面确认
+- [x] **5** `docs/page-actions.md`：候补控件登记表（含 v1 / 只登记 / 待查）。
+- [x] **6** `src/lib/page.test.ts`：新增开关执行器测试（读 / 写 / 幂等 / 找不到 / 参数形状）。
+- [x] **7** `src/lib/action.test.ts`：退避闸覆盖两个 `set`；确认 `SPEAK_GATED_ACTIONS` 不含它们。
+- [x] **8** 跑 `pnpm quality`，修到绿。
+- [x] **9**（可选，真机）`bash scripts/env-up.sh` 重建产物 → 在真页面确认
   `div.ds-toggle-button` / `aria-pressed` / 文字；确认结果回写 `docs/page-actions.md` 的「已确认」标记。
 
 ## 验证命令

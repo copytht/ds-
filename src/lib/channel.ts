@@ -23,7 +23,11 @@ import {
 import { isAccountState, type AccountState } from "./page";
 import { actionErrorCodes } from "./fixtures";
 import { FAILURE_RELAY_UNREACHABLE, isToolInfo, type ToolInfo } from "./relay";
-import { errorPayload, type ReplyPayload } from "./reply";
+import { errorPayload, isReplyPayload, type ReplyPayload } from "./reply";
+
+// 载荷校验的真源在 reply.ts（与载荷类型、buildReply 同处）；这里转出去，
+// 旧调用方（channel 的收信层、测试）照旧从本模块取。
+export { isReplyPayload };
 
 /** 页面世界与隔离世界共用的信封标记；认不出这个标记的一概不收。 */
 export const CHAIN_MESSAGE_SOURCE = "ds-/chain";
@@ -163,14 +167,6 @@ export type ActionRoster = Readonly<Record<string, (frame: ActionFrame) => unkno
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** 载荷必须是 status + answer/error 的同构形状，认不出的信封整个作废。 */
-export function isReplyPayload(value: unknown): value is ReplyPayload {
-  if (!isPlainObject(value)) return false;
-  if (value["status"] === "ok") return typeof value["answer"] === "string";
-  if (value["status"] === "error") return typeof value["error"] === "string";
-  return false;
 }
 
 export function callMessage(id: string, call: string): CallMessage {
