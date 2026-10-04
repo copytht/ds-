@@ -13,7 +13,7 @@
 ````
 页面模型 → ```send 围栏(工具调用 JSON) → inject.content(MAIN)
         → 隔离世界 → background → POST /mcp → dsb → mcp.json 里的 servers
-        → 结果回灌（短标记进对话 + 请求体替换送模型，ADR-0013）
+        → 结果回灌（短标记进对话 + 请求体替换送模型，ADR-0014）
         → 唯一出站口(ADR-0002) → 页面
 ````
 
