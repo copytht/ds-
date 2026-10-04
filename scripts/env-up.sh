@@ -27,11 +27,18 @@ rpc() {
 # Database 是 SW 注册表（可再生成、无用户数据），一并清。
 start_browser() {
   rm -rf "$PROFILE/Default/Service Worker/ScriptCache" "$PROFILE/Default/Service Worker/Database"
+  # 上一回是本脚本 kill 掉的：Chromium 记 exit_type=Crashed，下次启动会把旧标签页
+  # （含上一次的空白新标签页）恢复回来。环境准备反正会关掉旧标签页，这里把会话恢复
+  # 状态一并清掉，保证只剩命令行带的那个会话页。
+  rm -rf "$PROFILE/Default/Sessions" "$PROFILE/Default/Last Session" "$PROFILE/Default/Last Tabs"
+  # 起进程的同时把会话页当**首个标签页**：不带 URL 时独立 profile 会先开一个空白
+  # 新标签页，判据 3 再开一次就多出一个标签页。URL 跟在这里，一次到位。
   "$CHROME" --user-data-dir="$PROFILE" --load-extension="$MV3" \
-    --no-first-run --no-default-browser-check >/tmp/dsb-browser.log 2>&1 &
+    --no-first-run --no-default-browser-check "https://chat.deepseek.com/" \
+    >/tmp/dsb-browser.log 2>&1 &
   disown
   STARTED_BROWSER=1
-  say 浏览器 "已起 → 独立 profile（清过 SW 脚本缓存）"
+  say 浏览器 "已起 → 独立 profile（清过 SW 脚本缓存与会话恢复，带会话标签页）"
 }
 
 # ds-browser 的主进程 PID：主进程的首个 flag 是 --user-data-dir，
@@ -230,10 +237,9 @@ else
 fi
 
 if [ "$STARTED_BROWSER" = 1 ]; then
-  "$CHROME" --user-data-dir="$PROFILE" --no-first-run \
-    "https://chat.deepseek.com/" >/tmp/dsb-open.log 2>&1
-  sleep 2
-  say 判据3 "已开 chat.deepseek.com（浏览器是本脚本起的，转给在跑的实例）"
+  # 会话页已随浏览器启动打开（首个标签页），这里不再另起一次 Chromium——
+  # 那只会再开一个标签页。这里只报一句。
+  say 判据3 "会话页随浏览器启动已开（首个标签页即 chat.deepseek.com，无空白新标签页）"
 else
   say 判据3 "浏览器是先起的：有没有会话标签页这里问不到（扩展没有外露探针面）"
   say 判据3 "要开一个就：open -a Chromium 'https://chat.deepseek.com/'"

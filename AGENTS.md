@@ -29,8 +29,9 @@
 
 **跑 `scripts/env-up.sh`**，别现拼命令：它起缺的、**旧代码自动换**（ds-browser 装的扩展
 比构建旧会自动重启；中继跑旧代码提示 kill），末尾判据（中继自检健康 /
-`tools/list` 取得到工具表 / 扩展最后探活新鲜 / 会话标签页——浏览器是它刚起或刚重启的
-才代开）。幂等，随时可重跑；`--status` 只读汇总。
+`tools/list` 取得到工具表 / 扩展最后探活新鲜 / 会话标签页——env-up 起或重启浏览器时
+**清掉会话恢复、直接带 `chat.deepseek.com` 当首个标签页**（旧标签页与空白新标签页都不会
+回来）；浏览器是先前就起着的，env-up 不代开、只报）。幂等，随时可重跑；`--status` 只读汇总。
 
 **动作探针别拿 `target: null` 打页面动作**：`page.state` / `composer.read` / `messages.*` /
 `chat.new` 要先 `tabs.list` 拿标签页 id 再带上。`target: null` 只有 `tabs.list` 与 `toggle.*`
