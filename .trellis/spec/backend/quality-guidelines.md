@@ -27,7 +27,9 @@ uv run pytest              # 73 项；asyncio_mode = auto
 - 超时与连不上的措辞要分开：`AbortError`（超时）与 `TypeError`（连不上）是两种
   病因，转换处别并成一句。
 - `.trellis/` 已在 `pyproject.toml` 的 `ruff extend-exclude` 里（Trellis 自己的
-  脚本不进本仓库的检查）。
+  脚本不进本仓库的检查）；`.opencode/`、`.trellis/` 同理被 eslint 与 prettier
+  排除——生成物升级会重生成，同 `vendor/` 口径，见
+  `../frontend/quality-guidelines.md`。
 
 ## 反模式
 

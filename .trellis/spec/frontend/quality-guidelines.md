@@ -9,6 +9,12 @@ pnpm quality   # = check（eslint + tsc + vitest + prettier）+ ruff check/forma
 单块：`pnpm lint`、`pnpm typecheck`、`pnpm test`、`pnpm relay:test`。**提交前 `pnpm quality` 必须绿**；
 `pnpm build` 出 `.output/chrome-mv3`。
 
+## 生成物不进检查
+
+`.opencode/` 与 `.trellis/` 是 Trellis 装出来、升级会重生成的别人家代码
+（同 `vendor/` 口径）：`eslint.config.js` 的 ignores 与 `.prettierignore`
+都排除它们。别把生成物拉进格式化或 lint，也别手改——升级会盖回去。
+
 ## 测试怎么写
 
 - TS：与实现同名共置（`src/lib/relay.test.ts`），vitest；改了 parse 函数就先改它的测试。
