@@ -36,7 +36,7 @@ import { hasReplyAnchor } from "./reply";
  */
 
 /** 轮询节奏：真机挂载一屏约 190ms，500ms 一问足够看见新行。 */
-const POLL_INTERVAL_MS = 500;
+export const POLL_INTERVAL_MS = 500;
 
 /** 默认等待预算（秒）：中继 30s 的锁内，留 5s 回传余量。 */
 export const DEFAULT_WAIT_SECONDS = 25;

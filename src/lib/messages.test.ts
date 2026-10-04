@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { ACTION_ERROR_PAGE_CHANGED } from "./action";
 import type { ActionFrame } from "./action";
 import {
   lastMessage,
@@ -7,6 +8,7 @@ import {
   readLast,
   readMessages,
   readRow,
+  readyWithin,
   roleOf,
   type ListViewport,
   type StyleProbe,
@@ -485,3 +487,92 @@ function stubLayer(element: Element, overflowY: string, client: number): number[
   });
   return writes;
 }
+
+/**
+ * `readyWithin` 的替身件：jsdom 不做布局，滚动层不 `stub` 就永远不滚得动，
+ * 而就绪判据要的就是「滚得动 + 至少一行读得出」。
+ *
+ * `ready` 真时钟、`instant` 假时钟——后者用 `settle` 走完预算，不必真等 5s。
+ */
+const instant = (): Promise<void> => Promise.resolve();
+function fakeClock(stepMs: number): () => number {
+  let now = 0;
+  return (): number => {
+    now += stepMs;
+    return now;
+  };
+}
+
+describe("就绪轮询（issue #40）", () => {
+  it("行还没挂进来：预算内等到那一行，不报 page-changed", async () => {
+    // 真机实测（2026-10-04，导航后立刻量）：主列表几何已就绪（742×1856、auto），
+    // 但 `rows: 0` —— 「没就绪」的主症状是读不出行，不是高度为 0。
+    document.body.innerHTML = conversationHtml();
+    const rows = [...document.querySelectorAll("[data-virtual-list-item-key]")];
+    const saved = rows.map((row) => row.innerHTML);
+    for (const row of rows) row.innerHTML = ""; // 行在，正文还没渲染
+    let polls = 0;
+
+    await readyWithin(fakeClock(1_000), (): Promise<void> => {
+      polls += 1;
+      if (polls === 2) rows.forEach((row, index) => (row.innerHTML = saved[index] ?? ""));
+      return Promise.resolve();
+    });
+
+    expect(polls).toBe(2); // 等了两拍才等到：不是当场报 page-changed
+  });
+
+  it("一行都读不出：预算耗尽才报 page-changed（这回是真的「结构变了」）", async () => {
+    document.body.innerHTML = conversationHtml();
+    for (const row of document.querySelectorAll("[data-virtual-list-item-key]")) row.innerHTML = "";
+    // 正文永不出来：等再久也没用——这才是该报结构变了的那种。
+
+    await expect(readyWithin(fakeClock(1_000), instant)).rejects.toMatchObject({
+      code: ACTION_ERROR_PAGE_CHANGED,
+    });
+  });
+
+  it("结构真变了（认不出列表）：当场 page-changed，不进轮询", async () => {
+    document.body.innerHTML = "<div>没有列表</div>";
+    let polls = 0;
+
+    await expect(
+      readyWithin(fakeClock(1_000), (): Promise<void> => {
+        polls += 1;
+        return Promise.resolve();
+      }),
+    ).rejects.toMatchObject({ code: ACTION_ERROR_PAGE_CHANGED });
+
+    expect(polls).toBe(0); // 一拍都没等：找不到就是找不到，等也没用
+  });
+
+  it("新对话一行都没有：进轮询还是当场回空？（挂着列表但没行 = 没就绪）", async () => {
+    // 挂着列表、一行都没有：那是「还没挂上来」，等预算；不是「空对话」。
+    document.body.innerHTML = conversationHtml();
+    for (const row of document.querySelectorAll("[data-virtual-list-item-key]")) row.remove();
+
+    await expect(readyWithin(fakeClock(1_000), instant)).rejects.toMatchObject({
+      code: ACTION_ERROR_PAGE_CHANGED,
+    });
+  });
+
+  it("就绪探测不写 scrollTop：别污染 readMessages 的起点", async () => {
+    document.body.innerHTML = conversationHtml();
+    const writes = stubLayer(document.querySelector(".ds-virtual-list")!, "auto", 100);
+
+    await readyWithin(fakeClock(1_000), instant);
+
+    expect(writes).toEqual([]); // 就绪只读行，不试写滚动
+  });
+
+  it("messages.list / messages.last 走同一条就绪路：就绪后照常读出", async () => {
+    document.body.innerHTML = conversationHtml();
+    stubLayer(document.querySelector(".ds-virtual-list")!, "auto", 100);
+
+    const list = await listMessages(frameOf("messages.list"));
+    const last = await lastMessage(frameOf("messages.last"));
+
+    expect(list.messages).toHaveLength(2);
+    expect(last.messages).toHaveLength(1);
+  });
+});
