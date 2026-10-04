@@ -6,7 +6,7 @@
  * 失败提示只出现在扩展侧，不进对话流。
  */
 
-import { encode } from "@toon-format/toon";
+import { decode, encode } from "@toon-format/toon";
 
 /** 回灌消息的首行锚。 */
 export const REPLY_ANCHOR = "agent:";
@@ -34,6 +34,21 @@ export function errorPayload(code: string): ErrorPayload {
   return { status: "error", error: code };
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 载荷必须是 status + answer/error 的同构形状，认不出的整个作废。
+ * （这是**内存里的载荷**形状；线上的 TOON 正文由 `parseReplyPayload` 解。）
+ */
+export function isReplyPayload(value: unknown): value is ReplyPayload {
+  if (!isPlainObject(value)) return false;
+  if (value["status"] === "ok") return typeof value["answer"] === "string";
+  if (value["status"] === "error") return typeof value["error"] === "string";
+  return false;
+}
+
 /**
  * 组装一条回灌消息：首行锚 + TOON 载荷（TOON 编码只发生在这里）。
  *
@@ -57,6 +72,44 @@ export function buildReply(payload: ReplyPayload): string {
     return `${REPLY_ANCHOR}\n${encode({ status: "ok", answer })}`;
   }
   return `${REPLY_ANCHOR}\n${encode(payload)}`;
+}
+
+/**
+ * 一条回灌消息 → 载荷：`buildReply` 的逆。
+ *
+ * 给本地工具用——组合（`send.page`）把页面模型的回灌**再交回去**时，得先把
+ * TOON 解回成正文（不然会被 `buildReply` 再编码一层，模型看到嵌套结构）。
+ *
+ * 认不出（首行不是锚、TOON 解不开、形状不对）一律 null，不猜：坏输入宁可
+ * 当「回灌不认得」，也不把半截结构喂给模型。
+ */
+export function parseReplyPayload(text: string): ReplyPayload | null {
+  const newline = text.indexOf("\n");
+  const anchor = newline === -1 ? text : text.slice(0, newline);
+  if (anchor !== REPLY_ANCHOR) return null;
+  const body = newline === -1 ? "" : text.slice(newline + 1);
+  let parsed: unknown;
+  try {
+    parsed = decode(body);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) return null;
+  if (parsed["status"] === "ok") {
+    // ok 载荷的正文在线上一行一条（`answer[N]{text}:`），解回来拼成整段。
+    const rows = parsed["answer"];
+    if (!Array.isArray(rows)) return null;
+    const lines: string[] = [];
+    for (const row of rows) {
+      if (!isPlainObject(row) || typeof row["text"] !== "string") return null;
+      lines.push(row["text"]);
+    }
+    return okPayload(lines.join("\n"));
+  }
+  if (parsed["status"] === "error" && typeof parsed["error"] === "string") {
+    return errorPayload(parsed["error"]);
+  }
+  return null;
 }
 
 /** 失败不进对话流：只有 status: ok 的载荷才会被回灌进页面。 */

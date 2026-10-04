@@ -2,6 +2,7 @@ import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 
 import {
+  ACTION_ERROR_TAB_GONE,
   isDeepSeekUrl,
   runAction,
   sendMessageSendToTab,
@@ -42,6 +43,7 @@ import {
   type IconState,
 } from "../src/lib/icon";
 import { nextMessageId } from "../src/lib/id";
+import { findLocalTool, type LocalTool, type LocalToolEnv } from "../src/lib/localtools";
 import type { AccountState } from "../src/lib/page";
 import {
   FAILURE_RELAY_UNREACHABLE,
@@ -466,6 +468,55 @@ export default defineBackground(() => {
     }
   }
 
+  /** 正在跑本地工具的标签页（重入护栏：同一标签页一次只跑一个）。 */
+  const localBusy = new Set<number>();
+
+  /**
+   * 本地工具：围栏里排的是扩展自己的工具名（`findLocalTool` 命中），**不转发 dsb**，
+   * 就地执行。组合内部的页面动作各走一遍 `runAction`，所以总开关 / 替人发言 / 退避
+   * 三道闸照拦；失败码是现成册子里的，不编新码。
+   *
+   * **不碰中继图标**：本地工具一次 fetch 都没打，它的成败证明不了中继健不健康——闸关着
+   * 回 `disabled` 是你自己关的，不是中继坏了。与 `deliverNudge` 同一口径：失败只进控制台，
+   * 不翻红、不留失败痕。在途角标转、保活按住照旧。同一标签页已有本地工具在跑时，回一条
+   * 可见提示（让模型别重排），不并发。
+   *
+   * 组合不该抛（内部把失败都折成载荷）；真抛了是 bug，交给内容脚本那层既有的兜底。
+   */
+  async function runLocalTool(
+    tool: LocalTool,
+    args: Record<string, unknown>,
+    tabId: number | undefined,
+  ): Promise<ReplyPayload> {
+    if (tabId === undefined) return errorPayload(ACTION_ERROR_TAB_GONE);
+    if (localBusy.has(tabId)) {
+      return okPayload(`本地工具 ${tool.name} 正在跑（同一标签页一次只跑一个），这条没有执行。`);
+    }
+    localBusy.add(tabId);
+    const releaseKeepAlive = keepAliveWhileSending();
+    setInFlight(true);
+    try {
+      const context = await actionContext();
+      const env: LocalToolEnv = {
+        tabId,
+        run: (action, params) =>
+          runAction(
+            { type: "action", id: nextMessageId("local"), action, params, target: String(tabId) },
+            context,
+          ),
+      };
+      const payload = await tool.run(args, env);
+      if (payload.status === "error") {
+        console.log(`[ds-] 本地工具 ${tool.name} 回 ${payload.error}`);
+      }
+      return payload;
+    } finally {
+      localBusy.delete(tabId);
+      setInFlight(false);
+      releaseKeepAlive();
+    }
+  }
+
   /**
    * 打中继：一段围栏正文 → 一次 `tools/call`，一次 fetch 打到底。
    *
@@ -475,11 +526,17 @@ export default defineBackground(() => {
    *
    * 在途期间另开保活（`keepAliveWhileSending`），收摊时无论成败都先下在途标记，
    * 再由调用方上屏，免得答案都回来了角标还挂着转框。
+   *
+   * 本地工具（`findLocalTool` 命中）不走这里：见 `runLocalTool`。
    */
-  async function sendCall(call: string): Promise<ReplyPayload> {
+  async function sendCall(call: string, tabId: number | undefined): Promise<ReplyPayload> {
     const toolCall = parseToolCall(call);
     // 排坏了不出门：没问过网关，图标状态别动，把改法回灌给模型自己改。
     if (toolCall === null) return okPayload(MALFORMED_CALL_HINT);
+
+    // 本地工具（名册在扩展侧、执行不经过 dsb）：就地跑，不生成 `tools/call`。
+    const local = findLocalTool(toolCall.tool);
+    if (local !== null) return runLocalTool(local, toolCall.arguments, tabId);
 
     const releaseKeepAlive = keepAliveWhileSending();
     const id = nextMessageId("call");
@@ -647,7 +704,7 @@ export default defineBackground(() => {
       // 围栏进了中继 = 页面模型排出了围栏：这是一条动静。
       const tabId = sender.tab?.id;
       if (tabId !== undefined) watchdogSeen(tabId);
-      return sendCall(request.call).then((payload) => {
+      return sendCall(request.call, tabId).then((payload) => {
         // 答复送回内容脚本 = 回灌落地（送进作框由页面世界自己完成）。
         if (tabId !== undefined) watchdogSeen(tabId);
         return sendResponseMessage(request.id, payload);

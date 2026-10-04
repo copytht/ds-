@@ -9,6 +9,7 @@ import {
   isInjectableReply,
   isKnownFailureKind,
   okPayload,
+  parseReplyPayload,
   REPLY_ANCHOR,
   RELAY_START_COMMAND,
   type FailureKind,
@@ -51,6 +52,30 @@ describe("buildReply", () => {
     expect(message).toContain('"- 列表项"');
     expect(message).toContain('"# 注释"');
     expect(message).not.toMatch(/\\n/);
+  });
+});
+
+describe("parseReplyPayload · buildReply 的逆", () => {
+  it("单行 / 多行 / 空正文都往返得回来（tabular 行拼回整段）", () => {
+    for (const answer of ["答复正文", "第一行\n第二行\n第三行", ""]) {
+      expect(parseReplyPayload(buildReply(okPayload(answer)))).toEqual(okPayload(answer));
+    }
+  });
+
+  it("error 载荷也往返", () => {
+    expect(parseReplyPayload(buildReply(errorPayload("timeout")))).toEqual(errorPayload("timeout"));
+  });
+
+  it("首行不是锚 → null", () => {
+    expect(parseReplyPayload("status: ok\nanswer[1]{text}:\n  x")).toBeNull();
+    expect(parseReplyPayload("")).toBeNull();
+  });
+
+  it("TOON 解不开或形状不对 → null，不猜", () => {
+    expect(parseReplyPayload("agent:\n{")).toBeNull();
+    expect(parseReplyPayload("agent:\nstatus: ok")).toBeNull();
+    expect(parseReplyPayload("agent:\nstatus: error")).toBeNull();
+    expect(parseReplyPayload("agent:\nstatus: loading")).toBeNull();
   });
 });
 

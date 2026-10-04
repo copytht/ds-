@@ -88,8 +88,9 @@ export function findLocalTool(name: string): LocalTool | null;
 
 - `runLocalTool`：`actionContext()` 拿 `ActionContext`，`run = (action, params) =>
   runAction(frame(action, params), context)`（`frame.target = String(tabId)`）；
-  包在与 `sendCall` 同在途的角标/保活信封里（`setInFlight(true)` + `keepAliveWhileSending()`），
-  失败也 `applyOutcome` 留痕。
+  包在与 `sendCall` 同在途的角标/保活信封里（`setInFlight(true)` + `keepAliveWhileSending()`）。
+  **不碰中继图标**：本地工具一次 fetch 都没打，成败证明不了中继健不健康（闸关着回 `disabled`
+  是用户自己关的）——与 `deliverNudge` 同口径，失败只进控制台，不 `applyOutcome`。
 - `onMessage` 把 `tabId`（`sender.tab?.id`）传进 `sendCall`。
 - **重入护栏**：`Map<number, boolean>` 记「该标签页有本地工具在跑」；已在跑时新来的本地工具
   回一个 `okPayload`（可见提示、让模型别重排），**不并发跑第二个**。
