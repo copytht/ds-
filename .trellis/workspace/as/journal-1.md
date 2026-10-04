@@ -85,3 +85,31 @@ Session summary was not supplied.
 ### Next Steps
 
 - 人在独立 profile 登录 DeepSeek、勾替人开口、开总开关；看图标三态/悬停/控制台 [ds-] 行
+
+
+## Session 4: 判据 4：扩展最后探活经中继日志可读
+<!-- trellis-session: v=2 fp=b3c578bdea04aa65 -->
+
+**Date**: 2026-10-04
+**Task**: 判据 4：扩展最后探活经中继日志可读
+**Branch**: `main`
+
+### Summary
+
+Session summary was not supplied.
+
+### Main Changes
+
+- dsb ping 留痕；env-up 自检换 initialize；判据 4 三态 + --status 只读；bash 3.2 变量名后多字节字节坑（花括号定界）
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] pnpm quality 全绿（74 pytest）；三判据状态实跑验证
+
+### Status
+
+[OK] **Completed**
