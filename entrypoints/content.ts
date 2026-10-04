@@ -32,6 +32,10 @@ import {
   readComposer,
   readComposerPresent,
   readPageState,
+  readSearch,
+  readThink,
+  setSearch,
+  setThink,
   typeComposer,
 } from "../src/lib/page";
 import { lastMessage, listMessages } from "../src/lib/messages";
@@ -196,6 +200,11 @@ export default defineContentScript({
       "composer.read": readComposer,
       "composer.type": typeComposer,
       "composer.clear": clearComposer,
+      // 写作框旁边那两个小开关（#30）。
+      "think.get": readThink,
+      "think.set": setThink,
+      "search.get": readSearch,
+      "search.set": setSearch,
       "send.click": clickSend,
       "send.enter": pressEnter,
       "chat.new": newChat,

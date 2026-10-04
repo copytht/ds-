@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_UNKNOWN, PageError } from "./action";
 import { fixtureCases, type ActionCase } from "./fixtures";
 import {
   clearComposer,
@@ -9,7 +10,11 @@ import {
   pressEnter,
   readComposer,
   readPageState,
+  readSearch,
+  readThink,
   SEND_SELECTOR,
+  setSearch,
+  setThink,
   typeComposer,
 } from "./page";
 
@@ -248,5 +253,102 @@ describe("chat.new 执行器", () => {
     document.body.innerHTML = "<div>什么都没有</div>";
 
     expect(() => newChat(FRAME)).toThrow();
+  });
+});
+
+describe("think.* / search.* 开关执行器（#30）", () => {
+  const THINK_ON = '<div class="ds-toggle-button" aria-pressed="true">深度思考</div>';
+  const THINK_OFF = '<div class="ds-toggle-button" aria-pressed="false">深度思考</div>';
+
+  /** 带 params 的动作帧。 */
+  const withParams = (params: Record<string, unknown>) => ({ ...FRAME, params });
+
+  /** 执行器抛的 `PageError` 码；没抛或抛的不是 PageError 一律回 undefined。 */
+  function thrownCode(fn: () => unknown): string | undefined {
+    try {
+      fn();
+    } catch (error) {
+      return error instanceof PageError ? error.code : undefined;
+    }
+    return undefined;
+  }
+
+  function toggleEl(): HTMLElement {
+    return document.querySelector("div.ds-toggle-button") as HTMLElement;
+  }
+
+  it("get：aria-pressed=true 才算开着，别的一律算关", () => {
+    document.body.innerHTML = THINK_ON;
+    expect(readThink(FRAME)).toEqual({ enabled: true });
+
+    document.body.innerHTML = THINK_OFF;
+    expect(readThink(FRAME)).toEqual({ enabled: false });
+  });
+
+  it("get：tolerant 文字前后空白，只认 div.ds-toggle-button", () => {
+    document.body.innerHTML =
+      '<div class="other-button" aria-pressed="true">深度思考</div>' +
+      '<div class="ds-toggle-button" aria-pressed="false"> 深度思考 </div>';
+    expect(readThink(FRAME)).toEqual({ enabled: false });
+  });
+
+  it("get：找不到认得的控件 → page-changed（不猜）", () => {
+    document.body.innerHTML = '<div class="ds-toggle-button">别的开关</div>';
+    expect(thrownCode(() => readThink(FRAME))).toBe(ACTION_ERROR_PAGE_CHANGED);
+  });
+
+  it("set：目标态与当前不同 → 点一下，回达成态", () => {
+    document.body.innerHTML = THINK_OFF;
+    const el = toggleEl();
+    let clicked = 0;
+    el.addEventListener("click", () => {
+      clicked += 1;
+      el.setAttribute("aria-pressed", "true"); // 模拟站点拨到目标态
+    });
+
+    expect(setThink(withParams({ enabled: true }))).toEqual({ enabled: true });
+    expect(clicked).toBe(1);
+  });
+
+  it("set：已在目标态 → 不点（幂等，点了反而拨反）", () => {
+    document.body.innerHTML = THINK_ON;
+    const el = toggleEl();
+    let clicked = 0;
+    el.addEventListener("click", () => (clicked += 1));
+
+    expect(setThink(withParams({ enabled: true }))).toEqual({ enabled: true });
+    expect(clicked).toBe(0);
+  });
+
+  it("set：回的是达成态，不是目标态（站点没拨过去就说没拨过去）", () => {
+    document.body.innerHTML = THINK_OFF;
+    toggleEl().addEventListener("click", () => undefined); // 点了也不变
+
+    expect(setThink(withParams({ enabled: true }))).toEqual({ enabled: false });
+  });
+
+  it('set：enabled 非布尔 → unknown-action（别把 "true" 按真值收下）', () => {
+    document.body.innerHTML = THINK_OFF;
+    expect(thrownCode(() => setThink(withParams({ enabled: "true" })))).toBe(ACTION_ERROR_UNKNOWN);
+    expect(thrownCode(() => setThink(withParams({})))).toBe(ACTION_ERROR_UNKNOWN);
+  });
+
+  it("search：认「智能搜索」那个开关，与 think 各认各的", () => {
+    document.body.innerHTML =
+      THINK_ON + '<div class="ds-toggle-button" aria-pressed="false">智能搜索</div>';
+    const [think, search] = [...document.querySelectorAll<HTMLElement>("div.ds-toggle-button")] as [
+      HTMLElement,
+      HTMLElement,
+    ];
+    let thinkClicked = 0;
+    let searchClicked = 0;
+    think.addEventListener("click", () => (thinkClicked += 1));
+    search.addEventListener("click", () => (searchClicked += 1));
+
+    expect(readSearch(FRAME)).toEqual({ enabled: false });
+    // 点了但站点没变 → 回达成态（false），不是目标态（true）。
+    expect(setSearch(withParams({ enabled: true }))).toEqual({ enabled: false });
+    expect(searchClicked).toBe(1);
+    expect(thinkClicked).toBe(0); // 没误点深度思考
   });
 });
