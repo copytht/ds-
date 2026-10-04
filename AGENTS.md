@@ -30,7 +30,7 @@
 **跑 `scripts/env-up.sh`**，别现拼命令：它起缺的、**旧代码自动换**（ds-browser 装的扩展
 比构建旧会自动重启；中继跑旧代码提示 kill），末尾判据（中继自检健康 /
 `tools/list` 取得到工具表 / 扩展最后探活新鲜 / 会话标签页——浏览器是它刚起或刚重启的
-才代开）。幂等，随时可重跑；`--status` 只读汇总。
+才代开）。幂等，随时可重跑；`--status` 只读汇总、`--debug` 带调试口起（开发探针用）。
 
 **动作探针别拿 `target: null` 打页面动作**：`page.state` / `composer.read` / `messages.*` /
 `chat.new` 要先 `tabs.list` 拿标签页 id 再带上。`target: null` 只有 `tabs.list` 与 `toggle.*`
@@ -44,6 +44,13 @@
 （配 `page.state` 的 `account` 读得清是哪一种），页面上找不到认得的东西回
 `page-changed`，读不完回 `read-failed`；只有这一跳真的走不通才是 `tab-gone`。执行器要
 抛带码的 `PageError`，收信那层（`channel.ts` 的 `failureCode`）才认。
+
+## 脚本
+
+**所有脚本放 `scripts/`、按可复用写**：一件事一个工具、参数化；别写一次性 `/tmp` 脚本，
+更别把脚本贴进对话就算完。要临时读页面 / 发页面动作 / 跑表达式，走已有工具的入口
+（`scripts/page-action.py` 的 `read` / `send` / `js` / `stop-test`），别另起一个。
+脚本改动同样过 `pnpm quality`（ruff 会扫 `scripts/`）。
 
 ## Agent skills
 
