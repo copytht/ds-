@@ -11,6 +11,7 @@ import {
   type ListViewport,
 } from "./messages";
 import { hasReplyAnchor } from "./reply";
+import { POLL_INTERVAL_MS, parseWaitSeconds } from "./wait-budget";
 
 /**
  * 等动作（#22）：等页面模型排出围栏（`wait.fence`）、等一条新的
@@ -35,36 +36,19 @@ import { hasReplyAnchor } from "./reply";
  * 去（与读对话的扫屏预算同一个理由）。到点回在册的 `timeout`。
  */
 
-/** 轮询节奏：真机挂载一屏约 190ms，500ms 一问足够看见新行。 */
-export const POLL_INTERVAL_MS = 500;
-
 /**
- * 「一帧」的兜底时长（ms），给 `nextFrame` 用：页面**不可见**时 rAF 不回调，
- * 靠它收工。
- *
- * **必须是一帧的量，不能借用 `POLL_INTERVAL_MS`**（真机 2026-10-04 撞过）：
- * `settleUntilMounted` 最多等 30 帧，兜底给 500ms 就是**每屏 15 秒**——
- * `messages.list` 连一屏都扫不完，动作永不回话（比挂死更隐蔽：它「在等」）。
- * 32ms 约两帧，30 帧封顶约 1s，够虚拟列表跟上手（真机一屏约 190ms）。
+ * 「等多久」的口径与节奏住在 `wait-budget.ts`（无依赖，`messages.ts` 也要用同一套，
+ * 而 `messages.ts` 不能引本文件——本文件要引它的 DOM 判据，那会成循环依赖）。
+ * 这里转出，对外接口与旧版一字不差。
  */
-export const FRAME_FALLBACK_MS = 32;
-
-/** 默认等待预算（秒）：中继 30s 的锁内，留 5s 回传余量。 */
-export const DEFAULT_WAIT_SECONDS = 25;
-/** 预算上限（秒）：再长就顶到中继的锁上，真失败会被吞成中继的 timeout。 */
-export const MAX_WAIT_SECONDS = 25;
-/** 预算下限（秒）：0 和负数按「没配」对待会干等，下限 1s 兜底。 */
-export const MIN_WAIT_SECONDS = 1;
-
-/** 等待预算：`params.timeout`（秒）可配，非法按默认，钳在上下限之间。 */
-export function parseWaitSeconds(frame: ActionFrame): number {
-  const wanted = frame.params["timeout"];
-  const seconds =
-    typeof wanted === "number" && Number.isFinite(wanted)
-      ? Math.min(Math.max(wanted, MIN_WAIT_SECONDS), MAX_WAIT_SECONDS)
-      : DEFAULT_WAIT_SECONDS;
-  return seconds;
-}
+export {
+  DEFAULT_WAIT_SECONDS,
+  FRAME_FALLBACK_MS,
+  MAX_WAIT_SECONDS,
+  MIN_WAIT_SECONDS,
+  POLL_INTERVAL_MS,
+  parseWaitSeconds,
+} from "./wait-budget";
 
 /**
  * 基线：跳到底、等挂载，记下两样东西——

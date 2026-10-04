@@ -1,7 +1,7 @@
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_READ_FAILED, PageError } from "./action";
 import type { ActionFrame } from "./action";
 import { parseToolCall } from "./fence";
-import { FRAME_FALLBACK_MS, POLL_INTERVAL_MS } from "./wait";
+import { FRAME_FALLBACK_MS, POLL_INTERVAL_MS, parseWaitSeconds } from "./wait-budget";
 
 /**
  * 读对话（`messages.list` / `messages.last`）：**只读页面渲染出来的 DOM**。
@@ -49,17 +49,21 @@ const MESSAGE_SELECTOR = ".ds-message";
 const MAX_SWEEPS = 2_000;
 
 /**
- * 一趟扫完的墙钟硬顶：中继 `ACTION_TIMEOUT_SECONDS` 是 30s，转满 `MAX_SWEEPS` 恰好比它长，
- * 于是真原因被吞成一句 `timeout`。到点就抛，页面那边留一行日志。
+ * 墙钟预算**由 `params.timeout` 定**（见 `parseWaitSeconds`：缺省 25s、钳 `[1, 25]`），
+ * 就绪等待与扫描**共用这一份**——就绪花掉的时间从扫描里扣，所以最坏耗时恒等于预算。
  *
- * 取 25s 是量出来的：真机上虚拟列表挂载一屏新行要 ~190ms（≈12 帧，不是 1 帧），
- * 一个 385 条 / 59049px 的对话要扫 80 屏 ≈ 15s。留 25s 让它扫得完，又留 5s 余量
+ * 为什么不给两个独立预算：那就成了「就绪 5s + 扫描 25s = 30s」，正顶着中继
+ * `ACTION_TIMEOUT_SECONDS` 的 30s 锁，于是真原因被吞成一句 `timeout`——2026-10-04
+ * 差点这么合上去（PR #44 引入就绪等待后，25s 那个「留 5s 余量」的前提就不成立了）。
+ * 一份预算则余量恒在：上限 25s 恒小于 30s。
+ *
+ * 25s 这个缺省是量出来的：真机上虚拟列表挂载一屏新行要 ~190ms（≈12 帧，不是 1 帧），
+ * 一个 385 条 / 59049px 的对话要扫 80 屏 ≈ 15s。缺省 25s 让它扫得完，又留 5s 余量
  * 让真失败报得出来。
  *
  * ponytail: 这是 O(消息条数) 的成本，一屏一屏等挂载，天花板就在这儿。真嫌慢就得上
  * 别的取法（比如只回摘要、或分页扫），那是另一个设计决定。
  */
-const SWEEP_BUDGET_MS = 25_000;
 
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
@@ -414,14 +418,19 @@ function sweepInto(view: ListViewport, seen: Map<string, Message>): void {
  * **一步都挪不动就当场抛**：内容明明超长却滚不动 = 滚动层认错了（结构变了）。这时候
  * 手里只有首屏，闷声交上去 agent 会当它是一整段对话——比读不到更坏。闷着转满
  * `MAX_SWEEPS` 更不行：那是几十秒，正好把真原因吞成中继那个 30s 的 `timeout`。
+ *
+ * `deadline` 是**调用方给的绝对时刻**（`listMessages` 按 `params.timeout` 算好，
+ * 就绪等待已经花掉的时间也从里面扣）——所以这里不再自己计一份墙钟。
+ * 缺省给一个「很远」的时刻，保留老调用方（`wait.ts` 不走这条；测试可直接调）。
  */
 export async function readMessages(
   view: ListViewport,
   settle: () => Promise<void> = nextFrame,
+  deadline: number = Number.POSITIVE_INFINITY,
+  now: () => number = Date.now,
 ): Promise<Message[]> {
   const seen = new Map<string, Message>();
   const home = view.scrollTop;
-  const startedAt = Date.now();
   view.scrollTop = 0;
   if (home !== 0) await settle();
   for (let guard = 0; guard < MAX_SWEEPS; guard += 1) {
@@ -433,8 +442,7 @@ export async function readMessages(
     await settleUntilMounted(view, was, settle);
     if (view.scrollTop <= before) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "滚不动消息列表");
     // 越往下内容越多（边滚边加载）就会一直不到底；到点收手，别让中继替我们报 timeout
-    if (Date.now() - startedAt > SWEEP_BUDGET_MS)
-      throw new PageError(ACTION_ERROR_READ_FAILED, "扫不完这段对话");
+    if (now() >= deadline) throw new PageError(ACTION_ERROR_READ_FAILED, "扫不完这段对话");
   }
   view.scrollTop = home;
   return [...seen.values()];
@@ -459,15 +467,6 @@ export async function readLast(
 }
 
 /**
- * 就绪预算（ms）：等「列表挂上且读得出」的窗口。
- *
- * 取 5s：真机上虚拟列表挂一屏约 190ms（#37 量过），「没就绪」是秒级窗口；
- * 比 25s 的 `SWEEP_BUDGET_MS` 短，因为这个预算只等**就位**，不扫整段对话——
- * 真失败要早报出来，别让调用方白等（`messages.*` 没有 `timeout` 入参可调）。
- */
-const READY_BUDGET_MS = 5_000;
-
-/**
  * 视口里此刻至少有一行读得出正文吗？
  *
  * 这是就绪的**唯一**判据，也是真机实测过的那个：2026-10-04 导航后立刻量，主列表
@@ -490,20 +489,21 @@ function hasReadableRow(view: ListViewport): boolean {
  * 在预算内等消息列表**就绪**，回那条视口。
  *
  * 「就绪」= **至少一行 `readRow` 读得出正文**。罩住两个抛点的病因：
- * - `lastMessage` 的「认不出消息行」——行挂上了、内容还没渲染时读不出；
+ * - `lastMessage` 的「认不出消息行」——行挂上了、内容还没渲染时读出；
  * - `readMessages` 的「滚不动消息列表」——一行都读不出时它连第一屏都没得扫。
  *
  * 结构**真的变了**（`conversation()` 回 null，锚点失效）不进轮询，当场抛——
  * 轮询只罩「挂着但没就位」，不罩「根本找不到」。这是 `wait.ts` 的 `viewWithin`
  * 同一套模式（#37 为 `wait.*` 立的规矩），这里扩到读动作。
  *
- * `now` / `settle` 是替身口：单测用即时 settle + 假时钟把预算走完，不必真等 5s。
+ * `deadline` 由调用方按 `params.timeout` 算好（**与扫描共用一份**，见文件头那段预算说明）；
+ * `now` / `settle` 是替身口：单测用即时 settle + 假时钟把预算走完，不必真等。
  */
 export async function readyWithin(
+  deadline: number,
   now: () => number = Date.now,
   settle: () => Promise<void> = sleepPoll,
 ): Promise<ListViewport> {
-  const deadline = now() + READY_BUDGET_MS;
   for (;;) {
     const view = conversation(document);
     if (view === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "找不到消息列表");
@@ -517,20 +517,32 @@ function sleepPoll(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 }
 
-/** `messages.list`：按序的全部消息（角色 + 文本）。新对话一行都没有，回空数组不算错。 */
-export async function listMessages(_frame: ActionFrame): Promise<MessageList> {
+/**
+ * `messages.list`：按序的全部消息（角色 + 文本）。新对话一行都没有，回空数组不算错。
+ *
+ * 预算**只算一次**（`params.timeout`，口径与 `wait.*` 同一个 `parseWaitSeconds`），
+ * 就绪等待与扫描共用——所以最坏耗时恒等于预算，恒留中继 30s 锁的余量。
+ */
+export async function listMessages(frame: ActionFrame): Promise<MessageList> {
   if (conversation(document) === null) return { messages: [] };
-  const view = await readyWithin();
-  const messages = await readMessages(view);
+  const deadline = Date.now() + parseWaitSeconds(frame) * 1_000;
+  const view = await readyWithin(deadline);
+  const messages = await readMessages(view, nextFrame, deadline);
   // 进得来就说明挂着行（`conversation` 靠一行行找上来的），一条没读到 = 认不出结构。
   if (messages.length === 0) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "认不出消息行");
   return { messages };
 }
 
-/** `messages.last`：最后一条。形状与 `list` 一致，最多一条。 */
-export async function lastMessage(_frame: ActionFrame): Promise<MessageList> {
+/**
+ * `messages.last`：最后一条。形状与 `list` 一致，最多一条。
+ *
+ * 同样收 `params.timeout`、同样只算一次预算——不因为「只读最后一屏、不扫全量」就另立特例，
+ * 调用方不必记「哪个动作有哪个参数」。
+ */
+export async function lastMessage(frame: ActionFrame): Promise<MessageList> {
   if (conversation(document) === null) return { messages: [] };
-  const view = await readyWithin();
+  const deadline = Date.now() + parseWaitSeconds(frame) * 1_000;
+  const view = await readyWithin(deadline);
   const message = await readLast(view);
   if (message === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "认不出消息行");
   return { messages: [message] };

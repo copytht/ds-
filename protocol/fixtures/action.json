@@ -126,6 +126,31 @@
       }
     },
     {
+      "name": "messages.list 带 timeout（预算由入参定，就绪与扫描共用一份）",
+      "request": {
+        "action": "messages.list",
+        "params": {
+          "timeout": 25
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "messages": [
+            {
+              "role": "user",
+              "text": "帮我看一眼这段代码"
+            },
+            {
+              "role": "assistant",
+              "text": "答案是 4271。"
+            }
+          ]
+        }
+      }
+    },
+    {
       "name": "messages.last 角色认不出（unknown）",
       "request": {
         "action": "messages.last",
@@ -139,6 +164,27 @@
             {
               "role": "unknown",
               "text": "认不出角色的那条"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "messages.last 带 timeout（不因为只读一屏就另立特例）",
+      "request": {
+        "action": "messages.last",
+        "params": {
+          "timeout": 5
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "messages": [
+            {
+              "role": "assistant",
+              "text": "答案是 4271。"
             }
           ]
         }
