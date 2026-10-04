@@ -6,6 +6,7 @@
 | --- | --- |
 | [代码复用](./code-reuse-thinking-guide.md) | 写新逻辑前：仓库里是不是已经有了一件 |
 | [跨层思考](./cross-layer-thinking-guide.md) | 改协议 / 失败码 / 消息形状：几个地方要一起动 |
+| [人先思考](./human-first-thinking-guide.md) | 定判据 / 操作页面：**人很容易做到就用人的方式**（信号在渲染里，不在 class 里） |
 
 域文档的使用规则不在本目录重复——术语看根 `CONTEXT.md`，决策看 `docs/adr/`，
 流程看 `docs/agents/domain.md`。

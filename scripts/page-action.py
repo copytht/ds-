@@ -168,6 +168,165 @@ def ax_line(node: dict) -> str:
     return f"{role:<18} {name[:70]}{tail}"
 
 
+# --------------------------------------------------------------------------- #
+# 全量捕获（capture）：站点一换版，先抓「完整的它」再下判断——别再靠零散探针
+# --------------------------------------------------------------------------- #
+
+CAPTURE_HTML_JS = "document.documentElement.outerHTML"
+
+CAPTURE_CSS_JS = r"""
+(() => {
+  const out = [];
+  for (const sheet of Array.from(document.styleSheets)) {
+    try {
+      for (const rule of Array.from(sheet.cssRules)) out.push(rule.cssText);
+    } catch (e) {
+      out.push("/* 读不到（跨源？）：" + (sheet.href || "inline") + " */");
+    }
+  }
+  return out.join("\n");
+})()
+"""
+
+CAPTURE_ASSETS_JS = r"""
+(() => {
+  const scripts = Array.from(document.querySelectorAll("script[src]")).map((s) => s.src);
+  const links = Array.from(document.querySelectorAll("link[rel=stylesheet]")).map((l) => l.href);
+  return JSON.stringify({ scripts, links }, null, 2);
+})()
+"""
+
+CAPTURE_DIGEST_JS = r"""
+(() => {
+  const rectOf = (el) => { const b = el.getBoundingClientRect(); return { l: Math.round(b.left), t: Math.round(b.top), r: Math.round(b.right), b: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height) }; };
+  const styled = (el) => { const cs = getComputedStyle(el); return { bg: cs.backgroundColor, radius: cs.borderRadius, display: cs.display, overflowY: cs.overflowY }; };
+  const painted = (row) => {
+    const out = [];
+    row.querySelectorAll("*").forEach((d) => {
+      const s = styled(d);
+      const has = s.bg && s.bg !== "rgba(0, 0, 0, 0)" && s.bg !== "transparent";
+      if (!has) return;
+      out.push({ tag: d.tagName, cls: String(d.className).slice(0, 44), bg: s.bg, radius: s.radius, rect: rectOf(d) });
+    });
+    return out.slice(0, 8);
+  };
+  const rowDigest = (r) => ({
+    key: r.getAttribute("data-virtual-list-item-key"),
+    markerRole: r.querySelector(".ds-assistant-message-main-content") ? "assistant" : (r.querySelector(".ds-collapsible-text") ? "user" : null),
+    hasMessage: r.querySelector(".ds-message") !== null,
+    hasPre: r.querySelectorAll("pre").length,
+    rect: rectOf(r),
+    text: (r.textContent || "").replace(/\s+/g, " ").slice(0, 60),
+    painted: painted(r),
+  });
+  const lists = Array.from(document.querySelectorAll(".ds-virtual-list")).map((l) => {
+    const box = l.querySelector(".ds-virtual-list-items");
+    const vis = box ? box.querySelector(".ds-virtual-list-visible-items") : null;
+    return {
+      cls: String(l.className),
+      style: styled(l),
+      rect: rectOf(l),
+      scrollHeight: l.scrollHeight,
+      clientHeight: l.clientHeight,
+      nRows: vis ? vis.children.length : 0,
+      rows: vis ? Array.from(vis.children).map(rowDigest) : [],
+    };
+  });
+  const circle = document.querySelector('div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle');
+  const composer = document.querySelector("textarea, [contenteditable='true']");
+  const path = circle ? circle.querySelector("svg path") : null;
+  return JSON.stringify({
+    url: location.href,
+    title: document.title,
+    capturedAt: new Date().toISOString(),
+    commitId: (document.querySelector('meta[name="commit-id"]') || {}).content || null,
+    historyStateKeys: Object.keys(history.state || {}),
+    lists,
+    composer: composer ? { tag: composer.tagName, editable: composer.getAttribute("contenteditable"), placeholder: composer.getAttribute("placeholder"), rect: rectOf(composer) } : null,
+    sendCircle: circle ? { cls: String(circle.className).slice(0, 90), pathStart: path ? path.getAttribute("d").slice(0, 28) : null, rect: rectOf(circle) } : null,
+  });
+})()
+"""
+
+
+async def script_sources(ws_url: str, match: str) -> list[tuple[str, str]]:
+    """收集已加载脚本的正文。
+
+    站点 JS 在跨源 CDN（`fe-static.deepseek.com`）上——页面里 `fetch` 会被 CORS 挡，
+    所以走 CDP：`Debugger.enable` 之后浏览器会把**已加载**的脚本成批 `scriptParsed` 补发，
+    再对命中 `match` 的取 `Debugger.getScriptSource`。
+    """
+    found: dict[str, str] = {}
+    async with websockets.connect(ws_url, max_size=None) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Debugger.enable"}))
+        idle_until = time.monotonic() + 4.0
+        while time.monotonic() < idle_until:
+            try:
+                message = json.loads(await asyncio.wait_for(ws.recv(), timeout=1.2))
+            except asyncio.TimeoutError:
+                break
+            if message.get("method") == "Debugger.scriptParsed":
+                params = message.get("params") or {}
+                url = str(params.get("url", ""))
+                if match in url:
+                    found[str(params.get("scriptId"))] = url
+        pending: dict[int, str] = {}
+        for index, (script_id, url) in enumerate(found.items()):
+            request_id = 100 + index
+            pending[request_id] = url
+            await ws.send(
+                json.dumps(
+                    {
+                        "id": request_id,
+                        "method": "Debugger.getScriptSource",
+                        "params": {"scriptId": script_id},
+                    }
+                )
+            )
+        sources: list[tuple[str, str]] = []
+        while pending:
+            message = json.loads(await ws.recv())
+            request_id = message.get("id")
+            if not isinstance(request_id, int) or request_id not in pending:
+                continue
+            url = pending.pop(request_id)
+            result = message.get("result") or {}
+            sources.append((url, str(result.get("scriptSource", ""))))
+        return sources
+
+
+def capture(out_dir: str, want_codes: bool) -> None:
+    """抓全量证据到 out_dir：page.html / styles.css / assets.json / digest.json / ax.json。"""
+    tab = ensure_site_tab()
+    ws = tab["webSocketDebuggerUrl"]
+    out = Path(out_dir) if out_dir else Path("captures") / time.strftime("%Y%m%d-%H%M%S")
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "page.html").write_text(str(unwrap(run(ws, CAPTURE_HTML_JS))), encoding="utf-8")
+    (out / "styles.css").write_text(str(unwrap(run(ws, CAPTURE_CSS_JS))), encoding="utf-8")
+    assets = str(unwrap(run(ws, CAPTURE_ASSETS_JS)))
+    (out / "assets.json").write_text(assets, encoding="utf-8")
+    (out / "digest.json").write_text(str(unwrap(run(ws, CAPTURE_DIGEST_JS))), encoding="utf-8")
+    nodes = ax_nodes(tab)
+    (out / "ax.json").write_text(json.dumps(nodes, ensure_ascii=False), encoding="utf-8")
+    codes = 0
+    if want_codes:
+        (out / "codes").mkdir(exist_ok=True)
+        for index, (url, source) in enumerate(
+            asyncio.run(script_sources(ws, "deepseek.com"))
+        ):
+            name = f"{index:02d}-" + url.rsplit("/", 1)[-1].replace("?", "_")[:64]
+            (out / "codes" / name).write_text(source, encoding="utf-8")
+            codes += 1
+    files = {p.name: p.stat().st_size for p in sorted(out.glob("*")) if p.is_file()}
+    print(
+        json.dumps(
+            {"out": str(out), "files": files, "codes": codes, "axNodes": len(nodes)},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def read_state() -> dict:
     tab = ensure_site_tab()
     value = unwrap(run(tab["webSocketDebuggerUrl"], READ_EXPR))
@@ -313,6 +472,13 @@ def main() -> None:
     ax.add_argument("--grep", default="", help="只打印 role/name/value 命中该串的节点")
     ax.add_argument("--max", type=int, default=80, help="最多打印多少行，默认 80")
     ax.add_argument("--all", action="store_true", help="连 ignored 的节点也打印")
+    capture_parser = sub.add_parser(
+        "capture", help="抓全量证据：完整 HTML / 同源 CSS / 资源清单 / 行快照 / 无障碍树"
+    )
+    capture_parser.add_argument("--out", default="", help="输出目录（默认 captures/<时间戳>/）")
+    capture_parser.add_argument(
+        "--codes", action="store_true", help="另把同源 <script src> 正文下载到 codes/"
+    )
     args = parser.parse_args()
 
     require_cdp()
@@ -407,6 +573,9 @@ def main() -> None:
             print(f"—— 打住：{shown} 行 / 共 {len(nodes)} 个节点（--max 调大 / --grep 收窄）")
         return
 
+    if args.command == "capture":
+        capture(args.out, args.codes)
+        return
 
 if __name__ == "__main__":
     main()
