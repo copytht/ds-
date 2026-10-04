@@ -1,0 +1,30 @@
+# OpenSpec 验证门：spec / change 不合法、或归档的 change 任务没做完 → 合不进 main。
+# 本仓唯一依赖 openspec CLI 的 CI 步骤（pnpm 锁的版本，见 devDependencies）。
+name: spec
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 从 package.json 的 packageManager 读 pnpm 版本（本仓钉 pnpm@12.4.2）
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # 全部 spec 与在途 change 必须合法
+      - run: pnpm exec openspec validate --all
+
+      # 归档的 change 必须任务全勾完（pre-commit 口径）
+      - run: pnpm exec openspec validate --archived
