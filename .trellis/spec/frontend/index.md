@@ -11,6 +11,7 @@
 | [状态与消息](./state-management.md) | 碰 `storage.local`、跨世界消息、background 状态 |
 | [类型安全](./type-safety.md) | 解析跨边界载荷、写 parse 函数 |
 | [本地工具](./local-tools.md) | 加 / 改扩展自带的围栏工具（不过网关那批） |
+| [站点 DOM 锚点](./site-dom-anchors.md) | 动读对话 / 等动作的 DOM 选择器、遇到站点换版 |
 | [质量](./quality-guidelines.md) | 跑检查、写测试、改协议 fixture、改 UI 文案 |
 
 ## 上游文档（本目录不复述）

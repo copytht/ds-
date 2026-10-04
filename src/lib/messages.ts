@@ -1,5 +1,6 @@
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_READ_FAILED, PageError } from "./action";
 import type { ActionFrame } from "./action";
+import { parseToolCall } from "./fence";
 
 /**
  * 读对话（`messages.list` / `messages.last`）：**只读页面渲染出来的 DOM**。
@@ -26,8 +27,16 @@ import type { ActionFrame } from "./action";
 
 /** 消息列表那层；认行、以及滚不动时的兜底都落它身上（滚动那层另找，见 `conversation`）。 */
 const LIST_SELECTOR = ".ds-virtual-list";
-/** 行：挂着虚拟列表的行 key，视口里挂载出来的才有。`wait.*` 扫新行也认它。 */
-export const ROW_SELECTOR = "[data-virtual-list-item-key]";
+/**
+ * 行。两版站点都认：
+ * - **老版**：行上挂 `data-virtual-list-item-key`（会话内序号）；
+ * - **新版**（2026-10-04 起）：行上只有哈希 class、**没有 key**，只能按结构认——
+ *   `.ds-virtual-list-visible-items`（虚拟列表最里层）的直接子元素。
+ *
+ * 哈希 class 不碰（见 #15），所以新版只能落到「结构位置」这条路上。`keysOf` 顺带读 key
+ * （老版有、新版没有）。逗号两条各认各的，新老结构都不挑。
+ */
+export const ROW_SELECTOR = "[data-virtual-list-item-key], .ds-virtual-list-visible-items > *";
 /** 助手正文（设计系统类）。有它就是助手，没有再看用户那条路。 */
 const ASSISTANT_BODY_SELECTOR = ".ds-assistant-message-main-content";
 /** 用户正文（设计系统类）。 */
@@ -163,6 +172,14 @@ function textOf(root: Element): string {
         parts.push("\n");
         continue;
       }
+      if (child.tagName === "PRE") {
+        // 新版站点（2026-10-04）把 ```send 围栏渲染成**代码块**：表头「send」+
+        // 复制/下载按钮 + `<pre>` 正文——原文里的 ``` 标记在 DOM 里没了。读的时候
+        // 把它还原成一段围栏：正文能解析成工具调用就写回 ```send，否则写普通的 ```。
+        const body = textOf(child);
+        parts.push(`\n\`\`\`${parseToolCall(body) === null ? "" : "send"}\n${body}\n\`\`\`\n`);
+        continue;
+      }
       if (BLOCK_TAGS.has(child.tagName)) {
         parts.push("\n");
         walk(child);
@@ -183,6 +200,10 @@ function textOf(root: Element): string {
 /**
  * 一行 → 一条消息。助手认设计系统那个正文类；用户行没有它，正文在可折叠文本里。
  * 认不出的行回 `null`——**不猜角色**。
+ *
+ * 注：站点换版后（2026-10-04）这两条正文类也随 `.ds-message` 一起没了，这版上 `readRow`
+ * 一律回 `null`（`messages.*` 因此读不出——见 #37）。**只需要正文文本**的 `wait.*` 不受
+ * 影响：它走 `rowText`（角色无关）。
  */
 export function readRow(row: Element): Message | null {
   const assistant = row.querySelector(ASSISTANT_BODY_SELECTOR);
@@ -191,6 +212,15 @@ export function readRow(row: Element): Message | null {
   const user = row.querySelector(USER_BODY_SELECTOR);
   if (user === null) return null; // 是消息行但认不出——跳过，别安个角色上去
   return { role: "user", text: textOf(user) };
+}
+
+/**
+ * 一行 → 正文文本（**不看角色**）。`wait.*` 只关心正文里有没有围栏 / 回灌首行锚，
+ * 不需要角色，所以在没有 role 判据的新版站点上照样能用。空文本回 `null`。
+ */
+export function rowText(row: Element): string | null {
+  const text = textOf(row);
+  return text === "" ? null : text;
 }
 
 /**
