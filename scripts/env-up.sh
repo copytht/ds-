@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # 环境准备：起缺的、**旧代码自动换**（ds-browser 装的扩展比构建旧会自动
 # 重启；中继跑旧代码提示 kill），最后拿真判据验一次。
-# 用法：scripts/env-up.sh [--status]   幂等，可反复跑；--status 只读汇总。
+# 用法：scripts/env-up.sh [--status] [--debug]
+#   --status 只读汇总
+#   --debug  让 ds-browser 带 --remote-debugging-port（开发探针用；见 scripts/page-action.py）
+# 幂等，可反复跑。
 #
 # 两件人做的事（脚本做不了）在末尾打印，不猜、不代劳。
 set -uo pipefail
@@ -27,11 +30,25 @@ rpc() {
 # Database 是 SW 注册表（可再生成、无用户数据），一并清。
 start_browser() {
   rm -rf "$PROFILE/Default/Service Worker/ScriptCache" "$PROFILE/Default/Service Worker/Database"
-  "$CHROME" --user-data-dir="$PROFILE" --load-extension="$MV3" \
-    --no-first-run --no-default-browser-check >/tmp/dsb-browser.log 2>&1 &
+  # 上一回是本脚本 kill 掉的：Chromium 记 exit_type=Crashed，下次启动会把旧标签页
+  # （含上一次的空白新标签页）恢复回来。环境准备反正会关掉旧标签页，这里把会话恢复
+  # 状态一并清掉，保证只剩命令行带的那个会话页。
+  rm -rf "$PROFILE/Default/Sessions" "$PROFILE/Default/Last Session" "$PROFILE/Default/Last Tabs"
+  # 起进程的同时把会话页当**首个标签页**：不带 URL 时独立 profile 会先开一个空白
+  # 新标签页，判据 3 再开一次就多出一个标签页。URL 跟在这里，一次到位。
+  if [ "${DEBUG:-0}" = 1 ]; then
+    "$CHROME" --user-data-dir="$PROFILE" --load-extension="$MV3" \
+      --remote-debugging-port="${DEBUG_PORT:-9222}" \
+      --no-first-run --no-default-browser-check "https://chat.deepseek.com/" \
+      >/tmp/dsb-browser.log 2>&1 &
+  else
+    "$CHROME" --user-data-dir="$PROFILE" --load-extension="$MV3" \
+      --no-first-run --no-default-browser-check "https://chat.deepseek.com/" \
+      >/tmp/dsb-browser.log 2>&1 &
+  fi
   disown
   STARTED_BROWSER=1
-  say 浏览器 "已起 → 独立 profile（清过 SW 脚本缓存）"
+  say 浏览器 "已起 → 独立 profile（清过 SW 脚本缓存与会话恢复，带会话标签页）"
 }
 
 # ds-browser 的主进程 PID：主进程的首个 flag 是 --user-data-dir，
@@ -92,7 +109,18 @@ PY
 }
 
 # ---- --status：只读汇总，不改动任何东西 ----
-if [ "${1:-}" = "--status" ]; then
+STATUS=0
+DEBUG=0
+DEBUG_PORT=9222
+for arg in "$@"; do
+  case "$arg" in
+    --status) STATUS=1 ;;
+    --debug) DEBUG=1 ;;
+    *) say 提示 "忽略未知参数：$arg" ;;
+  esac
+done
+
+if [ "$STATUS" = 1 ]; then
   if [ ! -f "$MV3/background.js" ]; then
     say 构建 "缺产物（跑 env-up 重建）"
   elif [ -n "$(find src entrypoints -name '*.ts' -newer "$MV3/background.js" 2>/dev/null | head -1)" ]; then
@@ -121,6 +149,11 @@ if [ "${1:-}" = "--status" ]; then
     fi
   else
     say 浏览器 "没在跑（跑 env-up 起）"
+  fi
+  if lsof -nP -iTCP:"$DEBUG_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+    say 调试口 "在（${DEBUG_PORT}）：可跑 scripts/page-action.py"
+  else
+    say 调试口 "关（要探针就 scripts/env-up.sh --debug）"
   fi
   age=$(last_probe_age)
   if [ "$age" = "-1" ]; then
@@ -184,8 +217,21 @@ if [ -n "$BROWSER_MAIN" ]; then
   # profile 里不丢，开着的标签页会关；用户的别的浏览器一律不碰。
   BROWSER_STARTED=$(proc_started "$BROWSER_MAIN")
   BUILD_MTIME=$(stat -f %m "$MV3/background.js" 2>/dev/null || echo 0)
-  if [ -n "$BROWSER_STARTED" ] && [ "$BUILD_MTIME" -gt "$BROWSER_STARTED" ]; then
-    say 提示 "浏览器装的扩展比构建旧（跑旧代码）：自动重启 ds-browser"
+  STALE=0
+  if [ -n "$BROWSER_STARTED" ] && [ "$BUILD_MTIME" -gt "$BROWSER_STARTED" ]; then STALE=1; fi
+  NEED_DEBUG=0
+  if [ "$DEBUG" = 1 ]; then
+    case "$(ps -o command= -p "$BROWSER_MAIN" 2>/dev/null)" in
+      *--remote-debugging-port=*) : ;;
+      *) NEED_DEBUG=1 ;;
+    esac
+  fi
+  if [ "$STALE" = 1 ] || [ "$NEED_DEBUG" = 1 ]; then
+    if [ "$STALE" = 1 ]; then
+      say 提示 "浏览器装的扩展比构建旧（跑旧代码）：自动重启 ds-browser"
+    else
+      say 提示 "浏览器没带调试口：按 --debug 重启 ds-browser"
+    fi
     kill "$BROWSER_MAIN" 2>/dev/null
     for _ in 1 2 3 4 5; do
       ps -p "$BROWSER_MAIN" >/dev/null 2>&1 || break
@@ -230,13 +276,15 @@ else
 fi
 
 if [ "$STARTED_BROWSER" = 1 ]; then
-  "$CHROME" --user-data-dir="$PROFILE" --no-first-run \
-    "https://chat.deepseek.com/" >/tmp/dsb-open.log 2>&1
-  sleep 2
-  say 判据3 "已开 chat.deepseek.com（浏览器是本脚本起的，转给在跑的实例）"
+  # 会话页已随浏览器启动打开（首个标签页），这里不再另起一次 Chromium——
+  # 那只会再开一个标签页。这里只报一句。
+  say 判据3 "会话页随浏览器启动已开（首个标签页即 chat.deepseek.com，无空白新标签页）"
 else
   say 判据3 "浏览器是先起的：有没有会话标签页这里问不到（扩展没有外露探针面）"
   say 判据3 "要开一个就：open -a Chromium 'https://chat.deepseek.com/'"
+fi
+if [ "$DEBUG" = 1 ]; then
+  say 判据3 "调试口 ${DEBUG_PORT}：探针 scripts/page-action.py read / send <动作> / stop-test"
 fi
 
 # 判据 4：扩展最后探活（信息项，不阻塞——总开关关着是常态）。

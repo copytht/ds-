@@ -63,7 +63,7 @@ export const ACTION_ERROR_TAB_GONE = "tab-gone";
 export const ACTION_ERROR_BACKING_OFF = "backing-off";
 /** 写作框不在：禁言 / 未登录 / 页面没渲染（`page.state` 的 `account` 能说清是哪一种）。 */
 export const ACTION_ERROR_COMPOSER_ABSENT = "composer-absent";
-/** 页面还在，但上面找不到认得的那个东西：发送键、「开启新对话」、消息列表。 */
+/** 页面还在，但上面找不到认得的那个东西：发送键、停止键、「开启新对话」、消息列表。 */
 export const ACTION_ERROR_PAGE_CHANGED = "page-changed";
 /** 读到了也读不完：滚动层认错、或一趟扫不完（成本天花板，见 `messages.ts`）。 */
 export const ACTION_ERROR_READ_FAILED = "read-failed";
@@ -105,11 +105,13 @@ export const SPEAK_GATED_ACTIONS: ReadonlySet<string> = new Set([
  * 只读动作（`composer.read` / `messages.*` / `page.state` / `tabs.list`）
  * **不受退避影响**——账号在处罚区时人与 agent 仍要能读处境。
  * 名单是显式的（与 `SPEAK_GATED_ACTIONS` 同一规矩），新增写动作要
- * 记进来；`chat.new` 虽不动写作框，但它开新对话，也是写。
+ * 记进来；`chat.new` 虽不动写作框，但它开新对话，也是写；
+ * `stop.click` 不动写作框、却中断一次生成，同属改页面状态。
  */
 export const BACKOFF_GATED_ACTIONS: ReadonlySet<string> = new Set([
   ...SPEAK_GATED_ACTIONS,
   "chat.new",
+  "stop.click",
   // 写作框旁的两个开关（#30）：会改页面状态，是写动作；但不「代你发言」，故不进 speak 闸。
   "think.set",
   "search.set",

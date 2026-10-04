@@ -36,6 +36,7 @@ import {
   readThink,
   setSearch,
   setThink,
+  stopClick,
   typeComposer,
 } from "../src/lib/page";
 import { lastMessage, listMessages } from "../src/lib/messages";
@@ -207,6 +208,7 @@ export default defineContentScript({
       "search.set": setSearch,
       "send.click": clickSend,
       "send.enter": pressEnter,
+      "stop.click": stopClick,
       "chat.new": newChat,
       // 只读那批：读对话走 DOM（#20 口径），不碰站点的响应体。
       "messages.list": listMessages,

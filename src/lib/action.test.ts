@@ -504,4 +504,15 @@ describe("退避闸（账号在处罚区，写动作停发）", () => {
     ).toEqual({ ok: true, result: {} });
     expect(sent.map((f) => f.action)).toEqual(["page.state", "think.set"]);
   });
+
+  it("stop.click 也在退避闸下（停生成也是改页面状态）", async () => {
+    const { send, sent } = recordingSendToTab(MUTED);
+    const ctx = context({ sendToTab: send });
+
+    expect(await runAction(frame({ action: "stop.click", target: "42" }), ctx)).toEqual({
+      ok: false,
+      error: "backing-off",
+    });
+    expect(sent.map((f) => f.action)).toEqual(["page.state"]);
+  });
 });

@@ -113,3 +113,49 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: 页面动作 7/8：stop.click（生成中停止键）
+<!-- trellis-session: v=2 fp=6c5bd3e897e249d5 -->
+
+**Date**: 2026-10-04
+**Task**: 页面动作 7/8：stop.click（生成中停止键）
+
+### Summary
+
+真机确认停止键与发送键同元素同 class、aria-label 空，只能认圆键图标（方块=停止/箭头=发送），认不出回 page-changed，绝不误点发送；名册+退避闸+fixture+真机 DOM 回归；chat.new 未改；spec 增页面动作选择器口径。pnpm quality 全绿；#21 关；遗留开 #32（生成期 send.click 命停止键）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e4a5d89` | feat(页面动作): stop.click（生成中停止键）——#21 7/8 |
+| `9543e3f` | docs: 页面动作选择器口径入 spec + #21 任务规划件 |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 6: dsb 内建工作工具（root 沙箱五件）+ env-up 会话标签页修正
+<!-- trellis-session: v=2 fp=2816d26eb34cc02b -->
+
+**Date**: 2026-10-04
+**Task**: dsb 内建工作工具（root 沙箱五件）+ env-up 会话标签页修正
+**Branch**: `main`
+
+### Summary
+
+dsb 内建 ls/read/grep/write/edit（DSB_WORK_ROOT 沙箱、无 SHELL、只护 .git、ADR-0012）；env-up 起独立 profile 不再多空白新标签页（带 URL + 清会话恢复）；dev→main 合并并清理全部工作树
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b599f39` | fix(env-up): 起独立 profile 不再多一个空白新标签页 |
+| `7abaae3` | feat: dsb 内建工作工具 ls/read/grep/write/edit（root 沙箱，无 SHELL，ADR-0012） |
+| `e3fdbc6` | Merge branch 'dev' |
+
+### Status
+
+[OK] **Completed**

@@ -29,8 +29,10 @@
 
 **跑 `scripts/env-up.sh`**，别现拼命令：它起缺的、**旧代码自动换**（ds-browser 装的扩展
 比构建旧会自动重启；中继跑旧代码提示 kill），末尾判据（中继自检健康 /
-`tools/list` 取得到工具表 / 扩展最后探活新鲜 / 会话标签页——浏览器是它刚起或刚重启的
-才代开）。幂等，随时可重跑；`--status` 只读汇总。
+`tools/list` 取得到工具表 / 扩展最后探活新鲜 / 会话标签页——env-up 起或重启浏览器时
+**清掉会话恢复、直接带 `chat.deepseek.com` 当首个标签页**（旧标签页与空白新标签页都不会
+回来）；浏览器是先前就起着的，env-up 不代开、只报）。幂等，随时可重跑；`--status` 只读汇总、
+`--debug` 带调试口起（开发探针用）。
 
 **动作探针别拿 `target: null` 打页面动作**：`page.state` / `composer.read` / `messages.*` /
 `chat.new` 要先 `tabs.list` 拿标签页 id 再带上。`target: null` 只有 `tabs.list` 与 `toggle.*`
@@ -40,10 +42,20 @@
 登录 DeepSeek 与勾「替人开口」是人做的两件，脚本只打印不代劳；没勾闸则写动作回 `disabled`
 属预期，不是故障。
 
+dsb 内建五件工作工具（`ls` / `read` / `grep` / `write` / `edit`），钉死在工作文件夹 root 内；
+`DSB_WORK_ROOT` 改 root（缺省本仓根），改完重启中继才生效。不给命令执行。
+
 **动作失败码分得开，别再让它们混成一个**：写动作撞禁言/未登录回 `composer-absent`
 （配 `page.state` 的 `account` 读得清是哪一种），页面上找不到认得的东西回
 `page-changed`，读不完回 `read-failed`；只有这一跳真的走不通才是 `tab-gone`。执行器要
 抛带码的 `PageError`，收信那层（`channel.ts` 的 `failureCode`）才认。
+
+## 脚本
+
+**所有脚本放 `scripts/`、按可复用写**：一件事一个工具、参数化；别写一次性 `/tmp` 脚本，
+更别把脚本贴进对话就算完。要临时读页面 / 发页面动作 / 跑表达式，走已有工具的入口
+（`scripts/page-action.py` 的 `read` / `send` / `js` / `stop-test`），别另起一个。
+脚本改动同样过 `pnpm quality`（ruff 会扫 `scripts/`）。
 
 ## Agent skills
 
