@@ -158,6 +158,10 @@ class McpService:
             elif method.startswith("notifications/"):
                 return None
             elif method == "ping":
+                # 探活留痕：扩展每 30s 探一次（总开关开着才排班），记下来
+                # env-up 才能读「扩展最后探活距今多久」。脚本自检走
+                # initialize（不记），ping 日志即纯扩展信号。
+                log_event("ping")
                 result = {}
             elif method == "tools/list":
                 result = {"tools": [self._descriptor(tool) for tool in self._tools.values()]}

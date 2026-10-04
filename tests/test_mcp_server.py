@@ -86,6 +86,12 @@ def test_ping_answers_empty(service: McpService) -> None:
     assert result_of(call(service, "p", "ping")) == {}
 
 
+def test_ping_leaves_a_trace(service: McpService, caplog: pytest.LogCaptureFixture) -> None:
+    """探活留一行——env-up 的「扩展最后探活」判据就读它。"""
+    assert result_of(call(service, "p", "ping")) == {}
+    assert [record.message for record in caplog.records if record.message == "ping"] == ["ping"]
+
+
 def test_tools_list_describes_every_registered_tool(service: McpService) -> None:
     result = result_of(call(service, 1, "tools/list"))
     assert [tool["name"] for tool in result["tools"]] == ["echo", "fail", "boom"]
