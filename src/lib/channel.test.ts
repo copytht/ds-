@@ -24,6 +24,7 @@ import {
   parseSendResponse,
   parseChainMessage,
   parseSaidReport,
+  parseStopReport,
   parseToolsRequest,
   parseToolsResponse,
   callMessage,
@@ -31,6 +32,9 @@ import {
   saidMessage,
   saidReportMessage,
   SAID_MESSAGE_TYPE,
+  stopMessage,
+  stopReportMessage,
+  STOP_MESSAGE_TYPE,
   TOOLS_REQUEST_MESSAGE_TYPE,
   toolsMessage,
   toolsRequestMessage,
@@ -46,16 +50,55 @@ function requestFor(action: string): unknown {
   return { type: ACTION_MESSAGE_TYPE, frame: { ...ACTION_FRAME, action } };
 }
 
+describe("停手信封（页面世界报「续聊到顶」）", () => {
+  it("页面世界 → 隔离世界：kind/ id / cause 对得上就收", () => {
+    const message = stopMessage("rounds-1", "continuation-limit");
+    expect(parseChainMessage(message)).toEqual(message);
+  });
+
+  it("cause 空的 / 缺的一律不收（停手不说原因等于没说）", () => {
+    expect(parseChainMessage({ ...stopMessage("r", "x"), cause: "   " })).toBeNull();
+    expect(parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "stop", id: "r" })).toBeNull();
+  });
+
+  it("隔离世界 → background：带上页面会话 id，缺省是 null", () => {
+    expect(parseStopReport(stopReportMessage("rounds-1", "continuation-limit", "abc"))).toEqual(
+      stopReportMessage("rounds-1", "continuation-limit", "abc"),
+    );
+    expect(parseStopReport(stopReportMessage("rounds-1", "continuation-limit"))?.page).toBeNull();
+    expect(parseStopReport({ ...stopReportMessage("rounds-1", "x"), page: "" })).toBeNull();
+  });
+
+  it("别的 type 不抢这条消息", () => {
+    expect(parseStopReport(saidReportMessage("说句话"))).toBeNull();
+    expect(parseStopReport({ type: STOP_MESSAGE_TYPE, id: "", cause: "x" })).toBeNull();
+  });
+});
+
 describe("页面世界 ↔ 隔离世界的信封", () => {
-  it("围栏正文信封原样过", () => {
-    const message = callMessage("send-1", '{"tool":"fs_read_file","arguments":{}}');
+  it("围栏正文信封原样过（一轮一块）", () => {
+    const message = callMessage("send-1", ['{"tool":"fs_read_file","arguments":{}}']);
     expect(message).toEqual({
       source: CHAIN_MESSAGE_SOURCE,
       kind: "call",
       id: "send-1",
-      call: '{"tool":"fs_read_file","arguments":{}}',
+      calls: ['{"tool":"fs_read_file","arguments":{}}'],
     });
     expect(parseChainMessage(message)).toEqual(message);
+  });
+
+  it("一轮多块也原样过（顺序不动）", () => {
+    const message = callMessage("send-1", ['{"tool":"a","arguments":{}}', '{"tool":"b"}']);
+    expect(parseChainMessage(message)?.kind).toBe("call");
+    expect(parseChainMessage(message)).toEqual(message);
+  });
+
+  it("各块必须是非空文本，空数组不算（一轮至少一块）", () => {
+    const base = { source: CHAIN_MESSAGE_SOURCE, kind: "call", id: "send-1" };
+    expect(parseChainMessage({ ...base, calls: [] })).toBeNull();
+    expect(parseChainMessage({ ...base, calls: ["  "] })).toBeNull();
+    expect(parseChainMessage({ ...base, calls: ["{}", ""] })).toBeNull();
+    expect(parseChainMessage({ ...base, calls: "{}" })).toBeNull();
   });
 
   it("结果信封带同构载荷，原样过", () => {
@@ -70,13 +113,18 @@ describe("页面世界 ↔ 隔离世界的信封", () => {
     expect(parseChainMessage(undefined)).toBeNull();
     expect(parseChainMessage(null)).toBeNull();
     expect(parseChainMessage("ds-/chain")).toBeNull();
-    expect(parseChainMessage({ source: "page", kind: "call", id: "1", call: "{}" })).toBeNull();
+    expect(parseChainMessage({ source: "page", kind: "call", id: "1", calls: ["{}"] })).toBeNull();
     expect(parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "ping" })).toBeNull();
     expect(
-      parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "call", id: "", call: "{}" }),
+      parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "call", id: "", calls: ["{}"] }),
     ).toBeNull();
     expect(
-      parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "call", id: "send-1", call: "   " }),
+      parseChainMessage({
+        source: CHAIN_MESSAGE_SOURCE,
+        kind: "call",
+        id: "send-1",
+        calls: ["   "],
+      }),
     ).toBeNull();
     expect(
       parseChainMessage({ source: CHAIN_MESSAGE_SOURCE, kind: "call", id: "send-1" }),
@@ -113,8 +161,11 @@ describe("页面世界 ↔ 隔离世界的信封", () => {
 
 describe("隔离世界 ↔ background 的信封", () => {
   it("请求与响应原样过", () => {
-    const request = sendRequestMessage("send-2", '{"tool":"ping_now","arguments":{}}');
+    const request = sendRequestMessage("send-2", ['{"tool":"ping_now","arguments":{}}']);
     expect(parseSendRequest(request)).toEqual(request);
+
+    const two = sendRequestMessage("send-3", ['{"tool":"a","arguments":{}}', '{"tool":"b"}']);
+    expect(parseSendRequest(two)).toEqual(two);
 
     const response = sendResponseMessage("send-2", {
       status: "error",
@@ -125,8 +176,9 @@ describe("隔离世界 ↔ background 的信封", () => {
 
   it("认不出的请求与响应不收", () => {
     expect(parseSendRequest({})).toBeNull();
-    expect(parseSendRequest({ type: "ds-/other", id: "1", call: "{}" })).toBeNull();
-    expect(parseSendRequest({ type: "ds-/send", id: "1", call: "" })).toBeNull();
+    expect(parseSendRequest({ type: "ds-/other", id: "1", calls: ["{}"] })).toBeNull();
+    expect(parseSendRequest({ type: "ds-/send", id: "1", calls: [] })).toBeNull();
+    expect(parseSendRequest({ type: "ds-/send", id: "1", calls: [""] })).toBeNull();
     expect(parseSendRequest({ type: "ds-/send", id: "1" })).toBeNull();
     expect(parseSendResponse(undefined)).toBeNull();
     expect(parseSendResponse({ id: "1", payload: { status: "error" } })).toBeNull();
@@ -420,7 +472,7 @@ describe("内容脚本的动作收信（entrypoints/content.ts 接的那一层�
   it("认不出的消息不响应（不抢 send 的消息、不回 undefined 当结果）", async () => {
     const sendResponse = vi.fn();
     expect(
-      actionListener({})(sendRequestMessage("send-1", "问题"), undefined, sendResponse),
+      actionListener({})(sendRequestMessage("send-1", ["问题"]), undefined, sendResponse),
     ).toBeUndefined();
     expect(actionListener({})({ hello: "world" }, undefined, sendResponse)).toBeUndefined();
     expect(actionListener({})(undefined, undefined, sendResponse)).toBeUndefined();

@@ -3,8 +3,9 @@
  * 页面 → 扩展的线协议是 ```send（一段工具调用 JSON）；页面向人举手是
  * ```ask（#26）——认出但不转给中继，见 `inject.content.ts`。
  *
- * 规则：普通代码块与非协议围栏一律不认；一次回答最多一块，只认
- * 第一块；正文可多行，用单独一行 ``` 结束。
+ * 规则：普通代码块与非协议围栏一律不认；正文可多行，用单独一行 ``` 结束。
+ * **一次回答可以排多块**：`parseSendFences` 按顺序全取（执行那一侧用），
+ * `parseSendFence` 只取第一块（「有没有排围栏」这类判据用，如 `wait.fence`）。
  */
 
 const SEND_OPENING = "```send";
@@ -18,36 +19,63 @@ function isOpeningLine(line: string, opening: string): boolean {
   return rest === "" || /^\s/.test(rest);
 }
 
-/** 找出第一个指定围栏的正文；找不到、问空了或围栏没闭合都返回 null。 */
-function parseFence(text: string, opening: string): string | null {
+/**
+ * 找出**所有**指定围栏的正文，按出现顺序。
+ *
+ * 没闭合的那一块（以及排空了的那一块）丢掉、**继续往后找**：不猜半截，
+ * 但不因为它放弃后面那些好的。
+ */
+function parseFences(text: string, opening: string): string[] {
   const lines = text.split("\n");
-  const start = lines.findIndex((line) => isOpeningLine(line, opening));
-  if (start === -1) return null;
+  const bodies: string[] = [];
+  let index = 0;
 
-  const rest = (lines[start] ?? "").slice(opening.length).trim();
-  const body: string[] = rest === "" ? [] : [rest];
-
-  for (let i = start + 1; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    if (line.trim() === CLOSING) {
-      const question = body.join("\n").trim();
-      return question === "" ? null : question;
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    if (!isOpeningLine(line, opening)) {
+      index += 1;
+      continue;
     }
-    body.push(line);
+
+    const rest = line.slice(opening.length).trim();
+    const body: string[] = rest === "" ? [] : [rest];
+    let cursor = index + 1;
+    let closed = false;
+    for (; cursor < lines.length; cursor += 1) {
+      if ((lines[cursor] ?? "").trim() === CLOSING) {
+        closed = true;
+        break;
+      }
+      body.push(lines[cursor] ?? "");
+    }
+
+    const joined = body.join("\n").trim();
+    if (closed && joined !== "") bodies.push(joined);
+    index = closed ? cursor + 1 : cursor;
   }
 
-  // 围栏没闭合：按无效输入处理，不猜后半截。
-  return null;
+  return bodies;
 }
 
-/** 找出第一个 send 围栏的问题正文（转给中继的那条）。 */
+/**
+ * 一次回答里**所有** send 围栏的正文（一段工具调用 JSON 一条），按出现顺序。
+ * 执行那一侧用它——排了几块就执行几块。
+ */
+export function parseSendFences(text: string): readonly string[] {
+  return parseFences(text, SEND_OPENING);
+}
+
+/**
+ * 第一块 send 围栏的正文；一块都没排就是 null。
+ * 「有没有排围栏」这类判据用它（`wait.fence`），执行那一侧用 `parseSendFences`。
+ */
 export function parseSendFence(text: string): string | null {
-  return parseFence(text, SEND_OPENING);
+  return parseSendFences(text)[0] ?? null;
 }
 
-/** 找出第一个 ask 围栏的问题正文（网页向人举手，不转给中继）。 */
+/** 第一块 ask 围栏的正文（网页向人举手，一次只认一块）。 */
 export function parseAskFence(text: string): string | null {
-  return parseFence(text, ASK_OPENING);
+  return parseFences(text, ASK_OPENING)[0] ?? null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -92,4 +120,4 @@ export function parseToolCall(text: string): ToolCall | null {
 /** 围栏排坏了时回灌的正文（`status: ok` 的一条，进对话流，让模型自己改）。 */
 export const MALFORMED_CALL_HINT =
   '围栏里不是合法的工具调用。期望形状：{"tool": "工具名", "arguments": {…按该工具的入参…}}，' +
-  "arguments 是对象（没有参数写 {}）；一次最多排一块。";
+  "arguments 是对象（没有参数写 {}）；每块围栏里只放一条调用（一次可以排多块）。";

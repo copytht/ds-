@@ -1,11 +1,13 @@
-"""MCP 网关：stdio 子进程的拉起、汇总、转发，以及三个失败码的册子。"""
+"""MCP 网关：stdio 子进程的拉起、汇总、转发、限额，以及三个失败码的册子。"""
 
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,24 +15,30 @@ from dsb.gateway import (
     ERROR_NOT_RUNNING,
     ERROR_TIMEOUT,
     ERROR_UNEXPECTED,
+    MAX_RESULT_CHARS,
+    MAX_TOOLS_PER_SERVER,
     Gateway,
+    cap_result,
     command_of,
     load_config,
     normalize,
+    resolve_seconds,
     resolve_timeout,
     text_of_result,
 )
 
 #: 替身 MCP server：说标准 JSON-RPC over stdio。按 arguments.text 的暗号走四种岔路。
 FAKE_SERVER = """
-import json, sys, time
+import json, os, sys, time
 
+# 工具件数可配：单服务工具数上限那条判据要拿一张超长的表来试（第一件恒叫 echo）。
 TOOLS = [
     {
-        "name": "echo",
+        "name": "echo" if index == 0 else "echo%d" % index,
         "description": "回声",
         "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}},
     }
+    for index in range(int(os.environ.get("FAKE_TOOL_COUNT", "1")))
 ]
 
 for line in sys.stdin:
@@ -59,7 +67,11 @@ for line in sys.stdin:
             continue
         if text == "die":
             sys.exit(1)
-        if text == "boom":
+        if text == "huge":
+            reply = {"jsonrpc": "2.0", "id": rid, "result": {
+                "content": [{"type": "text", "text": "x" * (64 * 1024 + 1024)}], "isError": False,
+            }}
+        elif text == "boom":
             reply = {"jsonrpc": "2.0", "id": rid, "error": {"code": -32603, "message": "boom"}}
         elif text == "iserr":
             reply = {"jsonrpc": "2.0", "id": rid, "result": {
@@ -83,10 +95,16 @@ def fake_script(tmp_path: Path) -> Path:
     return path
 
 
-def make_gateway(fake_script: Path, *, timeout: float = 3.0) -> Gateway:
-    return Gateway.from_config(
-        {"fake": {"command": [sys.executable, str(fake_script)]}}, timeout=timeout
-    )
+def make_gateway(
+    fake_script: Path,
+    *,
+    timeout: float = 3.0,
+    env: dict[str, str] | None = None,
+) -> Gateway:
+    entry: dict[str, Any] = {"command": [sys.executable, str(fake_script)]}
+    if env is not None:
+        entry["env"] = env
+    return Gateway.from_config({"fake": entry}, timeout=timeout)
 
 
 @pytest.fixture()
@@ -205,6 +223,62 @@ def test_a_hanging_server_hits_the_deadline(fake_script: Path) -> None:
     try:
         payload, failed = gate.tools()[0].handler({"text": "hang"})
         assert ERROR_TIMEOUT in payload["text"] and failed
+    finally:
+        gate.stop()
+
+
+def test_cap_result_keeps_short_text_and_names_the_original_length_of_a_long_one() -> None:
+    assert cap_result("短的") == "短的"
+    text = "x" * (MAX_RESULT_CHARS + 5)
+    capped = cap_result(text)
+    assert capped.startswith("x" * MAX_RESULT_CHARS)
+    assert "已截断" in capped
+    assert f"原文 {MAX_RESULT_CHARS + 5} 字" in capped
+
+
+def test_resolve_seconds_prefers_the_process_then_the_env_file_then_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DSB_CONNECT_TIMEOUT", raising=False)
+    assert resolve_seconds("", "DSB_CONNECT_TIMEOUT", 30.0) == 30.0
+    assert resolve_seconds("DSB_CONNECT_TIMEOUT=12.5\n", "DSB_CONNECT_TIMEOUT", 30.0) == 12.5
+    monkeypatch.setenv("DSB_CONNECT_TIMEOUT", "7")
+    assert resolve_seconds("DSB_CONNECT_TIMEOUT=12.5\n", "DSB_CONNECT_TIMEOUT", 30.0) == 7.0
+
+
+def test_resolve_seconds_falls_back_on_junk_and_non_positive() -> None:
+    assert resolve_seconds("DSB_DISCOVERY_TIMEOUT=abc\n", "DSB_DISCOVERY_TIMEOUT", 20.0) == 20.0
+    assert resolve_seconds("DSB_DISCOVERY_TIMEOUT=0\n", "DSB_DISCOVERY_TIMEOUT", 20.0) == 20.0
+    assert resolve_seconds("DSB_DISCOVERY_TIMEOUT=-1\n", "DSB_DISCOVERY_TIMEOUT", 20.0) == 20.0
+
+
+def test_a_huge_result_is_capped_and_the_original_length_is_logged(
+    fake_script: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    gate = make_gateway(fake_script)
+    try:
+        handler = gate.tools()[0].handler
+        with caplog.at_level(logging.INFO, logger="dsb"):
+            payload, failed = handler({"text": "huge"})
+        assert failed is False
+        assert "已截断" in payload["text"]
+        assert f"原文 {MAX_RESULT_CHARS + 1024} 字" in payload["text"]
+        assert "result-capped" in caplog.text
+        assert f"chars={MAX_RESULT_CHARS + 1024}" in caplog.text
+    finally:
+        gate.stop()
+
+
+def test_a_server_with_too_many_tools_is_capped_and_logged(
+    fake_script: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    gate = make_gateway(fake_script, env={"FAKE_TOOL_COUNT": "130"})
+    try:
+        with caplog.at_level(logging.INFO, logger="dsb"):
+            tools = gate.tools()
+        assert len(tools) == MAX_TOOLS_PER_SERVER
+        assert "tools-capped" in caplog.text
+        assert "count=130" in caplog.text
     finally:
         gate.stop()
 

@@ -7,7 +7,7 @@
  * 用户自己在页面里敲的围栏在请求侧，进不到这里。
  *
  * 响应可能是流式（一行一个 `data:` 载荷）也可能是整块 JSON，两条形状都先还原成
- * 回答正文，再交给 `parseSendFence`；围栏怎么切只有一条路径，这里不自己再切一遍。
+ * 回答正文，再交给 `parseSendFences`；围栏怎么切只有一条路径，这里不自己再切一遍。
  *
  * 站点自己那条是 **OT 增量流**（真机抓到的形状，见 #14）：正文不在 `content`/`text`
  * 键里，而是散在 `data: {"v":"…"}` 与 `{"p":"response/fragments/-1/content","v":"…"}` 的
@@ -16,7 +16,7 @@
  * 必须先把片段拼成正文，才谈得上认围栏。
  */
 
-import { parseAskFence, parseSendFence } from "./fence";
+import { parseAskFence, parseSendFences } from "./fence";
 
 /** 围栏起始的字面量：兜底路径要在原文里找到它，再交给围栏解析。 */
 const SEND_FENCE_OPENING = "```send";
@@ -201,15 +201,14 @@ const JSON_ESCAPES: Record<string, string> = {
 };
 
 /** 把响应原文里的转义还原一层，让被 JSON 转义包住的围栏重新变成行。 */
-function unescapeOnce(raw: string): string {
-  return raw.replace(/\\(n|r|t|"|\\|\/)/g, (match, char: string) => JSON_ESCAPES[char] ?? match);
-}
-
 const CLOSING_RESIDUE = /^["}\],\s]/;
 
 /**
- * 兜底块里找收尾的 ```：必须独占一行，且后面要么是行尾，
- * 要么是原文明末拖出来的 JSON 残渣；认不出就不硬切。
+ * 兜底块里找收尾的 ```：必须独占一行，且后面要么是行尾，要么是原文明末拖出来的
+ * JSON 残渣（``\`\`\`"}`` 这种）；认不出就不硬切。
+ *
+ * 尾随的残渣必须容下，否则那一块会被当成「没闭合」整块作废——真机上兜底路径的
+ * 原文一律带着这截拖尾。
  */
 function cutFencedBlock(block: string, opening: string): string {
   let from = opening.length;
@@ -225,41 +224,51 @@ function cutFencedBlock(block: string, opening: string): string {
   }
 }
 
+function unescapeOnce(raw: string): string {
+  return raw.replace(/\\(n|r|t|"|\\|\/)/g, (match, char: string) => JSON_ESCAPES[char] ?? match);
+}
+
 /**
- * 响应原文 → 指定围栏里的正文；没排围栏、排的是普通代码块或非协议
- * 围栏、一次排多块（只认第一块）、围栏没闭合，都返回 null。
+ * 响应原文 → 指定围栏里的正文（一条一块）；没排围栏、排的是普通代码块或非协议
+ * 围栏、围栏没闭合，都返回空数组。
  *
  * 三条路共用：OT 增量流先拼正文再认；直出的 JSON 响应从回答正文里认；
  * 都认不出才走兜底——把原文转义还原一层、从围栏起始处切进来，仍然
  * 只用围栏解析这一条路径（`parse`）。
  */
-function detectFence(
+function detectFences(
   raw: string,
   opening: string,
-  parse: (text: string) => string | null,
-): string | null {
+  parse: (text: string) => readonly string[],
+): readonly string[] {
   // OT 形状认得：只在拼好的正文里找围栏，认不出就是没排——不去原文里捞
   // （思考过程里常常举一个 ```send 的例子，捞了会把例子当真）。
   const ot = otAnswer(raw);
   if (ot !== null) return parse(ot);
 
   const direct = parse(extractAssistantAnswer(raw));
-  if (direct !== null) return direct;
+  if (direct.length > 0) return direct;
 
-  // 兜底：正文形状认不出时，把原文转义还原一层、从围栏起始处切进来，
-  // 切不出围栏块就整段交，让围栏解析自己判没闭合。
+  // 兜底：正文形状认不出时，把原文转义还原一层、从围栏起始处切进来，**切到收尾行**
+  // 再交给围栏解析（原文末尾拖着 JSON 残渣，不切的话收尾行认不出来）。
+  // 这条路只认第一块：它的活儿是「别把整段回答丢了」，一次多块本来就走上面两条
+  // 正常路径——OT 流会先拼成完整正文，直出 JSON 会先取出回答正文。
   const restored = unescapeOnce(raw);
   const start = restored.indexOf(opening);
-  if (start === -1) return null;
+  if (start === -1) return [];
   return parse(cutFencedBlock(restored.slice(start), opening));
 }
 
-/** 响应原文 → send 围栏里的正文（一段工具调用 JSON，转给网关的那条）。 */
-export function detectToolCall(raw: string): string | null {
-  return detectFence(raw, SEND_FENCE_OPENING, parseSendFence);
+/** 响应原文 → 各块 send 围栏里的正文（一段工具调用 JSON 一条），按出现顺序。 */
+export function detectToolCalls(raw: string): readonly string[] {
+  return detectFences(raw, SEND_FENCE_OPENING, parseSendFences);
 }
 
-/** 响应原文 → ask 围栏里的问题（网页向人举手，不转给网关）。 */
+/** 响应原文 → ask 围栏里的问题（网页向人举手，不转给网关；一次只认第一块）。 */
 export function detectAskQuestion(raw: string): string | null {
-  return detectFence(raw, ASK_FENCE_OPENING, parseAskFence);
+  const questions = detectFences(raw, ASK_FENCE_OPENING, (text) => {
+    const question = parseAskFence(text);
+    return question === null ? [] : [question];
+  });
+  return questions[0] ?? null;
 }

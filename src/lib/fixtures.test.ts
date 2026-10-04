@@ -65,8 +65,15 @@ describe("共享 fixture 完整性", () => {
 
 describe("围栏 fixture 自洽", () => {
   it("抽出围栏正文的输入里必须排着 ```send 围栏", () => {
-    for (const { input, expectedCall } of fixtureCases<FenceCase>("fence.json")) {
-      if (expectedCall !== null) expect(input).toContain("```send");
+    for (const { input, expectedCalls } of fixtureCases<FenceCase>("fence.json")) {
+      if (expectedCalls.length > 0) expect(input).toContain("```send");
+    }
+  });
+
+  it("抽出几块，输入里就得有几个围栏起始行（多块那条判据的镜子）", () => {
+    for (const { name, input, expectedCalls } of fixtureCases<FenceCase>("fence.json")) {
+      const openings = input.split("\n").filter((line) => line.trim() === "```send").length;
+      expect(openings, name).toBeGreaterThanOrEqual(expectedCalls.length);
     }
   });
 });

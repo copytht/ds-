@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isOutgoingChatRequest, rewriteOutgoingBody } from "./inject";
+import { isOutgoingChatRequest, rewriteContinuationBody, rewriteOutgoingBody } from "./inject";
 import { prependInstructions, protocolInstructions } from "./instructions";
 import type { ToolInfo } from "./relay";
 import { buildReply, okPayload, REPLY_ANCHOR } from "./reply";
@@ -158,5 +158,53 @@ describe("rewriteOutgoingBody", () => {
   it("目录还没取到时，说明里写「先别排围栏」", () => {
     const rewritten = rewriteOutgoingBody(JSON.stringify({ prompt: "原文" }), null);
     expect(String(JSON.parse(rewritten ?? "")["prompt"])).toContain("工具表暂未取到");
+  });
+});
+
+describe("rewriteContinuationBody · 续聊把正文换成工具结果", () => {
+  const CONTINUATION = "agent:\nstatus: ok\nanswer[1]{text}:\n  入口在 dsb/server.py。";
+
+  it("prompt 形状：正文整条换掉，其余字段一个不动", () => {
+    const body = JSON.stringify({ prompt: "agent:\n继续", session_id: "s-1", stream: true });
+    const rewritten = rewriteContinuationBody(body, CONTINUATION);
+    expect(rewritten).not.toBeNull();
+    const payload = JSON.parse(rewritten ?? "");
+    expect(payload["prompt"]).toBe(CONTINUATION);
+    expect(payload["session_id"]).toBe("s-1");
+    expect(payload["stream"]).toBe(true);
+  });
+
+  it("messages 形状：换最后一条 user，别的原样", () => {
+    const body = JSON.stringify({
+      messages: [
+        { role: "user", content: "第一问" },
+        { role: "assistant", content: "第一答" },
+        { role: "user", content: "agent:\n继续" },
+      ],
+    });
+    const payload = JSON.parse(rewriteContinuationBody(body, CONTINUATION) ?? "");
+    expect(payload.messages[0].content).toBe("第一问");
+    expect(payload.messages[1].content).toBe("第一答");
+    expect(payload.messages[2].content).toBe(CONTINUATION);
+  });
+
+  it("认不出形状一律 null：宁可少一轮，也别把用户下一条消息吃了", () => {
+    expect(rewriteContinuationBody("不是 JSON", CONTINUATION)).toBeNull();
+    expect(rewriteContinuationBody(JSON.stringify({}), CONTINUATION)).toBeNull();
+    expect(rewriteContinuationBody(JSON.stringify({ prompt: "   " }), CONTINUATION)).toBeNull();
+    expect(rewriteContinuationBody(JSON.stringify({ prompt: 42 }), CONTINUATION)).toBeNull();
+    expect(
+      rewriteContinuationBody(
+        JSON.stringify({ messages: [{ role: "assistant", content: "x" }] }),
+        CONTINUATION,
+      ),
+    ).toBeNull();
+  });
+
+  it("解码后的正文是物理换行，不是字面反斜杠 n（解码方是模型，不是解析器）", () => {
+    const rewritten = rewriteContinuationBody(JSON.stringify({ prompt: "继续" }), CONTINUATION);
+    const decoded = String(JSON.parse(rewritten ?? "")["prompt"]);
+    expect(decoded).toContain("\n");
+    expect(decoded).not.toContain("\\n");
   });
 });

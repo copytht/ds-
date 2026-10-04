@@ -112,8 +112,11 @@ export function parseReplyPayload(text: string): ReplyPayload | null {
   return null;
 }
 
-/** 失败不进对话流：只有 status: ok 的载荷才会被回灌进页面。 */
-export function isInjectableReply(payload: ReplyPayload): boolean {
+/**
+ * 失败不进对话流：只有 status: ok 的载荷才会往下走（组续聊正文）。
+ * 写成类型收窄，调用方拿到的直接是 `OkPayload`，不必自己再判一次 status。
+ */
+export function isInjectableReply(payload: ReplyPayload): payload is OkPayload {
   return payload.status === "ok";
 }
 

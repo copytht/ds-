@@ -64,6 +64,45 @@ function prependOnce(text: string, tools: readonly ToolInfo[] | null): string | 
  * 工具目录（隔离世界广播下来的 `tools/list`）喂进协议说明；
  * null = 还没取到，说明里会写「先别排围栏」。
  */
+/**
+ * 续聊那一趟的改写：把这条出站请求的正文**换成**工具结果
+ * （组装见 `continuation.ts` 的 `buildContinuation`）。
+ *
+ * 为什么替换而不是再发一条消息：对话里那条消息是扩展自己发的、正文还是整段 TOON，
+ * 一轮一条——机器痕迹与「用户消息条数」都堆在这儿。替换之后可见的只有一个短标记。
+ *
+ * 认得出的形状两条：`prompt`（站点原生发消息只带这一条新消息）与 `messages`
+ * （整段历史一起带的形状，换最后一条 user）。**认不出返回 null**，调用方据此把
+ * 挂起的续聊作废——宁可少一轮，也不要把用户下一条真消息吃掉。
+ */
+export function rewriteContinuationBody(bodyText: string, continuation: string): string | null {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(payload)) return null;
+
+  if (typeof payload["prompt"] === "string" && payload["prompt"].trim() !== "") {
+    payload["prompt"] = continuation;
+    return JSON.stringify(payload);
+  }
+
+  const { messages } = payload;
+  if (Array.isArray(messages)) {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const entry = messages[index];
+      if (!isPlainObject(entry)) continue;
+      if (entry["role"] !== "user" || typeof entry["content"] !== "string") continue;
+      entry["content"] = continuation;
+      return JSON.stringify(payload);
+    }
+  }
+
+  return null;
+}
+
 export function rewriteOutgoingBody(
   bodyText: string,
   tools: readonly ToolInfo[] | null,

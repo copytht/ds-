@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { detectAskQuestion, detectToolCall, extractAssistantAnswer } from "./answer";
+import { detectAskQuestion, detectToolCalls, extractAssistantAnswer } from "./answer";
 import { outsideFences } from "./said";
 
 /** 拼一个流式响应：每块一行 `data:` 载荷，形状对齐站点的发消息接口。 */
@@ -36,70 +36,70 @@ describe("extractAssistantAnswer", () => {
   });
 });
 
-describe("detectToolCall · 检测点", () => {
+describe("detectToolCalls · 检测点", () => {
   it("流式回答里排了围栏就认出问题（多行问题也认）", () => {
     const raw = sse(["先说结论。\n```send ", "仓库里 dsb 的入口在哪？\n第二行补充\n```"]);
-    expect(detectToolCall(raw)).toBe("仓库里 dsb 的入口在哪？\n第二行补充");
+    expect(detectToolCalls(raw)).toEqual(["仓库里 dsb 的入口在哪？\n第二行补充"]);
   });
 
   it("整块 JSON 回答里的围栏同样认得", () => {
     const raw = JSON.stringify({
       choices: [{ message: { content: "```send\n问题正文\n```" } }],
     });
-    expect(detectToolCall(raw)).toBe("问题正文");
+    expect(detectToolCalls(raw)).toEqual(["问题正文"]);
   });
 
   it("普通代码块不触发", () => {
     const raw = sse(["```ts\nconst a = 1;\n```"]);
-    expect(detectToolCall(raw)).toBeNull();
+    expect(detectToolCalls(raw)).toEqual([]);
   });
 
   it("非 say 围栏不触发", () => {
     const raw = sse(["```bash\nls -la\n```"]);
-    expect(detectToolCall(raw)).toBeNull();
+    expect(detectToolCalls(raw)).toEqual([]);
   });
 
   it("`​```sendfoo` 不是围栏起始行", () => {
     const raw = sse(["```sendfoo\n问题\n```"]);
-    expect(detectToolCall(raw)).toBeNull();
+    expect(detectToolCalls(raw)).toEqual([]);
   });
 
-  it("一次排多块只认第一块", () => {
+  it("一次排多块：全都要，按顺序", () => {
     const raw = sse(["```send\n第一块\n```\n中间\n```send\n第二块\n```"]);
-    expect(detectToolCall(raw)).toBe("第一块");
+    expect(detectToolCalls(raw)).toEqual(["第一块", "第二块"]);
   });
 
   it("围栏没闭合按无效输入处理", () => {
     const raw = sse(["```send\n问题还没有收尾"]);
-    expect(detectToolCall(raw)).toBeNull();
+    expect(detectToolCalls(raw)).toEqual([]);
   });
 
   it("围栏里问空了不触发", () => {
     const raw = sse(["```send\n```"]);
-    expect(detectToolCall(raw)).toBeNull();
+    expect(detectToolCalls(raw)).toEqual([]);
   });
 
   it("没排围栏的正常回答不触发", () => {
     const raw = sse(["这是不带围栏的回答。"]);
-    expect(detectToolCall(raw)).toBeNull();
+    expect(detectToolCalls(raw)).toEqual([]);
   });
 
   it("正文形状认不出时，兜底路径仍从转义原文里认出围栏", () => {
     const raw = `data: ${JSON.stringify({ unknown_shape: "看这里\n```send\n兜底问题\n```" })}\n`;
     expect(extractAssistantAnswer(raw)).toBe("");
-    expect(detectToolCall(raw)).toBe("兜底问题");
+    expect(detectToolCalls(raw)).toEqual(["兜底问题"]);
   });
 
   it("认不出的响应整段返回 null，不猜", () => {
-    expect(detectToolCall("")).toBeNull();
-    expect(detectToolCall("<html>502</html>")).toBeNull();
+    expect(detectToolCalls("")).toEqual([]);
+    expect(detectToolCalls("<html>502</html>")).toEqual([]);
   });
 
   it("兜底路径也认没闭合的围栏不算数", () => {
     const raw = `data: ${JSON.stringify({
       unknown_shape: "看这里\n```send\n问题没收尾\n```js\nconst a = 1;",
     })}\n`;
-    expect(detectToolCall(raw)).toBeNull();
+    expect(detectToolCalls(raw)).toEqual([]);
   });
 });
 
@@ -113,22 +113,22 @@ describe("出完才判（#29）", () => {
     const head = sse(["长回答的正文第一段。\n", "第二段。\n", "第三段。\n"]);
     const opening = sse(["\n```send\n靠后的围栏问题"]); // 围栏开了，还没闭
     const closing = sse(["\n```\n"]);
-    expect(detectToolCall(head)).toBeNull();
+    expect(detectToolCalls(head)).toEqual([]);
     // 边收边判正是这里漏：围栏没闭合时整段看着像「无围栏的正文」。
-    expect(detectToolCall(head + opening)).toBeNull();
-    expect(detectToolCall(head + opening + closing)).toBe("靠后的围栏问题");
+    expect(detectToolCalls(head + opening)).toEqual([]);
+    expect(detectToolCalls(head + opening + closing)).toEqual(["靠后的围栏问题"]);
   });
 
   it("无围栏的长回答：整条出完也判不出（那条正文走 reportSaid 报协调者）", () => {
     const whole = sse(["长回答的正文第一段，", "第二段，", "第三段。"]);
-    expect(detectToolCall(whole)).toBeNull();
+    expect(detectToolCalls(whole)).toEqual([]);
     expect(outsideFences(extractAssistantAnswer(whole))).toBe(
       "长回答的正文第一段，第二段，第三段。",
     );
   });
 });
 
-describe("detectToolCall · 站点那条 OT 增量流", () => {
+describe("detectToolCalls · 站点那条 OT 增量流", () => {
   /**
    * 真机抓的形状（2026-09-29，chat.deepseek.com/api/v0/chat/completion）：
    * 正文不在 `content` 键里，而是散在追加操作中；围栏被切成两个载荷下发
@@ -167,7 +167,7 @@ describe("detectToolCall · 站点那条 OT 增量流", () => {
   });
 
   it("围栏被切成两个载荷也认得出问题", () => {
-    expect(detectToolCall(REAL_OT_STREAM)).toBe("CONTEXT.md 这个文件是干什么的？");
+    expect(detectToolCalls(REAL_OT_STREAM)).toEqual(["CONTEXT.md 这个文件是干什么的？"]);
   });
 
   it("思考片里举的围栏例子不算回答", () => {
@@ -181,7 +181,7 @@ describe("detectToolCall · 站点那条 OT 增量流", () => {
       .replace('data: {"v":"CONTEXT.md 这个文件是干什么的？\\n"}\n', "")
       .replace('data: {"v":"```"}\n', "");
     expect(extractAssistantAnswer(noFence)).toBe("好的。");
-    expect(detectToolCall(noFence)).toBeNull();
+    expect(detectToolCalls(noFence)).toEqual([]);
   });
 
   it("状态、计时、token 这些非正文操作不产生正文", () => {
@@ -193,7 +193,7 @@ describe("detectToolCall · 站点那条 OT 增量流", () => {
       "",
     ].join("\n");
     expect(extractAssistantAnswer(onlyOps)).toBe("");
-    expect(detectToolCall(onlyOps)).toBeNull();
+    expect(detectToolCalls(onlyOps)).toEqual([]);
   });
 });
 
@@ -219,12 +219,12 @@ describe("detectAskQuestion · 检测点（#26）", () => {
   it("send 围栏不被 ask 检测器认（别误伤现有路径）", () => {
     const raw = sse(["```send\n仓库入口在哪？\n```"]);
     expect(detectAskQuestion(raw)).toBeNull();
-    expect(detectToolCall(raw)).toBe("仓库入口在哪？");
+    expect(detectToolCalls(raw)).toEqual(["仓库入口在哪？"]);
   });
 
   it("ask 围栏不被 send 检测器认", () => {
     const raw = sse(["```ask\n选哪个？\n```"]);
-    expect(detectToolCall(raw)).toBeNull();
+    expect(detectToolCalls(raw)).toEqual([]);
   });
 
   it("```askfoo 不是围栏起始行", () => {

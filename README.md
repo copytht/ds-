@@ -13,13 +13,29 @@
 ````
 页面模型 → ```send 围栏(工具调用 JSON) → inject.content(MAIN)
         → 隔离世界 → background → POST /mcp → dsb → mcp.json 里的 servers
-        → 结果回灌 → 唯一出站口(ADR-0002) → 页面
+        → 结果回灌（短标记进对话 + 请求体替换送模型，ADR-0013）
+        → 唯一出站口(ADR-0002) → 页面
 ````
 
 中继完全被动：不推送、不轮询、无会话、一条 CORS 头都不下发；只有 background 打网络。
 
 dsb 另外内建五件工作工具（`ls` / `read` / `grep` / `write` / `edit`），钉死在工作文件夹
 root 内（`DSB_WORK_ROOT` 配置，缺省本仓根），不给任何命令执行；见 `docs/adr/0012`。
+
+## 限额与超时
+
+| 项             | 默认                           | 落在哪                         |
+| -------------- | ------------------------------ | ------------------------------ |
+| 单次结果       | 64K 字（超了截断并写明原长）   | 网关 `MAX_RESULT_CHARS`        |
+| 单服务工具     | 128 件（超了只注册前 128 件）  | 网关 `MAX_TOOLS_PER_SERVER`    |
+| 一轮围栏       | 8 块（超了剩下的下一轮再排）   | 扩展 `MAX_CALLS_PER_ROUND`     |
+| 自动续聊       | 8 轮（到顶停手，等用户开口）   | 扩展 `MAX_CONTINUATION_ROUNDS` |
+| 给模型看的结果 | 2000 字（超了截断并写明原长）  | 扩展 `MAX_RESULT_CHARS`        |
+| 握手超时       | 30s（`DSB_CONNECT_TIMEOUT`）   | 起子进程 + `initialize`        |
+| 发现超时       | 20s（`DSB_DISCOVERY_TIMEOUT`） | `tools/list`                   |
+| 调用超时       | 120s（`DSB_TOOL_TIMEOUT`）     | 一次 `tools/call`              |
+
+三个超时键都认进程环境与 `.env`（认不出或非正数落默认）；其余是常量，改常量有测试钉着。
 
 ## 结构
 

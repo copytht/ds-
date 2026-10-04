@@ -78,6 +78,30 @@ export function callToolBody(id: string, name: string, args: Record<string, unkn
 export { MALFORMED_CALL_HINT, parseToolCall, type ToolCall } from "./fence";
 
 /* -------------------------------------------------------------------------- */
+/* 一轮多块：上限与结果拼装                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** 一轮里最多执行几块围栏：排再多也不一轮做完，剩下的下一轮再排。 */
+export const MAX_CALLS_PER_ROUND = 8;
+
+/** 一轮里某一块的结果：哪件工具、正文是什么。 */
+export type ToolAnswer = {
+  readonly tool: string;
+  readonly text: string;
+};
+
+/**
+ * 一轮里各块围栏的结果 → 一段给模型的正文。
+ *
+ * 一块就一个工具时**原样交**（工具的正文不该被我们加的头尾污染）；多块才给每块
+ * 加上「工具 <名字>：」这一行——不然模型分不出哪段是谁说的。
+ */
+export function joinCallAnswers(answers: readonly ToolAnswer[]): string {
+  if (answers.length <= 1) return answers[0]?.text ?? "";
+  return answers.map(({ tool, text }) => `工具 ${tool}：\n${text}`).join("\n\n");
+}
+
+/* -------------------------------------------------------------------------- */
 /* 响应 → 载荷                                                                */
 /* -------------------------------------------------------------------------- */
 

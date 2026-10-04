@@ -10,11 +10,13 @@ import {
   type ActionFrame,
 } from "../src/lib/action";
 import { readBackoff, BACKOFF_STORAGE_KEY } from "../src/lib/backoff";
+import { describeStop } from "../src/lib/continuation";
 import {
   actionRequestMessage,
   parseAccountReport,
   parseAskClearedReport,
   parseAskReport,
+  parseStopReport,
   parseSendRequest,
   parseSaidReport,
   parseToolsRequest,
@@ -48,12 +50,14 @@ import type { AccountState } from "../src/lib/page";
 import {
   FAILURE_RELAY_UNREACHABLE,
   MALFORMED_CALL_HINT,
+  MAX_CALLS_PER_ROUND,
   MCP_CALL_TIMEOUT_MS,
   MCP_LIST_TIMEOUT_MS,
   MCP_PING_TIMEOUT_MS,
   callToolBody,
   describeBadResponse,
   describeFetchFailure,
+  joinCallAnswers,
   listToolsBody,
   parseMcpPing,
   parseMcpResponse,
@@ -61,11 +65,14 @@ import {
   parseToolsList,
   pingBody,
   relayMcpUrl,
+  type ToolAnswer,
+  type ToolCall,
   type ToolInfo,
 } from "../src/lib/relay";
 import {
   errorPayload,
   failureNotice,
+  isInjectableReply,
   okPayload,
   type FailureNotice,
   type ReplyPayload,
@@ -529,15 +536,50 @@ export default defineBackground(() => {
    *
    * 本地工具（`findLocalTool` 命中）不走这里：见 `runLocalTool`。
    */
-  async function sendCall(call: string, tabId: number | undefined): Promise<ReplyPayload> {
-    const toolCall = parseToolCall(call);
-    // 排坏了不出门：没问过网关，图标状态别动，把改法回灌给模型自己改。
-    if (toolCall === null) return okPayload(MALFORMED_CALL_HINT);
+  /**
+   * 一轮的工具调用：**一块一趟**打网关（每趟自己一份超时预算，不共用），
+   * 打完拼成一段正文交回。
+   *
+   * 一趟一趟而不是一次请求带多块：中继那一侧一次 `tools/call` 就是一件工具，
+   * 而扩展对一条在途 fetch 的保活与超时是**按请求**算的（`MCP_CALL_TIMEOUT_MS`）
+   * ——多块挤一趟，几件慢工具叠起来就会先撞扩展的超时，报出来的还是没信息量的
+   * 「中继不可达」。一趟一块，超时账各算各的。
+   *
+   * 本地工具（`findLocalTool` 命中）就地跑，同样占一轮里的一块。
+   */
+  async function sendCalls(
+    calls: readonly string[],
+    tabId: number | undefined,
+  ): Promise<ReplyPayload> {
+    const planned = calls.slice(0, MAX_CALLS_PER_ROUND);
+    const answers: ToolAnswer[] = [];
+    for (const call of planned) {
+      const toolCall = parseToolCall(call);
+      if (toolCall === null) {
+        // 排坏了不出门：没问过网关，图标状态别动，把改法回灌给模型自己改。
+        answers.push({ tool: "排坏的围栏", text: MALFORMED_CALL_HINT });
+        continue;
+      }
+      // 本地工具（名册在扩展侧、执行不经过 dsb）：就地跑，不生成 `tools/call`。
+      const local = findLocalTool(toolCall.tool);
+      const payload =
+        local === null
+          ? await sendOneCall(toolCall)
+          : await runLocalTool(local, toolCall.arguments, tabId);
+      // 连不上 / 答不成样：整轮作废，照旧不进对话流（与单块时一个脾气）。
+      if (!isInjectableReply(payload)) return payload;
+      answers.push({ tool: toolCall.tool, text: payload.answer });
+    }
 
-    // 本地工具（名册在扩展侧、执行不经过 dsb）：就地跑，不生成 `tools/call`。
-    const local = findLocalTool(toolCall.tool);
-    if (local !== null) return runLocalTool(local, toolCall.arguments, tabId);
+    const dropped = calls.length - planned.length;
+    const joined = joinCallAnswers(answers);
+    if (dropped <= 0) return okPayload(joined);
+    return okPayload(
+      `${joined}\n\n（这一轮最多执行 ${MAX_CALLS_PER_ROUND} 块围栏，还有 ${dropped} 块没执行——下一轮再排。）`,
+    );
+  }
 
+  async function sendOneCall(toolCall: ToolCall): Promise<ReplyPayload> {
     const releaseKeepAlive = keepAliveWhileSending();
     const id = nextMessageId("call");
     setInFlight(true);
@@ -704,7 +746,7 @@ export default defineBackground(() => {
       // 围栏进了中继 = 页面模型排出了围栏：这是一条动静。
       const tabId = sender.tab?.id;
       if (tabId !== undefined) watchdogSeen(tabId);
-      return sendCall(request.call, tabId).then((payload) => {
+      return sendCalls(request.calls, tabId).then((payload) => {
         // 答复送回内容脚本 = 回灌落地（送进作框由页面世界自己完成）。
         if (tabId !== undefined) watchdogSeen(tabId);
         return sendResponseMessage(request.id, payload);
@@ -730,6 +772,14 @@ export default defineBackground(() => {
     const cleared = parseAskClearedReport(message);
     if (cleared !== null) {
       void handleAskCleared(cleared);
+      return undefined;
+    }
+    // 续聊到顶停手（页面世界报的）：不是故障而是刹车，但同样要留得下来
+    // ——「怎么忽然不自动往下答了」得有个交代（ADR-0004）。
+    const stop = parseStopReport(message);
+    if (stop !== null) {
+      console.log(`[ds-] 页面报停手：${stop.cause}`);
+      recordFailure("rounds", describeStop(stop.cause));
       return undefined;
     }
     // 账号处境上报（#2）：记下最新值并上屏，悬停才说得出「禁言至何时」。

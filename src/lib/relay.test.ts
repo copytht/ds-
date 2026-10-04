@@ -4,6 +4,8 @@ import {
   FAILURE_RELAY_UNREACHABLE,
   FAILURE_UNEXPECTED_RESPONSE,
   MALFORMED_CALL_HINT,
+  MAX_CALLS_PER_ROUND,
+  joinCallAnswers,
   MCP_CALL_TIMEOUT_MS,
   MCP_LIST_TIMEOUT_MS,
   MCP_PING_TIMEOUT_MS,
@@ -232,5 +234,39 @@ describe("失败的措辞", () => {
   it("响应认不出时报状态码，2xx 报正文规模（不记正文本身）", () => {
     expect(describeBadResponse(502, "Bad Gateway")).toBe("HTTP 502");
     expect(describeBadResponse(200, "五个字的乱码")).toBe("响应读不出来（6 字）");
+  });
+});
+
+describe("joinCallAnswers · 一轮多块的结果拼装", () => {
+  it("一块：工具正文原样交，不加我们自己写的头", () => {
+    expect(joinCallAnswers([{ tool: "fs_read_file", text: "第一行\n第二行" }])).toBe(
+      "第一行\n第二行",
+    );
+  });
+
+  it("多块：每块前面写上是哪件工具，块之间空一行", () => {
+    expect(
+      joinCallAnswers([
+        { tool: "fs_read_file", text: "第一段" },
+        { tool: "shell_run", text: "第二段" },
+      ]),
+    ).toBe("工具 fs_read_file：\n第一段\n\n工具 shell_run：\n第二段");
+  });
+
+  it("排坏的围栏也占一块，模型才知道是哪一块没成", () => {
+    expect(
+      joinCallAnswers([
+        { tool: "fs_read_file", text: "第一段" },
+        { tool: "排坏的围栏", text: MALFORMED_CALL_HINT },
+      ]),
+    ).toContain("工具 排坏的围栏：");
+  });
+
+  it("空数组回空串——不该发生，但别无中生有", () => {
+    expect(joinCallAnswers([])).toBe("");
+  });
+
+  it("一轮的上限是个正数（排再多也只是分几轮）", () => {
+    expect(MAX_CALLS_PER_ROUND).toBeGreaterThan(0);
   });
 });

@@ -10,13 +10,60 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-CHROME=/Applications/Chromium.app/Contents/MacOS/Chromium
-PROFILE="$HOME/Library/Application Support/ds-browser"
+# 平台：原来只认 macOS（/Applications 下的 Chromium、`stat -f`、`lsof`、`open -a`）。
+# 换到 Linux 全落空——而 nohup 的报错只进 /tmp/dsb-browser.log，浏览器那一步会
+# **谎报已起**，接着判据全红。这里按 uname 分两路。
+UNAME_S=$(uname -s)
+if [ "$UNAME_S" = "Darwin" ]; then
+  CHROME="${CHROME:-/Applications/Chromium.app/Contents/MacOS/Chromium}"
+  PROFILE="${DSB_PROFILE:-$HOME/Library/Application Support/ds-browser}"
+else
+  CHROME="${CHROME:-}"
+  if [ -z "$CHROME" ]; then
+    for candidate in chromium chromium-browser google-chrome google-chrome-stable brave-browser microsoft-edge; do
+      if found=$(command -v "$candidate" 2>/dev/null); then CHROME=$found; break; fi
+    done
+  fi
+  PROFILE="${DSB_PROFILE:-${XDG_DATA_HOME:-$HOME/.local/share}/ds-browser}"
+fi
 MV3="$PWD/.output/chrome-mv3"
 PORT=8787
 MCP="http://127.0.0.1:$PORT/mcp"
 
 say() { printf '  %-8s %s\n' "$1" "$2"; }
+
+# 文件 mtime（秒）：BSD 是 `stat -f %m`，GNU 是 `stat -c %Y`。不分开就静默拿到空串，
+# 「装的扩展比构建旧」这条判据永远不会响。
+if [ "$UNAME_S" = "Darwin" ]; then MTIME=(stat -f %m); else MTIME=(stat -c %Y); fi
+
+# 监听 $PORT 的 pid：lsof 不一定装（Linux 上常常没有），ss 兜底。
+listener_pid() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1
+  elif command -v ss >/dev/null 2>&1; then
+    ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2
+  fi
+}
+
+# ds-browser 的主进程**带没带 --load-extension**：不带就是「浏览器在跑，扩展却没装进来」。
+# 只看进程在不在的话，手动开的窗口会被判成「已在跑」，扩展永远进不来——图标找不到就是这么来的。
+browser_loaded_extension() {
+  if [ "$UNAME_S" = "Darwin" ]; then
+    ps -p "$1" -o command= 2>/dev/null | grep -q -- '--load-extension='
+  else
+    tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null | grep -q -- '--load-extension='
+  fi
+}
+
+# 只动 ds-browser 这一个进程：SIGTERM → 等它自己退 → 还不走再 -9。用户的别的浏览器一律不碰。
+kill_browser() {
+  kill "$1" 2>/dev/null
+  for _ in 1 2 3 4 5; do
+    ps -p "$1" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  kill -9 "$1" 2>/dev/null
+}
 
 # 一行 JSON-RPC 打 /mcp：唯一端点（ADR-0011）——自检 initialize、
 # 查表 tools/list 都走它；扩展的周期探活是 ping（dsb 记日志）。
@@ -29,6 +76,11 @@ rpc() {
 # 都不换；内容脚本却随页面加载新构建，症状是「读类动作新、写类动作旧」）。
 # Database 是 SW 注册表（可再生成、无用户数据），一并清。
 start_browser() {
+  if [ -z "$CHROME" ] || [ ! -x "$CHROME" ]; then
+    say 浏览器 "找不到 Chromium 系浏览器（找过 chromium / google-chrome / brave…）——装了再重跑"
+    exit 1
+  fi
+  mkdir -p "$PROFILE"
   rm -rf "$PROFILE/Default/Service Worker/ScriptCache" "$PROFILE/Default/Service Worker/Database"
   # 上一回是本脚本 kill 掉的：Chromium 记 exit_type=Crashed，下次启动会把旧标签页
   # （含上一次的空白新标签页）恢复回来。环境准备反正会关掉旧标签页，这里把会话恢复
@@ -47,20 +99,35 @@ start_browser() {
       >/tmp/dsb-browser.log 2>&1 &
   fi
   disown
+  # 起了得回头看它一眼：nohup 的报错只进日志，不看就等于「谎报已起」
+  # （macOS 那条路径在 Linux 上就是这样，一路骗到判据 2 才炸）。
+  sleep 2
+  if [ -z "$(browser_main_pid)" ]; then
+    say 浏览器 "没起来 → /tmp/dsb-browser.log"
+    tail -3 /tmp/dsb-browser.log 2>/dev/null | sed 's/^/           /'
+    exit 1
+  fi
   STARTED_BROWSER=1
-  say 浏览器 "已起 → 独立 profile（清过 SW 脚本缓存与会话恢复，带会话标签页）"
+  say 浏览器 "已起 → $CHROME（独立 profile：$PROFILE，清过 SW 脚本缓存与会话恢复，带会话标签页）"
 }
 
 # ds-browser 的主进程 PID：主进程的首个 flag 是 --user-data-dir，
 # 子进程是 --type=，据此只数主进程。没有回空。
 browser_main_pid() {
-  ps ax -o pid=,command= | grep -E '^ *[0-9]+ /Applications/Chromium\.app/Contents/MacOS/Chromium --user-data-dir=.*ds-browser' | head -1 | awk '{print $1}'
+  if [ "$UNAME_S" = "Darwin" ]; then
+    ps ax -o pid=,command= | grep -E "^ *[0-9]+ $CHROME --user-data-dir=$PROFILE" | head -1 | awk '{print $1}'
+  else
+    pgrep -f -- "--user-data-dir=$PROFILE" 2>/dev/null | while read -r pid; do
+      [ -r "/proc/$pid/cmdline" ] || continue
+      tr '\0' '\n' < "/proc/$pid/cmdline" | grep -q -- '--type=' || { printf '%s\n' "$pid"; break; }
+    done
+  fi
 }
 
 # 任意进程的启动时刻（epoch 秒；拿不到回空）。ps 的 lstart 日是
 # 空格填充的，先压成单空格再解析。
 proc_started() {
-  ps -p "$1" -o lstart= 2>/dev/null | python3 -c '
+  LC_ALL=C ps -p "$1" -o lstart= 2>/dev/null | python3 -c '
 import sys
 from datetime import datetime
 raw = " ".join(sys.stdin.read().split())
@@ -128,7 +195,7 @@ if [ "$STATUS" = 1 ]; then
   else
     say 构建 "产物最新"
   fi
-  RELAY_PID=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1)
+  RELAY_PID=$(listener_pid)
   if [ -n "$RELAY_PID" ]; then
     if rpc '{"jsonrpc":"2.0","id":"status","method":"initialize"}' | grep -q '"result"'; then
       say 中继 "在跑（PID ${RELAY_PID}），健康"
@@ -141,8 +208,10 @@ if [ "$STATUS" = 1 ]; then
   BROWSER_MAIN=$(browser_main_pid)
   if [ -n "$BROWSER_MAIN" ]; then
     BROWSER_STARTED=$(proc_started "$BROWSER_MAIN")
-    BUILD_MTIME=$(stat -f %m "$MV3/background.js" 2>/dev/null || echo 0)
-    if [ -n "$BROWSER_STARTED" ] && [ "$BUILD_MTIME" -gt "$BROWSER_STARTED" ]; then
+    BUILD_MTIME=$("${MTIME[@]}" "$MV3/background.js" 2>/dev/null || echo 0)
+    if ! browser_loaded_extension "$BROWSER_MAIN"; then
+      say 浏览器 "在跑（PID ${BROWSER_MAIN}）却没带 --load-extension——扩展没装进来，跑 env-up 换"
+    elif [ -n "$BROWSER_STARTED" ] && [ "$BUILD_MTIME" -gt "$BROWSER_STARTED" ]; then
       say 浏览器 "在跑（PID ${BROWSER_MAIN}），但装的扩展比构建旧——跑 env-up 换"
     else
       say 浏览器 "在跑（PID ${BROWSER_MAIN}），扩展是新的"
@@ -150,7 +219,7 @@ if [ "$STATUS" = 1 ]; then
   else
     say 浏览器 "没在跑（跑 env-up 起）"
   fi
-  if lsof -nP -iTCP:"$DEBUG_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+  if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$DEBUG_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
     say 调试口 "在（${DEBUG_PORT}）：可跑 scripts/page-action.py"
   else
     say 调试口 "关（要探针就 scripts/env-up.sh --debug）"
@@ -166,6 +235,16 @@ if [ "$STATUS" = 1 ]; then
     say 探活 "新鲜（${age}s 前）：扩展活着且总开关开着"
   fi
   exit 0
+fi
+
+# ---- 0) 工具：缺哪样报哪样（缺 pnpm/node 会一路以奇怪的方式红，早报早省事）----
+missing=()
+for tool in pnpm node curl uv python3; do
+  command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+done
+if [ ${#missing[@]} -gt 0 ]; then
+  say 工具 "缺 ${missing[*]} —— 装齐再跑"
+  exit 1
 fi
 
 # ---- 1) 扩展构建：源码比产物新才重建（老产物 = 协议说明旧、名册缺动作）----
@@ -185,8 +264,8 @@ if curl -s -m 3 -X POST "$MCP" -H 'Content-Type: application/json' \
   say 中继 "已在跑"
   # dsb 是长驻进程、不重载代码：源码比进程新时跑的是旧代码。
   # 只提示、不擅自动——重启会丢子进程（mcp.json 里起着的 server 要重拉一遍）。
-  RELAY_PID=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1)
-  NEWEST_PY=$(find dsb -name '*.py' -exec stat -f %m {} + 2>/dev/null | sort -rn | head -1)
+  RELAY_PID=$(listener_pid)
+  NEWEST_PY=$(find dsb -name '*.py' -exec "${MTIME[@]}" {} + 2>/dev/null | sort -rn | head -1)
   STARTED_AT=$(proc_started "${RELAY_PID:-0}")
   if [ -n "$NEWEST_PY" ] && [ -n "$STARTED_AT" ] && [ "$NEWEST_PY" -gt "$STARTED_AT" ]; then
     say 提示 "dsb 源码比中继进程新——跑的是旧代码：kill $RELAY_PID 后重跑本脚本才生效"
@@ -195,7 +274,7 @@ else
   # initialize 不回话但端口有人占着 = 跑着旧代码的长驻中继（dsb 不重载
   # 代码，旧代码连 /mcp 路由都没有）。只提示、不擅自动：kill 会丢子进程
   # （mcp.json 里起着的 server 要重拉一遍）。
-  RELAY_PID=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1)
+  RELAY_PID=$(listener_pid)
   if [ -n "$RELAY_PID" ]; then
     say 提示 "中继在跑（PID ${RELAY_PID}）却不答 initialize：跑的是旧代码"
     say 提示 "kill $RELAY_PID 后重跑本脚本才生效（会丢它起的子进程，需重拉一遍）"
@@ -216,9 +295,11 @@ if [ -n "$BROWSER_MAIN" ]; then
   # 浏览器才会换新）。重启只动 ds-browser 这一个进程：登录态在
   # profile 里不丢，开着的标签页会关；用户的别的浏览器一律不碰。
   BROWSER_STARTED=$(proc_started "$BROWSER_MAIN")
-  BUILD_MTIME=$(stat -f %m "$MV3/background.js" 2>/dev/null || echo 0)
+  BUILD_MTIME=$("${MTIME[@]}" "$MV3/background.js" 2>/dev/null || echo 0)
   STALE=0
   if [ -n "$BROWSER_STARTED" ] && [ "$BUILD_MTIME" -gt "$BROWSER_STARTED" ]; then STALE=1; fi
+  NO_EXT=0
+  if ! browser_loaded_extension "$BROWSER_MAIN"; then NO_EXT=1; fi
   NEED_DEBUG=0
   if [ "$DEBUG" = 1 ]; then
     case "$(ps -o command= -p "$BROWSER_MAIN" 2>/dev/null)" in
@@ -226,18 +307,15 @@ if [ -n "$BROWSER_MAIN" ]; then
       *) NEED_DEBUG=1 ;;
     esac
   fi
-  if [ "$STALE" = 1 ] || [ "$NEED_DEBUG" = 1 ]; then
-    if [ "$STALE" = 1 ]; then
+  if [ "$NO_EXT" = 1 ] || [ "$STALE" = 1 ] || [ "$NEED_DEBUG" = 1 ]; then
+    if [ "$NO_EXT" = 1 ]; then
+      say 提示 "ds-browser 在跑却没带 --load-extension（扩展没装进来）：自动重启它"
+    elif [ "$STALE" = 1 ]; then
       say 提示 "浏览器装的扩展比构建旧（跑旧代码）：自动重启 ds-browser"
     else
       say 提示 "浏览器没带调试口：按 --debug 重启 ds-browser"
     fi
-    kill "$BROWSER_MAIN" 2>/dev/null
-    for _ in 1 2 3 4 5; do
-      ps -p "$BROWSER_MAIN" >/dev/null 2>&1 || break
-      sleep 1
-    done
-    kill -9 "$BROWSER_MAIN" 2>/dev/null
+    kill_browser "$BROWSER_MAIN"
     start_browser
   else
     say 浏览器 "已在跑（独立 profile，扩展是新的）"
@@ -249,9 +327,15 @@ fi
 # ---- 4) 判据 ----
 # 扩展不再有外露的探针面（POST /action 与动作流随 ADR-0007 一起废了）：
 # 本机这半直接验；扩展那一半靠 ping 日志（判据 4）+ 末尾的图标与控制台。
-sleep 3
-
-hello_out=$(rpc '{"jsonrpc":"2.0","id":"env-up","method":"initialize"}')
+# 等中继把口张开：配了 MCP server 时网关是**先把子进程拉起来、再 bind** 的，冷启动
+# （npx 首次下载）实测要三十几秒——固定 sleep 3 会把「还在起」判成「不健康」。
+# 自检照样用 initialize（不记日志）：ping 日志是纯扩展信号，别拿自检污染它。
+hello_out=""
+for _ in $(seq 1 60); do
+  hello_out=$(rpc '{"jsonrpc":"2.0","id":"env-up","method":"initialize"}')
+  case "$hello_out" in *'"result"'*) break ;; esac
+  sleep 1
+done
 case "$hello_out" in
   *'"result"'*) say 判据1 "中继健康（initialize 回话）" ;;
   *) say 判据1 "中继不健康：$hello_out" ; exit 1 ;;
@@ -281,7 +365,11 @@ if [ "$STARTED_BROWSER" = 1 ]; then
   say 判据3 "会话页随浏览器启动已开（首个标签页即 chat.deepseek.com，无空白新标签页）"
 else
   say 判据3 "浏览器是先起的：有没有会话标签页这里问不到（扩展没有外露探针面）"
-  say 判据3 "要开一个就：open -a Chromium 'https://chat.deepseek.com/'"
+  if [ "$UNAME_S" = "Darwin" ]; then
+    say 判据3 "要开一个就：open -a Chromium 'https://chat.deepseek.com/'"
+  else
+    say 判据3 "要开一个就：$CHROME --user-data-dir=\"$PROFILE\" 'https://chat.deepseek.com/'"
+  fi
 fi
 if [ "$DEBUG" = 1 ]; then
   say 判据3 "调试口 ${DEBUG_PORT}：探针 scripts/page-action.py read / send <动作> / stop-test"
@@ -313,6 +401,10 @@ cat <<EOF
     登录 DeepSeek 与勾「替人开口」都在**独立 profile** 这个窗口里做（跟主浏览器
     两套登录态）。勾「替人开口」那一步故意没有动作口（agent 不能自授发言权，
     围栏别拆）；不勾则 composer.type / send.* 回 disabled，属预期不是故障。
+
+  工具栏上找不到 ds- 图标时：先点地址栏右边那个**拼图图标**（扩展菜单）——命令行
+  装的扩展不自动钉在工具栏上，在拼图里点一下「固定」它就出来了。拼图里也没有，
+  就说明这个窗口不是 ds-browser（或起来时没带 --load-extension）：关掉它重跑本脚本。
 
   查某动作为什么失败，两步就够：
     1. page.state 的 account 说清处境 —— muted(带解封时刻) / signed-out / unknown
