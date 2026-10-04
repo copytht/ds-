@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "新模块 src/lib/localtools.ts 照「一主题一文件 + 共置测试」；background/content 只接线，逻辑留在 src/lib"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "动跨世界 runtime 消息（sendCall 截获、tabId 传递、每标签页重入护栏）时 background 状态与消息信封的口径"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "新增 parseReplyPayload 解析跨边界载荷：认不出回 null、不猜形状"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "改协议说明要同步 instructions 黄金值；测试同名共置；提交前 pnpm quality 必绿"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层清单：页面世界→content→background→dsb 的围栏路径，以及本地截获在 background 这一层的落点"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 runAction 三道闸、wait.ts 等待原语、deliverNudge 的组合纪律，别另起一套"}
+{"file": "docs/adr/0011-dsb-is-a-stateless-mcp-gateway.md", "reason": "dsb 被动这条边界不能破：组合必须住扩展侧；动手前确认不越 ADR"}
