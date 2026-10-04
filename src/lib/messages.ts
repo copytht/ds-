@@ -1,7 +1,7 @@
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_READ_FAILED, PageError } from "./action";
 import type { ActionFrame } from "./action";
 import { parseToolCall } from "./fence";
-import { POLL_INTERVAL_MS } from "./wait";
+import { FRAME_FALLBACK_MS, POLL_INTERVAL_MS } from "./wait";
 
 /**
  * 读对话（`messages.list` / `messages.last`）：**只读页面渲染出来的 DOM**。
@@ -171,8 +171,8 @@ export function nextFrame(): Promise<void> {
       resolve();
     };
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(finish);
-    // 兜底：不可见页面 rAF 不来，这一路一定在 POLL_INTERVAL_MS 内收工。
-    setTimeout(finish, POLL_INTERVAL_MS);
+    // 兜底：不可见页面 rAF 不来，这一路一定在 FRAME_FALLBACK_MS 内收工。
+    setTimeout(finish, FRAME_FALLBACK_MS);
   });
 }
 

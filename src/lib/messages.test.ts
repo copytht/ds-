@@ -11,6 +11,7 @@ import {
   readRow,
   readyWithin,
   roleOf,
+  settleUntilMounted,
   type ListViewport,
   type StyleProbe,
 } from "./messages";
@@ -619,6 +620,36 @@ describe("nextFrame：不可见页面也得收工", () => {
     try {
       await nextFrame();
       expect(called).toBe(true);
+    } finally {
+      Object.defineProperty(globalThis, "requestAnimationFrame", {
+        configurable: true,
+        writable: true,
+        value: original,
+      });
+    }
+  });
+});
+
+describe("不可见页面：一屏也要扫得完", () => {
+  it("rAF 死掉时，settleUntilMounted 的 30 帧上限收得住（不超 2s）", async () => {
+    // 兜底曾借用 POLL_INTERVAL_MS(500ms)：30 帧 = 每屏 15s，一屏都扫不完，
+    // `messages.list` 于是永不回话（比挂死更隐蔽——它「在等」）。
+    const original = globalThis.requestAnimationFrame;
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: (): number => 0, // 收下回调但永不调用 = 页面不可见
+    });
+    try {
+      const view = {
+        querySelectorAll: (): ArrayLike<Element> => [],
+        scrollTop: 0,
+        clientHeight: 100,
+        scrollHeight: 300,
+      };
+      const started = Date.now();
+      await settleUntilMounted(view, "1,", nextFrame); // key 集合不变 → 走满 30 帧
+      expect(Date.now() - started).toBeLessThan(2_000);
     } finally {
       Object.defineProperty(globalThis, "requestAnimationFrame", {
         configurable: true,
