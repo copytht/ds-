@@ -13,6 +13,13 @@
 与用户会话的 agent 只做两件事：**把目标和验收标准交给网页、把链子回来的结果原样喂回去**。
 怎么拆、怎么排围栏、错了怎么修，让**网页**自己想——不替它读文档、不替它诊断、不逐步指派。
 
+## 规格与流程
+
+2026-10-04 起用 **OpenSpec**（换掉 Trellis）：新活走 `/opsx-propose "<想法>"` →
+`/opsx-apply` → `/opsx-archive`；spec 在 `openspec/specs/`（`openspec list --specs` 看清单、
+`openspec show <能力>` 读一篇、`openspec validate` 查格式）。`/opsx-*` 命令与技能由
+`openspec init` / `openspec update` 生成在 `.opencode/`，别手改。
+
 ## 浏览器边界
 
 **禁止用用户的主浏览器 profile**：跑扩展 / 起浏览器一律走独立 `--user-data-dir` 的实例，
