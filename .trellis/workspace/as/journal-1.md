@@ -159,3 +159,26 @@ dsb 内建 ls/read/grep/write/edit（DSB_WORK_ROOT 沙箱、无 SHELL、只护 .
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: send.page：扩展侧本地工具的组合（#23）
+<!-- trellis-session: v=2 fp=e3899a8571cd6d62 -->
+
+**Date**: 2026-10-04
+**Task**: send.page：扩展侧本地工具的组合（#23）
+**Branch**: `main`
+
+### Summary
+
+Planned + implemented the send.page composite as an extension-side local tool (ADR-0013): localtools.ts registry, parseReplyPayload, background sendCall interception with per-tab reentry guard, instructions local-tools section, spec frontend/local-tools.md; trellis-check found a metadata-drift risk (guard test added) and an icon-vs-gate inconsistency (fixed: local tools no longer paint the relay icon); pnpm quality green (426 vitest + 138 pytest); merged via PR #36; task archived.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b4f0554` | docs(task): send.page 规划件（design/implement/jsonl，Q1 拍 A） |
+| `7a3ede8` | feat: send.page——扩展侧本地工具的组合（#23） |
+
+### Status
+
+[OK] **Completed**
