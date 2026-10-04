@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractOutgoingMessages, isOutgoingChatRequest, rewriteOutgoingBody } from "./inject";
+import { isOutgoingChatRequest, rewriteOutgoingBody } from "./inject";
 import { prependInstructions, protocolInstructions } from "./instructions";
 import type { ToolInfo } from "./relay";
 import { buildReply, okPayload, REPLY_ANCHOR } from "./reply";
@@ -158,44 +158,5 @@ describe("rewriteOutgoingBody", () => {
   it("目录还没取到时，说明里写「先别排围栏」", () => {
     const rewritten = rewriteOutgoingBody(JSON.stringify({ prompt: "原文" }), null);
     expect(String(JSON.parse(rewritten ?? "")["prompt"])).toContain("工具表暂未取到");
-  });
-});
-
-describe("extractOutgoingMessages（角色账本的原料）", () => {
-  it("messages 形状：角色原样带出，用户消息里的协议说明剥掉", () => {
-    const body = JSON.stringify({
-      messages: [
-        { role: "user", content: prependInstructions("第一问", TOOLS) },
-        { role: "assistant", content: "第一答" },
-        { role: "user", content: "第二问" },
-      ],
-    });
-    expect(extractOutgoingMessages(body, TOOLS)).toEqual([
-      { role: "user", text: "第一问" },
-      { role: "assistant", text: "第一答" },
-      { role: "user", text: "第二问" },
-    ]);
-  });
-
-  it("prompt 形状：只带这一条，角色按 user", () => {
-    expect(extractOutgoingMessages(JSON.stringify({ prompt: "原文" }), TOOLS)).toEqual([
-      { role: "user", text: "原文" },
-    ]);
-  });
-
-  it("认不出的载荷回 null（不猜）", () => {
-    expect(extractOutgoingMessages("不是 JSON", TOOLS)).toBeNull();
-    expect(extractOutgoingMessages(JSON.stringify({ chat_session_id: "x" }), TOOLS)).toBeNull();
-  });
-
-  it("空内容与怪角色不进账本", () => {
-    const body = JSON.stringify({
-      messages: [
-        { role: "user", content: "  " },
-        { role: "system", content: "系统提示" },
-        { role: "assistant", content: "答" },
-      ],
-    });
-    expect(extractOutgoingMessages(body, TOOLS)).toEqual([{ role: "assistant", text: "答" }]);
   });
 });

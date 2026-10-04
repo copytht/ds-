@@ -1,7 +1,6 @@
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_READ_FAILED, PageError } from "./action";
 import type { ActionFrame } from "./action";
 import { parseToolCall } from "./fence";
-import { ledgerRole } from "./ledger";
 
 /**
  * 读对话（`messages.list` / `messages.last`）：**只读页面渲染出来的 DOM**。
@@ -246,21 +245,20 @@ function paints(backgroundColor: string): boolean {
 }
 
 /**
- * 认角色的四层解析，**首个命中为准，认不出不猜**（见 `docs/adr/0014` 与
- * `guides/human-first-thinking-guide.md`）：
+ * 认角色的三层解析，**首个命中为准，认不出不猜**（见 `guides/human-first-thinking-guide.md`）：
  *
- * 1. **载荷账本**：站点消息模型自带角色（`chat_message_role`），最硬、与标记无关；
- * 2. **标记层**：行上还留着站点的设计系统类（助手 `.ds-assistant-message-main-content`、
+ * 1. **标记层**：行上还留着站点的设计系统类（助手 `.ds-assistant-message-main-content`、
  *    用户 `.ds-collapsible-text`）→ 直接用（站点换版前的行为，零回归）；
- * 3. **渲染层**：人看的是**气泡**——用户消息被画成一个圆角块（真机：22px 圆角、**不满宽**，
+ * 2. **渲染层**：人看的是**气泡**——用户消息被画成一个圆角块（真机：22px 圆角、**不满宽**，
  *    旁边还有 30px 圆头像），助手是整宽素文、一个带底色的块都没有。只认**形状 + 位置 + 头像**，
  *    **颜色不作判据**（暗色主题底色全变）；
- * 4. 都不中 → `unknown`——**不猜**：标错角色比读不到更坏（agent 会拿它当上下文）。
+ * 3. 都不中 → `unknown`——**不猜**：标错角色比读不到更坏（agent 会拿它当上下文）。
+ *
+ * 注：站点换版后某套渲染连 `ds-*` 都撤了（`div._81e7b5e`），那时靠第 2 层气泡兜。
+ * 载荷（`chat_message_role`）本来也能当源，但那是改 #20 口径的大动作，为一个**没复现**的
+ * 病不值，故不做。
  */
 export function roleOf(row: Element, probe: StyleProbe = domProbe): MessageRole {
-  const known = ledgerRole(textOf(row));
-  if (known !== null) return known;
-
   if (row.querySelector(ASSISTANT_BODY_SELECTOR) !== null) return "assistant";
   if (row.querySelector(USER_BODY_SELECTOR) !== null) return "user";
 

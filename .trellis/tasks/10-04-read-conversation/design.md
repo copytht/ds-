@@ -18,17 +18,17 @@
 | **流式载荷 / 亲历账本** | **有（`chat_message_role` 是数据字段）** | **本任务主源**（要立 ADR-0014 改 #20 口径：只读、不改写请求、不直连接口） |
 | 截图 / OCR | 有 | 不用（重，且这条链的 agent 收不了图） |
 
-## 决定：角色解析四层，首个命中为准，认不出不猜
+## 决定：角色解析三层，首个命中为准，认不出不猜
 
-1. **载荷层（主源）**：`entrypoints/inject.content.ts` 本来就在包 `fetch`/`XHR`——把它读到的
-   消息（站点模型自带 `chat_message_role`，见 `research/site-code.md`）经既有 `postMessage`
-   桥记进**本页账本**；行文本与账本对齐即得角色 + 正文。这是**数据**，与标记无关，最硬。
-   **要立 ADR-0014** 改 #20 口径（只读响应/请求体、不改写请求、不直连接口）。
-2. **标记层**：行上还留着站点的设计系统类（`.ds-assistant-message-main-content` /
-   `.ds-collapsible-text`）→ 直接用（零回归）。
-3. **渲染层（气泡）**：行内有**不满宽**的圆角绘制块（或 30px 头像圆）→ user；否则 assistant。
+1. **标记层**：行上还留着站点的设计系统类（`.ds-assistant-message-main-content` /
+   `.ds-collapsible-text`）→ 直接用（今天真机实测可用，零回归）。
+2. **渲染层（气泡）**：行内有**不满宽**的圆角绘制块（或 30px 头像圆）→ user；否则 assistant。
    判据与数字见 `research/role-bubble.md`；**颜色不作判据**（暗色主题底色全变）。
-4. 都不中 → `unknown`。
+3. 都不中 → `unknown`。
+
+**载荷层（不做）**：抓站点代码时读到消息模型自带 `chat_message_role`（`research/site-code.md`），
+技术上也能当源——但那要改 #20 口径（立 ADR）、多一条跨世界管子，而「角色认不出」**一次都没复现**；
+气泡这条已经够用且便宜。**看见锤子别就找钉子。**
 
 **正文**：结构层 `rowText`（行 = `[data-virtual-list-item-key], .ds-virtual-list-visible-items > *`；
 含既有的「`<pre>` 还原成围栏」）。

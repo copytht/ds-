@@ -34,11 +34,9 @@
 
 ## 已定（评审 2026-10-04）
 
-1. **角色主源 = 载荷**：站点消息模型自带 `chat_message_role:"user"|"assistant"`
-   （从抓下来的站点 JS 里读到，见 `research/site-code.md`），而我们**已经在**截 `fetch`/`XHR`
-   （注入协议说明 + 喂围栏检测）——这条管子现成。立 **ADR-0014** 改 #20 口径
-   （只读请求/响应体、不改写请求、不直连接口）。
-2. **DOM 兜底两层**：标记层（`ds-*` 角色类，零回归）→ 渲染层（气泡：不满宽圆角块 / 头像圆；
-   数字见 `research/role-bubble.md`）。
+1. **角色 = 三层解析**：标记层（`ds-*` 角色类，零回归）→ 渲染层（气泡：不满宽圆角块 /
+   头像圆；数字见 `research/role-bubble.md`）→ `unknown`。
+2. **不做载荷层**：站点消息模型确实自带 `chat_message_role`（抓代码读到的），但用它要改 #20
+   口径 + 多一条跨世界管子，而「角色认不出」一次都没复现——**不为没复现的病付这个价**。
 3. **契约加 `unknown`**：`MessageRole = "user" | "assistant" | "unknown"`；
    同步 `protocol/` 样例与 Python 侧。

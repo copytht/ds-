@@ -26,9 +26,19 @@ uv run scripts/page-action.py capture --codes    # 落 captures/<时间戳>/
 `captures/` 不进库（见 `.gitignore`）。
 
 **先读 `codes/`**：站点的**真实规则**在里面。例：2026-10-04 在 `main.*.js` 里读到
-`chat_message_role:"user"` / `"assistant"`——**消息模型自带角色**，比任何 DOM 启发式都准；
-同一份包里 `.ds-assistant-message-main-content` 与 `_81e7b5e` 都在 → 两套标记是同一份代码的
-两个分支（A/B），不是两次发版。
+`chat_message_role:"user"` / `"assistant"`（消息模型自带角色）与 `.ds-assistant-message-main-content`
+`_81e7b5e` 并存——**两套标记是同一份代码的两个分支（A/B）**，不是两次发版。
+
+## 角色怎么判（三层，首个命中为准，认不出不猜）
+
+1. **标记层**：`.ds-assistant-message-main-content` / `.ds-collapsible-text`（零回归）；
+2. **渲染层（气泡）**：人看的那层——用户行是**不满宽**的圆角绘制块（真机 22px 圆角）+ 30px 头像圆；
+   助手行整宽素文、无绘制块。**颜色不作判据**（暗色主题底色全变）；判据数字见
+   `10-04-read-conversation/research/role-bubble.md`；
+3. 都不中 → `unknown`（**不猜**）。`MessageRole` 因它有第三个值。
+
+**不做载荷层**：`chat_message_role` 确实能当源（比 DOM 硬），但要改 #20 口径 + 多一条跨世界
+管子，而「角色认不出」一次都没复现——**看见锤子别就找钉子**（2026-10-04 用户拍板砍掉）。
 
 ## 只认语义 / 结构锚，不碰哈希 class
 

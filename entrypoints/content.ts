@@ -23,7 +23,6 @@ import {
   type SaidMessage,
 } from "../src/lib/channel";
 import { nextMessageId } from "../src/lib/id";
-import { recordChat } from "../src/lib/ledger";
 import {
   clearComposer,
   clickSend,
@@ -178,11 +177,6 @@ export default defineContentScript({
       }
       if (chain?.kind === "said") {
         void reportSaid(chain);
-        return;
-      }
-      if (chain?.kind === "chat") {
-        // 页面世界把整段对话交出来（ADR-0014）：只记进**本页账本**，不上报 background。
-        recordChat(chain.messages);
         return;
       }
       if (chain?.kind === "ask") {
