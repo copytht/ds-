@@ -107,7 +107,13 @@ def find_target(kind: str, needle: str, timeout: float = 0.0) -> dict | None:
         time.sleep(0.3)
 
 
-async def evaluate(ws_url: str, expression: str) -> object:
+async def evaluate(ws_url: str, expression: str, timeout: float = 60.0) -> object:
+    """在目标上下文里跑表达式取回值。
+
+    **必须有超时**：对端（扩展页 / 页面 SW）不答时 `recv()` 会永远挂着，
+    探针就变成一个没输出的死进程——排查时看不出是「慢」还是「卡」。
+    超时抛 `TimeoutError`，由 `run()` 折成一句人话。
+    """
     async with websockets.connect(ws_url, max_size=None) as ws:
         await ws.send(
             json.dumps(
@@ -123,13 +129,24 @@ async def evaluate(ws_url: str, expression: str) -> object:
             )
         )
         while True:
-            message = json.loads(await ws.recv())
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            except TimeoutError as error:
+                raise TimeoutError(
+                    f"CDP Runtime.evaluate 等回包超过 {timeout:.0f}s"
+                    "（对端没答：扩展没醒 / 页面正忙 / 动作在途）"
+                ) from error
+            message = json.loads(raw)
             if message.get("id") == 1:
                 return message
 
 
-def run(ws_url: str, expression: str) -> object:
-    return asyncio.run(evaluate(ws_url, expression))
+def run(ws_url: str, expression: str, timeout: float = 60.0) -> object:
+    try:
+        return asyncio.run(evaluate(ws_url, expression, timeout))
+    except TimeoutError as error:
+        print(f"[page-action] {error}", file=sys.stderr)
+        raise SystemExit(4) from error
 
 
 async def call_cdp(ws_url: str, method: str, params: dict | None = None) -> object:
@@ -436,7 +453,8 @@ def send_action(action: str, params: dict) -> object:
         "  return JSON.stringify(r);"
         "})()"
     )
-    result = run(ext["webSocketDebuggerUrl"], script)
+    # 动作本身有 30s 的中继锁，超时给得比默认宽一点；再宽就是真卡住了，该报错而不是挂着。
+    result = run(ext["webSocketDebuggerUrl"], script, timeout=75.0)
     return unwrap(result)
 
 

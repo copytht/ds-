@@ -153,10 +153,26 @@ export async function settleUntilMounted(
     if (keysOf(view) !== was) return;
   }
 }
+/**
+ * 等下一帧。
+ *
+ * **`requestAnimationFrame` 必须配超时兜底**（真机 2026-10-04 撞过）：页面**不可见**时
+ * 浏览器不产生帧，rAF 回调**永不触发**——裸 rAF 的 `Promise` 就永远挂着，
+ * `readMessages` / `readLast` 里的 `settleUntilMounted` 随之卡死，动作永不回话
+ * （表现是探针等到超时、CDP 那边一句回包都没有）。后台标签页、切换走的标签页都会这样。
+ * 所以 rAF 与 `setTimeout` **赛跑**，先到者赢。
+ */
 export function nextFrame(): Promise<void> {
   return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
-    else setTimeout(resolve, 0);
+    let done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(finish);
+    // 兜底：不可见页面 rAF 不来，这一路一定在 POLL_INTERVAL_MS 内收工。
+    setTimeout(finish, POLL_INTERVAL_MS);
   });
 }
 

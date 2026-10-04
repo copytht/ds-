@@ -5,6 +5,7 @@ import type { ActionFrame } from "./action";
 import {
   lastMessage,
   listMessages,
+  nextFrame,
   readLast,
   readMessages,
   readRow,
@@ -574,5 +575,56 @@ describe("就绪轮询（issue #40）", () => {
 
     expect(list.messages).toHaveLength(2);
     expect(last.messages).toHaveLength(1);
+  });
+});
+
+describe("nextFrame：不可见页面也得收工", () => {
+  it("requestAnimationFrame 永不回调（页面不可见）时靠 setTimeout 兜底", async () => {
+    // 真机 2026-10-04 撞过：后台标签页不产生帧，裸 rAF 的 Promise 永远挂着，
+    // `readMessages` / `readLast` 里的 `settleUntilMounted` 随之卡死、动作永不回话。
+    const original = globalThis.requestAnimationFrame;
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: (): number => 0, // 收下回调但永不调用 = 页面不可见
+    });
+    try {
+      await expect(
+        Promise.race([
+          nextFrame(),
+          new Promise((resolve) => setTimeout(() => resolve("超时"), 3_000)),
+        ]),
+      ).resolves.toBeUndefined();
+    } finally {
+      Object.defineProperty(globalThis, "requestAnimationFrame", {
+        configurable: true,
+        writable: true,
+        value: original,
+      });
+    }
+  });
+
+  it("rAF 正常回调时仍走那一路，不被兜底拖慢", async () => {
+    const original = globalThis.requestAnimationFrame;
+    let called = false;
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: (callback: FrameRequestCallback): number => {
+        called = true;
+        callback(0);
+        return 0;
+      },
+    });
+    try {
+      await nextFrame();
+      expect(called).toBe(true);
+    } finally {
+      Object.defineProperty(globalThis, "requestAnimationFrame", {
+        configurable: true,
+        writable: true,
+        value: original,
+      });
+    }
   });
 });
