@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "按本层口径跑 ruff/pytest/静态守卫并判绿"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对新错码册子与既有两套码不混、失败载荷形状一致"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核查改动是否波及其他层（协议说明、fixture、扩展侧）——预期零改动要给出依据"}
+{"file": "docs/adr/0011-dsb-is-a-stateless-mcp-gateway.md", "reason": "确认 ADR-0011 被显式修订而非静默盖过，其余条款仍成立"}
+{"file": "docs/adr/0004-failures-are-recorded-without-the-body.md", "reason": "确认错误正文不进日志、留痕只留具名字段"}
+{"file": "CONTEXT.md", "reason": "确认交付物用词与术语表一致，且新词条已补"}
