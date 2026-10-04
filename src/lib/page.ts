@@ -172,6 +172,54 @@ export function clickSend(_frame: ActionFrame): Record<string, never> {
   return {};
 }
 
+/**
+ * 停止键与发送键**是同一个元素**：生成期站点把那个圆键里的箭头换成方块，`class` 一个不换
+ * （`div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle…`），
+ * `aria-label` 也是空的。真机 2026-10-04 两次抓取（生成中 / 空闲）见本任务
+ * `research/stop-button-dumps.md`。所以只能**认图标**：方块 = 停止、箭头 = 发送；
+ * 认不出回 `page-changed`（fail-safe，绝不误点发送）。
+ *
+ * 前缀取自真机路径：停止方块 `M2 4.88C2 3.68009…`，发送箭头 `M8.3125 0.980206…`。
+ * 站点换图标就失配，那是要的——宁可报「找不到」，也不把发送当停止点。
+ */
+const STOP_ICON_PREFIX = "M2 4.88C2 3.68009";
+
+/** 兜底：站点哪天给停止键补了 `aria-label`，这条先接住（真机上现在没有）。 */
+export const STOP_SELECTOR =
+  'div[role="button"][aria-label*="停止"], div[role="button"][aria-label*="Stop"], ' +
+  'button[aria-label*="停止"], button[aria-label*="Stop"]';
+
+/** 圆键里那个图标的 `d`（两态共用一套 class，只有这个不同）。 */
+function circleIconPath(): string | null {
+  return (
+    document
+      .querySelector<HTMLElement>(SEND_SELECTOR)
+      ?.querySelector("svg path")
+      ?.getAttribute("d") ?? null
+  );
+}
+
+/**
+ * 找停止键：先认站点给的语义标记（若有），否则认那个「方块图标」的圆键。
+ * 不在、没渲染出来、或圆键此刻是发送箭头，都回 null。
+ */
+export function findStopButton(): HTMLElement | null {
+  const labelled = document.querySelector<HTMLElement>(STOP_SELECTOR);
+  if (labelled !== null && labelled.getClientRects().length > 0) return labelled;
+  const circle = document.querySelector<HTMLElement>(SEND_SELECTOR);
+  if (circle === null || circle.getClientRects().length === 0) return null;
+  const icon = circleIconPath();
+  return icon !== null && icon.startsWith(STOP_ICON_PREFIX) ? circle : null;
+}
+
+/** 点停止键中断生成。找不到就抛（由收信那层折成 `page-changed`），别假装点过了。 */
+export function stopClick(_frame: ActionFrame): Record<string, never> {
+  const el = findStopButton();
+  if (el === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "停止键不可用");
+  el.click();
+  return {};
+}
+
 /** 在写作框上按回车（站点自己也接这条路）。 */
 export function pressEnter(_frame: ActionFrame): Record<string, never> {
   const el = composerElement();

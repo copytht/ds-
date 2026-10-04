@@ -5,11 +5,13 @@ import {
   clearComposer,
   clickSend,
   findSendButton,
+  findStopButton,
   newChat,
   pressEnter,
   readComposer,
   readPageState,
   SEND_SELECTOR,
+  stopClick,
   typeComposer,
 } from "./page";
 
@@ -248,5 +250,67 @@ describe("chat.new 执行器", () => {
     document.body.innerHTML = "<div>什么都没有</div>";
 
     expect(() => newChat(FRAME)).toThrow();
+  });
+});
+
+describe("stop.click 执行器", () => {
+  // jsdom 不做布局，所有元素的 getClientRects 都是空——测试里手工补一个盒子。
+  const stubBox = (el: Element): void => {
+    (el as HTMLElement).getClientRects = () => [{ width: 1, height: 1 }] as unknown as DOMRectList;
+  };
+
+  // 真机 2026-10-04 抓的（生成中 / 空闲各一次），见
+  // .trellis/tasks/10-04-stop-click-chat-new/research/stop-button-dumps.md。
+  // 两态的 class 一个不换，只有圆键里的图标不同——所以只能按图标认。
+  const STOP_BUTTON_HTML =
+    '<div role="button" class="ds-button ds-button--primary ds-button--filled ds-button--circle ds-button--m ds-button--icon-relative-m _52c986b" style="--dsl-button-height: 34px;" tabindex="0"><div class="ds-button__background"></div><div class="ds-button__icon ds-button__icon--last-child"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 4.88C2 3.68009 2 3.08013 2.30557 2.65954C2.40426 2.52371 2.52371 2.40426 2.65954 2.30557C3.08013 2 3.68009 2 4.88 2H11.12C12.3199 2 12.9199 2 13.3405 2.30557C13.4763 2.40426 13.5957 2.52371 13.6944 2.65954C14 3.08013 14 3.68009 14 4.88V11.12C14 12.3199 14 12.9199 13.6944 13.3405C13.5957 13.4763 13.4763 13.5957 13.3405 13.6944C12.9199 14 12.3199 14 11.12 14H4.88C3.68009 14 3.08013 14 2.65954 13.6944C2.52371 13.5957 2.40426 13.4763 2.30557 13.3405C2 12.9199 2 12.3199 2 11.12V4.88Z" fill="currentColor"></path></svg></div></div>';
+
+  const SEND_BUTTON_HTML =
+    '<div role="button" class="ds-button ds-button--primary ds-button--filled ds-button--circle ds-button--m ds-button--icon-relative-m ds-button--disabled _52c986b bd74640a" style="--dsl-button-height: 34px;"><div class="ds-button__background"></div><div class="ds-button__icon ds-button__icon--last-child"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8.3125 0.980206C8.66767 1.05312 8.97902 1.2042 9.2627 1.43235C9.48724 1.613 9.73029 1.85795 9.97949 2.10716L14.707 6.8347L13.293 8.24876L9 3.95579V15.0417H7V3.95579L2.70703 8.24876L1.29297 6.8347L6.02051 2.10716C6.26971 1.85795 6.51277 1.613 6.7373 1.43235C6.97662 1.23988 7.28445 1.04404 7.6875 0.980206C7.8973 0.947029 8.1031 0.955183 8.3125 0.980206Z" fill="currentColor"></path></svg></div></div>';
+
+  it("真机回归：生成中那个方块圆键认得出（与发送键同一个元素、同套 class）", () => {
+    document.body.innerHTML = STOP_BUTTON_HTML;
+    stubBox(document.querySelector(SEND_SELECTOR) as Element);
+
+    expect(findStopButton()).not.toBeNull();
+  });
+
+  it("真机回归：空闲时那个箭头圆键不认（别把发送键当停止键）", () => {
+    document.body.innerHTML = SEND_BUTTON_HTML;
+    stubBox(document.querySelector(SEND_SELECTOR) as Element);
+
+    expect(findStopButton()).toBeNull();
+  });
+
+  it("点停止键（真机那个方块圆键）", () => {
+    document.body.innerHTML = STOP_BUTTON_HTML;
+    const el = document.querySelector(SEND_SELECTOR) as HTMLElement;
+    stubBox(el);
+    let clicked = 0;
+    el.addEventListener("click", () => (clicked += 1));
+
+    stopClick(FRAME);
+
+    expect(clicked).toBe(1);
+  });
+
+  it("没渲染出盒子（不可见）也当没找到", () => {
+    document.body.innerHTML = STOP_BUTTON_HTML;
+    // 不 stub：jsdom 里天然 getClientRects().length === 0
+    expect(findStopButton()).toBeNull();
+  });
+
+  it("空闲时（圆键是发送箭头）找不到停止键，stopClick 抛，别假装点过了", () => {
+    document.body.innerHTML = SEND_BUTTON_HTML;
+    stubBox(document.querySelector(SEND_SELECTOR) as Element);
+
+    expect(() => stopClick(FRAME)).toThrow();
+  });
+
+  it("站点若给了 aria-label，优先认它（真机上现在没有，先接住）", () => {
+    document.body.innerHTML = '<div role="button" aria-label="停止生成"></div>';
+    stubBox(document.querySelector('[aria-label="停止生成"]') as Element);
+
+    expect(findStopButton()).not.toBeNull();
   });
 });
