@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-10-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~184 | Active |
+| `journal-1.md` | ~223 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-10-04 | wait.* 判新与行锚：站点 key 带符号、两版行锚（#37） | `f1c6638`, `8c8921f` | `main` |
 | 7 | 2026-10-04 | send.page：扩展侧本地工具的组合（#23） | `b4f0554`, `7a3ede8` | `main` |
 | 6 | 2026-10-04 | dsb 内建工作工具（root 沙箱五件）+ env-up 会话标签页修正 | `b599f39`, `7abaae3`, `e3fdbc6` | `main` |
 | 5 | 2026-10-04 | 页面动作 7/8：stop.click（生成中停止键） | `e4a5d89`, `9543e3f` | `-` |

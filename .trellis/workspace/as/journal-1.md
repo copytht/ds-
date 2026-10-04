@@ -182,3 +182,42 @@ Planned + implemented the send.page composite as an extension-side local tool (A
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: wait.* 判新与行锚：站点 key 带符号、两版行锚（#37）
+<!-- trellis-session: v=2 fp=e5df5f34e01f19d8 -->
+
+**Date**: 2026-10-04
+**Task**: wait.* 判新与行锚：站点 key 带符号、两版行锚（#37）
+**Branch**: `main`
+
+### Summary
+
+真机驱动修 #37：站点行 key 带符号且一个来回两条同值不同号（-2/2、-4/4），key>基线 与 |key|>基线 都会漏；基线改记 key 集合 + 无 key 行正文集合，只认基线里没见过的。行锚改两条并列（keyed 行 / visible-items 直接子元素）兼容站点两版；wait.* 等挂载；读行文本把新版渲染的 <pre> 代码块还原成围栏；parseToolCall 收拢到 fence.ts。pnpm quality 绿，真机 send.page 四步收口 status:ok + 答复正文，PR #38 合入，任务归档。
+
+### Main Changes
+
+- wait.ts：基线 = key 集合 + 无 key 行正文集合；判新只认没见过的；viewWithin 预算内等列表挂载，耗尽才 page-changed
+- messages.ts：行锚 [data-virtual-list-item-key], .ds-virtual-list-visible-items > *；新增角色无关 rowText；textOf 把 <pre> 还原回 ```send 围栏
+- fence.ts：收拢 parseToolCall / MALFORMED_CALL_HINT（读 DOM 那半边也要用），relay.ts 转出
+- spec：新增 frontend/site-dom-anchors.md（锚点契约与判新口径）；#37 回帖复验结论
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f1c6638` | fix(wait): 判新按 key 集合/正文，行锚兼容站点两版（#37） |
+| `8c8921f` | chore(task): archive 10-04-wait-key-sign |
+
+### Testing
+
+- [OK] pnpm quality 全绿：434 vitest + 138 pytest
+- [OK] 真机（随机延迟 47s，只发一次）send.page 四步收口 status:ok + 答复正文
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- messages.* 的角色判据在新版站点没了（.ds-message / .ds-assistant-message-main-content / .ds-collapsible-text 全撤，行上无 role/aria）——要修得先定新的角色锚，另开 issue
