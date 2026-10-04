@@ -135,3 +135,27 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: dsb 内建工作工具（root 沙箱五件）+ env-up 会话标签页修正
+<!-- trellis-session: v=2 fp=2816d26eb34cc02b -->
+
+**Date**: 2026-10-04
+**Task**: dsb 内建工作工具（root 沙箱五件）+ env-up 会话标签页修正
+**Branch**: `main`
+
+### Summary
+
+dsb 内建 ls/read/grep/write/edit（DSB_WORK_ROOT 沙箱、无 SHELL、只护 .git、ADR-0012）；env-up 起独立 profile 不再多空白新标签页（带 URL + 清会话恢复）；dev→main 合并并清理全部工作树
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b599f39` | fix(env-up): 起独立 profile 不再多一个空白新标签页 |
+| `7abaae3` | feat: dsb 内建工作工具 ls/read/grep/write/edit（root 沙箱，无 SHELL，ADR-0012） |
+| `e3fdbc6` | Merge branch 'dev' |
+
+### Status
+
+[OK] **Completed**
