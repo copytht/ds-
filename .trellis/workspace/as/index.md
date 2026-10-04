@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
+- **Total Sessions**: 9
 - **Last Active**: 2026-10-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~223 | Active |
+| `journal-1.md` | ~250 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-10-04 | 读对话：角色判据改渲染层（气泡）+ 代码块正文只取 <pre> | `b21d74c`, `984d87e`, `7b04339`, `2195ccd`, `478493f`, `92ff36c` | `read-conversation` |
 | 8 | 2026-10-04 | wait.* 判新与行锚：站点 key 带符号、两版行锚（#37） | `f1c6638`, `8c8921f` | `main` |
 | 7 | 2026-10-04 | send.page：扩展侧本地工具的组合（#23） | `b4f0554`, `7a3ede8` | `main` |
 | 6 | 2026-10-04 | dsb 内建工作工具（root 沙箱五件）+ env-up 会话标签页修正 | `b599f39`, `7abaae3`, `e3fdbc6` | `main` |
