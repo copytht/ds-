@@ -132,6 +132,42 @@ def run(ws_url: str, expression: str) -> object:
     return asyncio.run(evaluate(ws_url, expression))
 
 
+async def call_cdp(ws_url: str, method: str, params: dict | None = None) -> object:
+    """发一条 CDP 命令，取它的回包（不带 id 的事件直接跳过）。"""
+    async with websockets.connect(ws_url, max_size=None) as ws:
+        await ws.send(json.dumps({"id": 1, "method": method, "params": params or {}}))
+        while True:
+            message = json.loads(await ws.recv())
+            if message.get("id") == 1:
+                return message
+
+
+def ax_nodes(tab: dict) -> list[dict]:
+    """取整棵**无障碍树**（role + 可访问名，浏览器算出来的）。先 enable 再要全量。"""
+    ws_url = tab["webSocketDebuggerUrl"]
+    asyncio.run(call_cdp(ws_url, "Accessibility.enable"))
+    reply = asyncio.run(call_cdp(ws_url, "Accessibility.getFullAXTree"))
+    result = reply.get("result") if isinstance(reply, dict) else None
+    nodes = result.get("nodes") if isinstance(result, dict) else None
+    return nodes if isinstance(nodes, list) else []
+
+
+def ax_line(node: dict) -> str:
+    """一行的紧凑视图：role + 可访问名（+ value / 几个关键属性）。"""
+    role = (node.get("role") or {}).get("value", "?")
+    name = (node.get("name") or {}).get("value", "")
+    extras: list[str] = []
+    value = (node.get("value") or {}).get("value")
+    if value not in (None, ""):
+        extras.append(f"value={value!r}")
+    for prop in node.get("properties") or []:
+        key = prop.get("name")
+        if key in ("editable", "disabled", "focused", "placeholder"):
+            extras.append(f"{key}={prop.get('value', {}).get('value')!r}")
+    tail = ("  " + " ".join(extras)) if extras else ""
+    return f"{role:<18} {name[:70]}{tail}"
+
+
 def read_state() -> dict:
     tab = ensure_site_tab()
     value = unwrap(run(tab["webSocketDebuggerUrl"], READ_EXPR))
@@ -273,6 +309,10 @@ def main() -> None:
     storage.add_argument("op", choices=["get", "set", "remove"], help="get 读 / set 写 / remove 删")
     storage.add_argument("--keys", default="[]", help="get / remove 的键数组（JSON）")
     storage.add_argument("--data", default="{}", help="set 的对象（JSON）")
+    ax = sub.add_parser("ax", help="dump 无障碍树（role + 可访问名；只读，开发探针）")
+    ax.add_argument("--grep", default="", help="只打印 role/name/value 命中该串的节点")
+    ax.add_argument("--max", type=int, default=80, help="最多打印多少行，默认 80")
+    ax.add_argument("--all", action="store_true", help="连 ignored 的节点也打印")
     args = parser.parse_args()
 
     require_cdp()
@@ -345,6 +385,26 @@ def main() -> None:
         print(
             json.dumps(storage_op(args.op, args.keys, args.data), ensure_ascii=False, indent=2),
         )
+        return
+
+    if args.command == "ax":
+        tab = ensure_site_tab()
+        nodes = ax_nodes(tab)
+        shown = 0
+        for node in nodes:
+            if node.get("ignored") and not args.all:
+                continue
+            line = ax_line(node)
+            if args.grep and args.grep not in line:
+                continue
+            print(line)
+            shown += 1
+            if shown >= args.max:
+                break
+        if shown == 0:
+            print(f"（没有命中；共 {len(nodes)} 个节点）")
+        else:
+            print(f"—— 打住：{shown} 行 / 共 {len(nodes)} 个节点（--max 调大 / --grep 收窄）")
         return
 
 
