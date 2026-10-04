@@ -21,15 +21,20 @@
 **用户正在用浏览器时不许重启它**（不 SIGTERM、不重开窗口）。要清 flag、换 profile、装扩展，
 先问现在方不方便，或者让用户自己动手；动主 profile 必须用户明确点头，含糊点头不算。
 
+**例外（2026-10-04 用户拍板）**：`scripts/env-up.sh` 检测到 ds-browser 装的扩展比构建旧
+时，会自动重启 ds-browser（SIGTERM 主进程 → 清 SW 脚本缓存 → 重装扩展 → 开会话页）。
+登录态在 profile 里不丢、开着的标签页会关；除此之外的浏览器一律不动，规矩照旧。
+
 ## 环境准备
 
-**跑 `scripts/env-up.sh`**，别现拼命令：它起缺的、**活的一律不重启**，末尾三条判据（中继 ping 健康 /
-`tools/list` 取得到工具表 / 会话标签页——浏览器是它刚起的才代开）。幂等，随时可重跑。
+**跑 `scripts/env-up.sh`**，别现拼命令：它起缺的、**旧代码自动换**（ds-browser 装的扩展
+比构建旧会自动重启；中继跑旧代码提示 kill），末尾三条判据（中继 ping 健康 /
+`tools/list` 取得到工具表 / 会话标签页——浏览器是它刚起或刚重启的才代开）。幂等，随时可重跑。
 
 **动作探针别拿 `target: null` 打页面动作**：`page.state` / `composer.read` / `messages.*` /
 `chat.new` 要先 `tabs.list` 拿标签页 id 再带上。`target: null` 只有 `tabs.list` 与 `toggle.*`
-答得出，其余一律落 `src/lib/action.ts:172` 的 `unknown-action`——**那是探针错了，不是链子坏了**，
-别照着它去修扩展。
+答得出，其余一律落 `src/lib/action.ts` 的 `unknown-action`（`ACTION_ERROR_UNKNOWN`）——
+**那是探针错了，不是链子坏了**，别照着它去修扩展。
 
 登录 DeepSeek 与勾「替人开口」是人做的两件，脚本只打印不代劳；没勾闸则写动作回 `disabled`
 属预期，不是故障。

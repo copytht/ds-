@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 环境准备：起缺的、**活的一律不重启**，最后拿真判据验一次。
+# 环境准备：起缺的、**旧代码自动换**（ds-browser 装的扩展比构建旧会自动
+# 重启；中继跑旧代码提示 kill），最后拿真判据验一次。
 # 用法：scripts/env-up.sh      幂等，可反复跑。
 #
 # 两件人做的事（脚本做不了）在末尾打印，不猜、不代劳。
@@ -19,12 +20,24 @@ rpc() {
   curl -s -m 10 -X POST "$MCP" -H 'Content-Type: application/json' -d "$1"
 }
 
+# 起 ds-browser：先清 SW 脚本缓存（扩展版本号不变时，Chromium 把 SW
+# 脚本缓存在 profile 里一直沿用——实测 SW 跑一天前的旧脚本，重启十几回
+# 都不换；内容脚本却随页面加载新构建，症状是「读类动作新、写类动作旧」）。
+# Database 是 SW 注册表（可再生成、无用户数据），一并清。
+start_browser() {
+  rm -rf "$PROFILE/Default/Service Worker/ScriptCache" "$PROFILE/Default/Service Worker/Database"
+  "$CHROME" --user-data-dir="$PROFILE" --load-extension="$MV3" \
+    --no-first-run --no-default-browser-check >/tmp/dsb-browser.log 2>&1 &
+  disown
+  STARTED_BROWSER=1
+  say 浏览器 "已起 → 独立 profile（清过 SW 脚本缓存）"
+}
+
 # ---- 1) 扩展构建：源码比产物新才重建（老产物 = 协议说明旧、名册缺动作）----
-REBUILT=0
 if [ ! -f "$MV3/background.js" ]; then
-  pnpm build >/tmp/dsb-build.log 2>&1 && { say 构建 "缺产物，已重建"; REBUILT=1; } || { say 构建 "重建失败 → /tmp/dsb-build.log"; exit 1; }
+  pnpm build >/tmp/dsb-build.log 2>&1 && say 构建 "缺产物，已重建" || { say 构建 "重建失败 → /tmp/dsb-build.log"; exit 1; }
 elif [ -n "$(find src entrypoints -name '*.ts' -newer "$MV3/background.js" 2>/dev/null | head -1)" ]; then
-  pnpm build >/tmp/dsb-build.log 2>&1 && { say 构建 "源码较新，已重建"; REBUILT=1; } || { say 构建 "重建失败 → /tmp/dsb-build.log"; exit 1; }
+  pnpm build >/tmp/dsb-build.log 2>&1 && say 构建 "源码较新，已重建" || { say 构建 "重建失败 → /tmp/dsb-build.log"; exit 1; }
 else
   say 构建 "产物最新"
 fi
@@ -63,25 +76,37 @@ else
   say 中继 "已起 → /tmp/dsb-relay.log"
 fi
 
-# ---- 3) 浏览器：只认独立 profile；已活着绝不重启（重启 = 掉 --load-extension）----
+# ---- 3) 浏览器：只认独立 profile；装的扩展比构建旧就自动重启 ----
 # 主进程的首个 flag 是 --user-data-dir，子进程是 --type=，据此只数主进程。
 STARTED_BROWSER=0
-if ps ax -o command= | grep -E '^/Applications/Chromium\.app/Contents/MacOS/Chromium --user-data-dir=.*ds-browser' >/dev/null 2>&1; then
-  say 浏览器 "已在跑（独立 profile）"
-  if [ "$REBUILT" = 1 ]; then
-    say 提示 "刚重建过、浏览器却在跑：SW 吃的仍是旧脚本缓存，得重启浏览器才换新（本脚本起浏览器时会清缓存）"
+BROWSER_MAIN=$(ps ax -o pid=,command= | grep -E '^ *[0-9]+ /Applications/Chromium\.app/Contents/MacOS/Chromium --user-data-dir=.*ds-browser' | head -1 | awk '{print $1}')
+if [ -n "$BROWSER_MAIN" ]; then
+  # 装的扩展比构建旧 = 跑的旧代码（SW 脚本缓存在 profile 里，重启
+  # 浏览器才会换新）。重启只动 ds-browser 这一个进程：登录态在
+  # profile 里不丢，开着的标签页会关；用户的别的浏览器一律不碰。
+  BROWSER_STARTED=$(ps -p "$BROWSER_MAIN" -o lstart= 2>/dev/null | python3 -c '
+import sys
+from datetime import datetime
+raw = " ".join(sys.stdin.read().split())  # ps 的 lstart 日是空格填充的
+try:
+    print(int(datetime.strptime(raw, "%a %b %d %H:%M:%S %Y").timestamp()))
+except ValueError:
+    print("")')
+  BUILD_MTIME=$(stat -f %m "$MV3/background.js" 2>/dev/null || echo 0)
+  if [ -n "$BROWSER_STARTED" ] && [ "$BUILD_MTIME" -gt "$BROWSER_STARTED" ]; then
+    say 提示 "浏览器装的扩展比构建旧（跑旧代码）：自动重启 ds-browser"
+    kill "$BROWSER_MAIN" 2>/dev/null
+    for _ in 1 2 3 4 5; do
+      ps -p "$BROWSER_MAIN" >/dev/null 2>&1 || break
+      sleep 1
+    done
+    kill -9 "$BROWSER_MAIN" 2>/dev/null
+    start_browser
+  else
+    say 浏览器 "已在跑（独立 profile，扩展是新的）"
   fi
 else
-  # 起浏览器前清 SW 脚本缓存：扩展版本号不变时，Chromium 把 SW 脚本缓存在
-  # profile 里一直沿用（实测：SW 跑一天前的旧脚本，重建重启十几回都不换；
-  # 内容脚本却随页面加载新构建——症状是「读类动作新、写类动作旧」）。
-  # Database 是 SW 注册表（可再生成、无用户数据），一并清。
-  rm -rf "$PROFILE/Default/Service Worker/ScriptCache" "$PROFILE/Default/Service Worker/Database"
-  "$CHROME" --user-data-dir="$PROFILE" --load-extension="$MV3" \
-    --no-first-run --no-default-browser-check >/tmp/dsb-browser.log 2>&1 &
-  disown
-  STARTED_BROWSER=1
-  say 浏览器 "已起 → 独立 profile（清过 SW 脚本缓存）"
+  start_browser
 fi
 
 # ---- 4) 判据 ----
@@ -143,5 +168,6 @@ cat <<EOF
   账号被禁言时（站点橙框「禁言至 …」，写作框不渲染）整条交流线是断的：
   那是账号在站点的处罚，不是扩展坏了。别去修选择器，那修不好；等解封。
 
-  本脚本幂等：环境没坏就别重跑，重跑也不会动活着的浏览器。
+  本脚本幂等；重跑只会重启「装的扩展比构建旧」的 ds-browser
+  （独立 profile，登录态不丢），不动任何别的浏览器。
 EOF
