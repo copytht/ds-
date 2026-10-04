@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "质量检查口径：lint/typecheck/vitest/prettier/ruff/pytest 与 fixture 对拍"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对动作契约改动是否跨层同步、失败码册子两头一致"}

@@ -17,9 +17,8 @@ export default [
       "tests/**",
       // 真机抓下来的站点证据（page-action.py capture），本机产物不进 lint
       "captures/**",
-      // Trellis 生成的平台插件与脚本，升级会重生成 → 不进本仓库的 lint
+      // OpenSpec 生成的命令与技能（`openspec update` 会重生成）→ 不进本仓库的 lint
       ".opencode/**",
-      ".trellis/**",
     ],
   },
   js.configs.recommended,

@@ -1,4 +1,0 @@
-{"file": ".trellis/tasks/10-04-read-conversation/research/site-message-markup.md", "reason": "真机事实：主列表标记、两套渲染、AX 判不出角色、控件层没断——角色判据改动的依据"}
-{"file": ".trellis/spec/frontend/site-dom-anchors.md", "reason": "锚点契约；本任务要在同一页补「角色三层解析（标记 → 渲染气泡 → unknown）」"}
-{"file": ".trellis/spec/frontend/type-safety.md", "reason": "角色是站点给的字符串判定：认不出按缺失处理、不猜；契约加 unknown 的边界在这"}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "jsdom 不做布局：渲染层判据必须走探测口注入替身，否则测试是假的"}
