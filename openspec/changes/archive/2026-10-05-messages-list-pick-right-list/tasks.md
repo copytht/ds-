@@ -34,6 +34,6 @@
 - [x] 6.3 新对话上 `messages.list`：秒回空数组（动作耗时 0.08s / 0.23s），不吃 25s 轮询、不报错
 - [x] 6.4 结论回贴 #54：修前/修后实测对照、票里建议 C 那处口径纠正、「隐藏标签页站点不渲染对话」这条前置、以及残余边界（导航刚落地那一瞬可能回空数组）
 - [x] 6.5 `/opsx-archive messages-list-pick-right-list`：`site-dom` +2 条 ADDED、1 条 MODIFIED 并进主 spec（逐条核对场景一一对应，MODIFIED 的原有场景名一字不改）
-- [ ] 6.6 开分支 `messages-list-pick-right-list`、提 PR，描述挂 `Fixes #54`。
+- [x] 6.6 开分支 `messages-list-pick-right-list`、提 **PR #59**，描述挂 `Fixes #54`。
       （**CI 全绿不算任务**：CI 卡的就是「任务全勾」这一条，写成任务是自己造的死循环——
       门的判据是这个 PR 的 CI 过了才合并。合并 `gh pr merge --merge` 与删分支是 PR 收尾。）
