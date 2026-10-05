@@ -1,6 +1,7 @@
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_READ_FAILED, PageError } from "./action";
 import type { ActionFrame } from "./action";
 import { parseToolCall } from "./fence";
+import { COMPOSER_SELECTOR } from "./page";
 import { FRAME_FALLBACK_MS, POLL_INTERVAL_MS, parseWaitSeconds } from "./wait-budget";
 
 /**
@@ -29,6 +30,11 @@ import { FRAME_FALLBACK_MS, POLL_INTERVAL_MS, parseWaitSeconds } from "./wait-bu
 /** 消息列表那层；认行、以及滚不动时的兜底都落它身上（滚动那层另找，见 `conversation`）。 */
 const LIST_SELECTOR = ".ds-virtual-list";
 /**
+ * 主聊天区那条列表的修饰类（设计系统类、非哈希）。挑「对话那一条」的第二判据——
+ * 写作框挪出列表时的兜底，见 `conversationList`。
+ */
+const PRINTABLE_LIST_SELECTOR = ".ds-virtual-list--printable";
+/**
  * 行。两版站点都认：
  * - **老版**：行上挂 `data-virtual-list-item-key`（会话内序号）；
  * - **新版**（2026-10-04 起）：行上只有哈希 class、**没有 key**，只能按结构认——
@@ -36,6 +42,10 @@ const LIST_SELECTOR = ".ds-virtual-list";
  *
  * 哈希 class 不碰（见 #15），所以新版只能落到「结构位置」这条路上。`keysOf` 顺带读 key
  * （老版有、新版没有）。逗号两条各认各的，新老结构都不挑。
+ *
+ * **本锚是 #37（f1c6638）为 `wait.*` 加的，当时没同步 `messages.ts` 的收集路径**——两处
+ * 自此对不上：无 key 的行 `wait.*` 认、`messages.list` 却整片丢掉（稳定 `page-changed`）。
+ * #54 把口径收成一条：两条都认，收行身份见 `sweepInto`。
  */
 export const ROW_SELECTOR = "[data-virtual-list-item-key], .ds-virtual-list-visible-items > *";
 /** 助手正文（设计系统类）。有它就是助手，没有再看用户那条路。 */
@@ -378,7 +388,74 @@ function scrollsVertically(element: Element): boolean {
 }
 
 /**
+ * 存在性判断一律走 `querySelectorAll(...).length`，**不用 `querySelector(...) !== null`**。
+ *
+ * 起因是 jsdom 的 nwsapi 有一个坑：页面上有**同类兄弟**（两条 `.ds-virtual-list`）且前一条的行
+ * 是空的时，任一条的 `querySelector(ROW_SELECTOR)` 都回 null——而 `querySelectorAll` 是对的。
+ * 真机 Chrome 没这毛病，但单测得可信，两种 DOM 都成立的写法只有后者。
+ */
+function hasRow(list: Element): boolean {
+  return list.querySelectorAll(ROW_SELECTOR).length > 0;
+}
+
+/** 列表里第一行（没有回 null）。走 `querySelectorAll` 的理由见 `hasRow`。 */
+function firstRow(list: Element): Element | null {
+  return list.querySelectorAll(ROW_SELECTOR)[0] ?? null;
+}
+
+/**
+ * 认**对话那一条**虚拟列表。页面上不止一条 `.ds-virtual-list` 时（#54）必须有判据，
+ * 不能「拿第一个命中行倒推它最近的列表」——真机 2026-10-05 抓到第二条是右缘一个
+ * `position: fixed` 的 34px 窄条展开出来的 240px 面板（3 行、没有 key、没有 `.ds-message`），
+ * 倒推正好认了它。
+ *
+ * 三条判据**按序取首个命中**，都是语义 / 结构锚，**不碰几何**（宽窄、`position` 会随窗口变，
+ * 且 spec 明写几何不当主判据）：
+ *
+ * 1. **装着写作框的那一条**——真机 2026-10-05：写作框 `_871cbca` 是主列表的后代、sticky 在底部，
+ *    而主区 0 行的那一刻**只有它**认得出对话（「你往哪写，哪就是对话」）。也不依赖行挂没挂。
+ * 2. **带 `ds-virtual-list--printable` 的那一条**——设计系统修饰类（非哈希），本仓早把它当主列表
+ *    （见 `hasReadableRow` 的注释）；写作框挪出列表时的兜底。
+ * 3. **有含 `.ds-message` 的行的那一条**——最强的「这行是消息」证据，但真机 2026-10-05 全站
+ *    `.ds-message` 为 **0** 个，所以只排最后（排第一会让那个页面直接判死）。
+ *
+ * 三条都不中 → 回 null。**不回退到「第一个命中行的列表」**：那是 #54 挑错列表的来路。
+ */
+export function conversationList(root: ParentNode): Element | null {
+  const lists = root.querySelectorAll(LIST_SELECTOR);
+  const candidates: Element[] = [];
+  for (let index = 0; index < lists.length; index += 1) {
+    const list = lists[index];
+    if (list !== undefined) candidates.push(list);
+  }
+  for (const list of candidates) {
+    if (list.querySelectorAll(COMPOSER_SELECTOR).length > 0) return list;
+  }
+  for (const list of candidates) {
+    if (list.matches(PRINTABLE_LIST_SELECTOR)) return list;
+  }
+  for (const list of candidates) {
+    // `.ds-message` 只出现在消息行的内层包装里，所以「列表里有它」=「这个列表在放消息行」。
+    if (list.querySelectorAll(MESSAGE_SELECTOR).length > 0) return list;
+  }
+  return null;
+}
+
+/** 页面上有没有任何虚拟列表正挂着行（判「新对话」用——见 `listMessages`）。 */
+export function anyListHasRows(root: ParentNode): boolean {
+  const lists = root.querySelectorAll(LIST_SELECTOR);
+  for (let index = 0; index < lists.length; index += 1) {
+    const list = lists[index];
+    if (list !== undefined && hasRow(list)) return true;
+  }
+  return false;
+}
+
+/**
  * 认出消息列表，以及**真正会滚的那一层**。认不出回 null（新对话，一行都没有）。
+ *
+ * 只在 `conversationList` 认出的**对话列表**里找行（#54）——别的虚拟列表里的行不是对话。
+ * 认不出对话列表而页面上**有行** → 当场 `page-changed`（结构变了，当场说，别装作空对话）。
  *
  * 滚动发生在哪一层不能靠猜：真机上 `.ds-virtual-list` 是 `display:flex` 容器、底下还压着
  * 写作框，带 `overflow` 的可能是它自己，也可能是它里面的 `.ds-virtual-list-items`。
@@ -391,10 +468,19 @@ function scrollsVertically(element: Element): boolean {
  * `wait.*` 也要从文档里认出这一层（`wait.ts`），导出让它复用同一套判据。
  */
 export function conversation(root: ParentNode): ListViewport | null {
-  const row = root.querySelector(ROW_SELECTOR);
-  if (row === null) return null;
-  const list = row.closest(LIST_SELECTOR);
-  if (list === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "找不到消息列表"); // 结构变了：当场说，别装作空对话
+  const list = conversationList(root);
+  if (list === null) {
+    const lists = root.querySelectorAll(LIST_SELECTOR);
+    for (let index = 0; index < lists.length; index += 1) {
+      const other = lists[index];
+      if (other !== undefined && hasRow(other)) {
+        throw new PageError(ACTION_ERROR_PAGE_CHANGED, "认不出对话列表"); // 结构变了：当场说
+      }
+    }
+    return null; // 一行都没有：新对话
+  }
+  const row = firstRow(list);
+  if (row === null) return null; // 对话列表还一行没挂：交给就绪轮询，不是结构坏了
   for (let element = row.parentElement; element !== null; element = element.parentElement) {
     if (scrollsVertically(element)) return element;
     if (element === list) break;
@@ -402,16 +488,33 @@ export function conversation(root: ParentNode): ListViewport | null {
   return list;
 }
 
-/** 把当前挂载的行扫进 `seen`：按 key 去重，**挂载时就读走正文**（行卸载后内容会变）。 */
+/**
+ * 把当前挂载的行扫进 `seen`：按身份去重，**挂载时就读走正文**（行卸载后内容会变）。
+ *
+ * **身份两种**（#54）：行上挂着 `data-virtual-list-item-key` 就用 key（老版，带符号、
+ * 会话内不重复）；key 缺失就用**正文**——站点新版（2026-10-04 起）行只剩哈希 class、没有 key，
+ * 按 key 过滤等于**一行都收不进**，`messages.list` 便稳定报 `page-changed`。正文口径与
+ * `wait.ts` 的基线（`keys` + `texts`）一致：一个仓里两套身份没道理。
+ *
+ * 正文也空 → 不收（分隔条之类不是消息；`rowText` 返回 `null`）。
+ *
+ * 取舍：两条**正文完全相同**的消息只留第一条。正文当身份就这代价——同一条消息在滚动中
+ * 重挂也只会被认成一条（这是要的），代价是内容真的一样时分不出是哪条。实测对话里少见。
+ * 想过内容坐标（`rect.top - viewRect.top + scrollTop`）与 DOM 节点身份，前者在 jsdom 里所有
+ * rect 都是 0（**单测验不出它多出来的分辨力**）、真机上图片加载与折叠思考块会挪坐标反而造重复；
+ * 后者在虚拟列表回收复用节点时会把不同消息并成一条。详见 design.md D4。
+ */
 function sweepInto(view: ListViewport, seen: Map<string, Message>): void {
   const rows = view.querySelectorAll(ROW_SELECTOR);
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
     if (row === undefined) continue;
-    const key = row.getAttribute("data-virtual-list-item-key");
-    if (key === null || seen.has(key)) continue;
+    const text = rowText(row);
+    if (text === null) continue; // 分隔条之类：不收
+    const identity = row.getAttribute("data-virtual-list-item-key") ?? text;
+    if (seen.has(identity)) continue;
     const message = readRow(row);
-    if (message !== null) seen.set(key, message);
+    if (message !== null) seen.set(identity, message);
   }
 }
 
@@ -496,9 +599,14 @@ function hasReadableRow(view: ListViewport): boolean {
  * - `lastMessage` 的「认不出消息行」——行挂上了、内容还没渲染时读出；
  * - `readMessages` 的「滚不动消息列表」——一行都读不出时它连第一屏都没得扫。
  *
- * 结构**真的变了**（`conversation()` 回 null，锚点失效）不进轮询，当场抛——
+ * 结构**真的变了**（认不出对话列表，锚点失效）不进轮询，当场抛——
  * 轮询只罩「挂着但没就位」，不罩「根本找不到」。这是 `wait.ts` 的 `viewWithin`
  * 同一套模式（#37 为 `wait.*` 立的规矩），这里扩到读动作。
+ *
+ * **为什么这里盯 `conversationList` 而不是 `conversation`**（#54）：对话列表此刻 0 行时
+ * `conversation()` 回 null，而那是**「还没挂上」**，不是「结构坏了」——该等，不该当场抛。
+ * `conversationList` 只管认列表（认得出就等它挂行），认不出才抛；行一旦挂上，下一轮
+ * `conversation()` 就从**行**推出真正的滚动层，就绪返回的视口与扫描用的是同一层。
  *
  * `deadline` 由调用方按 `params.timeout` 算好（**与扫描共用一份**，见文件头那段预算说明）；
  * `now` / `settle` 是替身口：单测用即时 settle + 假时钟把预算走完，不必真等。
@@ -509,9 +617,11 @@ export async function readyWithin(
   settle: () => Promise<void> = sleepPoll,
 ): Promise<ListViewport> {
   for (;;) {
+    if (conversationList(document) === null) {
+      throw new PageError(ACTION_ERROR_PAGE_CHANGED, "认不出对话列表"); // 结构变了：当场说
+    }
     const view = conversation(document);
-    if (view === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "找不到消息列表");
-    if (hasReadableRow(view)) return view;
+    if (view !== null && hasReadableRow(view)) return view;
     if (now() >= deadline) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "消息列表还没就绪");
     await settle();
   }
@@ -526,9 +636,14 @@ function sleepPoll(): Promise<void> {
  *
  * 预算**只算一次**（`params.timeout`，口径与 `wait.*` 同一个 `parseWaitSeconds`），
  * 就绪等待与扫描共用——所以最坏耗时恒等于预算，恒留中继 30s 锁的余量。
+ *
+ * **早退看「页面上有没有行」，不看 `conversation()`**（#54）：`conversation()` 只在对话列表
+ * 里有行时才给视口，而 #54 那个页面上对话列表 0 行、另一个虚拟列表（面板）里挂着行——照旧
+ * 早退就会把「没就绪」当成「空对话」回 `[]`。现在：哪儿都没行 → 新对话，秒回 `[]`；
+ * 别处有行 → 进轮询在对话列表上等，到点读不出才 `page-changed`。
  */
 export async function listMessages(frame: ActionFrame): Promise<MessageList> {
-  if (conversation(document) === null) return { messages: [] };
+  if (!anyListHasRows(document)) return { messages: [] }; // 新对话：一行都没有，不轮询
   const deadline = Date.now() + parseWaitSeconds(frame) * 1_000;
   const view = await readyWithin(deadline);
   const messages = await readMessages(view, nextFrame, deadline);
@@ -541,10 +656,10 @@ export async function listMessages(frame: ActionFrame): Promise<MessageList> {
  * `messages.last`：最后一条。形状与 `list` 一致，最多一条。
  *
  * 同样收 `params.timeout`、同样只算一次预算——不因为「只读最后一屏、不扫全量」就另立特例，
- * 调用方不必记「哪个动作有哪个参数」。
+ * 调用方不必记「哪个动作有哪个参数」。早退口径与 `list` 同一条（#54）。
  */
 export async function lastMessage(frame: ActionFrame): Promise<MessageList> {
-  if (conversation(document) === null) return { messages: [] };
+  if (!anyListHasRows(document)) return { messages: [] };
   const deadline = Date.now() + parseWaitSeconds(frame) * 1_000;
   const view = await readyWithin(deadline);
   const message = await readLast(view);

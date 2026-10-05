@@ -35,8 +35,13 @@ export type AccountState =
   | { readonly kind: "signed-out" }
   | { readonly kind: "unknown" };
 
-/** 写作框的认定放宽到两类容器：`<textarea>` 与 contenteditable（DeepSeek 前端两代都用过）。 */
-const COMPOSER_SELECTOR = "textarea, [contenteditable='true']";
+/**
+ * 写作框的认定放宽到两类容器：`<textarea>` 与 contenteditable（DeepSeek 前端两代都用过）。
+ *
+ * 导出来给 `messages.ts` 认「对话那一条虚拟列表」用（#54）——同一个锚只能有一份，
+ * 两边各写一个字面量就会各自漂移。
+ */
+export const COMPOSER_SELECTOR = "textarea, [contenteditable='true']";
 
 /**
  * 处罚句只从警示条里认。会话正文里出现「禁言」是常事（#2 的原话），拿全文去搜

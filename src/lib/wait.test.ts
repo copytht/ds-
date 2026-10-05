@@ -28,8 +28,13 @@ function rowHtml(key: string, text: string, assistant = true): string {
   return `<div data-virtual-list-item-key="${key}">${body}</div>`;
 }
 
+/**
+ * 列表那层带 `--printable` 是**照抄真的**：真机主聊天区就是 `.ds-virtual-list--printable`
+ * （2026-10-04 / 2026-10-05 两次实测都在），而 #54 起「认对话那一条列表」要按它这条判据走
+ * ——只有哈希 class 的新版行本身认不出列表，得靠这条设计系统修饰类。
+ */
 function listHtml(rows: string): string {
-  return `<div class="ds-virtual-list"><div class="ds-virtual-list-items"><div class="ds-virtual-list-visible-items">${rows}</div></div></div>`;
+  return `<div class="ds-virtual-list ds-virtual-list--printable"><div class="ds-virtual-list-items"><div class="ds-virtual-list-visible-items">${rows}</div></div></div>`;
 }
 
 /** 新版站点（2026-10-04 起）：行上只有哈希 class，没有 key、没有 `.ds-message`。 */
