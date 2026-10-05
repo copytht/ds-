@@ -222,18 +222,6 @@
       }
     },
     {
-      "name": "stop.click 成功",
-      "request": {
-        "action": "stop.click",
-        "params": {},
-        "target": "42"
-      },
-      "response": {
-        "ok": true,
-        "result": {}
-      }
-    },
-    {
       "name": "think.get 成功",
       "request": {
         "action": "think.get",
@@ -294,15 +282,57 @@
       }
     },
     {
-      "name": "send.click 成功",
+      "name": "button.click 成功（可用就点，点下去是发送还是停止由页面决定）",
       "request": {
-        "action": "send.click",
+        "action": "button.click",
         "params": {},
         "target": "42"
       },
       "response": {
         "ok": true,
         "result": {}
+      }
+    },
+    {
+      "name": "button.get 成功：箭头（空闲态）",
+      "request": {
+        "action": "button.get",
+        "params": {},
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "pressed": "send"
+        }
+      }
+    },
+    {
+      "name": "button.get：方块（生成中）",
+      "request": {
+        "action": "button.get",
+        "params": {},
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "pressed": "stop"
+        }
+      }
+    },
+    {
+      "name": "button.get：图标认不出是成功返回 unknown，不是失败",
+      "request": {
+        "action": "button.get",
+        "params": {},
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "pressed": "unknown"
+        }
       }
     },
     {

@@ -505,14 +505,36 @@ describe("退避闸（账号在处罚区，写动作停发）", () => {
     expect(sent.map((f) => f.action)).toEqual(["page.state", "think.set"]);
   });
 
-  it("stop.click 也在退避闸下（停生成也是改页面状态）", async () => {
+  it("button.click 也在退避闸下（点圆键总是改页面状态）", async () => {
     const { send, sent } = recordingSendToTab(MUTED);
     const ctx = context({ sendToTab: send });
 
-    expect(await runAction(frame({ action: "stop.click", target: "42" }), ctx)).toEqual({
+    expect(await runAction(frame({ action: "button.click", target: "42" }), ctx)).toEqual({
       ok: false,
       error: "backing-off",
     });
     expect(sent.map((f) => f.action)).toEqual(["page.state"]);
+  });
+
+  it("button.click 也进 speak 闸（它可能在替你开口——一律按最坏那条拦）", async () => {
+    const { send, sent } = recordingSendToTab({ kind: "ready" });
+    const ctx = context({ speak: false, sendToTab: send });
+
+    expect(await runAction(frame({ action: "button.click", target: "42" }), ctx)).toEqual({
+      ok: false,
+      error: "disabled",
+    });
+    // speak 闸在退避探针**之前**：闸关着时连账号处境都不问，一个帧都没发。
+    expect(sent).toEqual([]);
+  });
+
+  it("button.get 是读动作：两闸都不在（读处境不该被人际闸挡住）", async () => {
+    const { send, sent } = recordingSendToTab(MUTED);
+    const ctx = context({ speak: false, sendToTab: send });
+
+    // 放行到执行器（mock 对非 page.state 一律回 {}，本条只验闸放不放）
+    expect((await runAction(frame({ action: "button.get", target: "42" }), ctx)).ok).toBe(true);
+    // 不探账号处境：不在退避闸名单里（读动作，读处境的人不该被人际闸挡）
+    expect(sent.map((f) => f.action)).toEqual(["button.get"]);
   });
 });

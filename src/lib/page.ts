@@ -153,76 +153,85 @@ export function clearComposer(_frame: ActionFrame): Record<string, never> {
   return {};
 }
 
-/** 站点设计系统的发送键（圆箭头）；**禁用看 class**——它没有 `disabled` 属性。 */
-export const SEND_SELECTOR =
+/**
+ * 写作框旁那个圆键：站点设计系统的主操作键（真机 2026-10-04：class 与 `aria-label` 一个不换，
+ * 只有里面的图标在箭头与方块之间换——详见 `site-dom` 的「圆键两态同元素」）。
+ *
+ * **一个按钮只对应一个最小单元**（#15 的原则，2026-10-05 用户定）：它此刻是发送还是停止，
+ * 是**页面的意图**，不是控件的身份。所以命中判据只有「在 + 可用」，图标不参与；
+ * 图标唯一去处是 `button.get` 的返回（读面）。原先按图标分家的 `send.click` /
+ * `stop.click` 是「两个动作抢一个键」，合并成这一个。
+ */
+export const BUTTON_SELECTOR =
   'div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle';
 
 /**
- * 找站点自己的发送键：不在或被禁用（class 带 `ds-button--disabled`）都回 null。
- * `send.click` 与回灌那条路共读这一处，别再另写一份选择器。
+ * 圆键在不在、有没有渲染出盒子（**不管可不可用**）。`button.get` 与 `button.click`
+ * 共读这一处，`readButton` 就是靠它区分「键在但禁用」与「键不在」两回事。
  */
-export function findSendButton(): HTMLElement | null {
-  const el = document.querySelector<HTMLElement>(SEND_SELECTOR);
+function circleElement(): HTMLElement | null {
+  const el = document.querySelector<HTMLElement>(BUTTON_SELECTOR);
   if (el === null) return null;
-  if (el.getClientRects().length === 0) return null; // 还没渲染出来：当没找到
-  if (el.classList.contains("ds-button--disabled")) return null;
-  return el;
+  return el.getClientRects().length === 0 ? null : el; // 还没渲染出来：当没找到
 }
 
-/** 点站点自己的发送键（走它的发送路径）。键不可用（空输入框等）就抛，别假装发过了。 */
-export function clickSend(_frame: ActionFrame): Record<string, never> {
-  const el = findSendButton();
-  if (el === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "发送键不可用");
+/**
+ * 可用的圆键：不在、或被禁用（class 带 `ds-button--disabled`——它没有 `disabled` 属性，
+ * 空输入框时站点就把它标成禁用）都回 null。
+ */
+export function findButton(): HTMLElement | null {
+  const el = circleElement();
+  if (el === null) return null;
+  return el.classList.contains("ds-button--disabled") ? null : el;
+}
+
+/** 点那个圆键（`button.click`）。不可用就抛，别假装点过了。 */
+export function buttonClick(_frame: ActionFrame): Record<string, never> {
+  const el = findButton();
+  if (el === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "圆键不可用");
   el.click();
   return {};
 }
 
-/**
- * 停止键与发送键**是同一个元素**：生成期站点把那个圆键里的箭头换成方块，`class` 一个不换
- * （`div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle…`），
- * `aria-label` 也是空的。真机 2026-10-04 两次抓取（生成中 / 空闲）见本任务
- * `research/stop-button-dumps.md`。所以只能**认图标**：方块 = 停止、箭头 = 发送；
- * 认不出回 `page-changed`（fail-safe，绝不误点发送）。
- *
- * 前缀取自真机路径：停止方块 `M2 4.88C2 3.68009…`，发送箭头 `M8.3125 0.980206…`。
- * 站点换图标就失配，那是要的——宁可报「找不到」，也不把发送当停止点。
- */
-const STOP_ICON_PREFIX = "M2 4.88C2 3.68009";
+/** 那个圆键此刻承载什么意图——就是人看一眼图标的结论。 */
+export type Pressed = "send" | "stop" | "unknown";
 
-/** 兜底：站点哪天给停止键补了 `aria-label`，这条先接住（真机上现在没有）。 */
-export const STOP_SELECTOR =
-  'div[role="button"][aria-label*="停止"], div[role="button"][aria-label*="Stop"], ' +
-  'button[aria-label*="停止"], button[aria-label*="Stop"]';
+/**
+ * 图标口径只有这一处，且**只服务读面**。前缀取自真机路径（真机 2026-10-04 两次抓取）：
+ * 箭头 `M8.3125 0.980206…` = 发送、方块 `M2 4.88C2 3.68009…` = 停止，两者同为 16×16。
+ * 站点换图标就少报一种值——**这是要的**：宁可报「认不出」，也不猜是发送还是停止。
+ */
+const BUTTON_ICON_PREFIXES: ReadonlyArray<readonly [string, Pressed]> = [
+  ["M8.3125 0.980206", "send"],
+  ["M2 4.88C2 3.68009", "stop"],
+];
 
 /** 圆键里那个图标的 `d`（两态共用一套 class，只有这个不同）。 */
-function circleIconPath(): string | null {
-  return (
-    document
-      .querySelector<HTMLElement>(SEND_SELECTOR)
-      ?.querySelector("svg path")
-      ?.getAttribute("d") ?? null
-  );
+function circleIconPath(el: HTMLElement): string | null {
+  return el.querySelector("svg path")?.getAttribute("d") ?? null;
+}
+
+/** 图标认哪一个意图；认不出（站点换图标 / 思考期环形）回 `unknown`，**不猜**。 */
+export function readPressed(el: HTMLElement): Pressed {
+  const icon = circleIconPath(el);
+  if (icon === null) return "unknown";
+  for (const [prefix, pressed] of BUTTON_ICON_PREFIXES) {
+    if (icon.startsWith(prefix)) return pressed;
+  }
+  return "unknown";
 }
 
 /**
- * 找停止键：先认站点给的语义标记（若有），否则认那个「方块图标」的圆键。
- * 不在、没渲染出来、或圆键此刻是发送箭头，都回 null。
+ * 读那个圆键此刻是发送还是停止（`button.get`，**只读不点**）。agent 要先读后写：
+ * 想停一次生成就读到 `stop` 再点，别点下去才知道点了什么。
+ *
+ * 「认不出」是**成功**返回（键在但不知是什么是有效事实）；圆键整个不在才抛
+ * `page-changed`。键在但禁用（空输入框态）照样报——图标就是箭头。
  */
-export function findStopButton(): HTMLElement | null {
-  const labelled = document.querySelector<HTMLElement>(STOP_SELECTOR);
-  if (labelled !== null && labelled.getClientRects().length > 0) return labelled;
-  const circle = document.querySelector<HTMLElement>(SEND_SELECTOR);
-  if (circle === null || circle.getClientRects().length === 0) return null;
-  const icon = circleIconPath();
-  return icon !== null && icon.startsWith(STOP_ICON_PREFIX) ? circle : null;
-}
-
-/** 点停止键中断生成。找不到就抛（由收信那层折成 `page-changed`），别假装点过了。 */
-export function stopClick(_frame: ActionFrame): Record<string, never> {
-  const el = findStopButton();
-  if (el === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "停止键不可用");
-  el.click();
-  return {};
+export function readButton(_frame: ActionFrame): { readonly pressed: Pressed } {
+  const el = circleElement();
+  if (el === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "圆键不可用");
+  return { pressed: readPressed(el) };
 }
 
 /** 在写作框上按回车（站点自己也接这条路）。 */

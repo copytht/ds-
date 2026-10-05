@@ -3,20 +3,19 @@ import { describe, expect, it } from "vitest";
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_UNKNOWN, PageError } from "./action";
 import { fixtureCases, type ActionCase } from "./fixtures";
 import {
+  BUTTON_SELECTOR,
+  buttonClick,
   clearComposer,
-  clickSend,
-  findSendButton,
-  findStopButton,
+  findButton,
   newChat,
   pressEnter,
+  readButton,
   readComposer,
   readPageState,
   readSearch,
   readThink,
-  SEND_SELECTOR,
   setSearch,
   setThink,
-  stopClick,
   typeComposer,
 } from "./page";
 
@@ -180,51 +179,51 @@ describe("send.* 执行器", () => {
     (el as HTMLElement).getClientRects = () => [{ width: 1, height: 1 }] as unknown as DOMRectList;
   };
 
-  it("findSendButton：在且没禁用就回它", () => {
-    document.body.innerHTML = `<div role="button" class="${SEND_SELECTOR.split(".").slice(1).join(" ")}"></div>`;
-    stubBox(document.querySelector(SEND_SELECTOR) as Element);
-    expect(findSendButton()).not.toBeNull();
+  it("findButton：在且没禁用就回它", () => {
+    document.body.innerHTML = `<div role="button" class="${BUTTON_SELECTOR.split(".").slice(1).join(" ")}"></div>`;
+    stubBox(document.querySelector(BUTTON_SELECTOR) as Element);
+    expect(findButton()).not.toBeNull();
   });
 
-  it("findSendButton：class 带 ds-button--disabled 回 null", () => {
-    document.body.innerHTML = `<div role="button" class="${SEND_SELECTOR.split(".").slice(1).join(" ")} ds-button--disabled"></div>`;
-    stubBox(document.querySelector(SEND_SELECTOR) as Element);
-    expect(findSendButton()).toBeNull();
+  it("findButton：class 带 ds-button--disabled 回 null", () => {
+    document.body.innerHTML = `<div role="button" class="${BUTTON_SELECTOR.split(".").slice(1).join(" ")} ds-button--disabled"></div>`;
+    stubBox(document.querySelector(BUTTON_SELECTOR) as Element);
+    expect(findButton()).toBeNull();
   });
 
-  it("findSendButton：没这个键也回 null", () => {
+  it("findButton：没这个键也回 null", () => {
     document.body.innerHTML = "<div>什么都没有</div>";
-    expect(findSendButton()).toBeNull();
+    expect(findButton()).toBeNull();
   });
 
-  it("findSendButton：没渲染出盒子（不可见）也当没找到", () => {
-    document.body.innerHTML = `<div role="button" class="${SEND_SELECTOR.split(".").slice(1).join(" ")}"></div>`;
+  it("findButton：没渲染出盒子（不可见）也当没找到", () => {
+    document.body.innerHTML = `<div role="button" class="${BUTTON_SELECTOR.split(".").slice(1).join(" ")}"></div>`;
     // 不 stub：jsdom 里天然 getClientRects().length === 0
-    expect(findSendButton()).toBeNull();
+    expect(findButton()).toBeNull();
   });
 
-  it("点站点自己的发送键（设计系统那个圆按钮）", () => {
+  it("点那个圆键（设计系统的主操作键）", () => {
     document.body.innerHTML = `<textarea></textarea><div role="button" class="${SEND.split(".").slice(1).join(" ")}"></div>`;
     const el = document.querySelector(SEND) as HTMLElement;
     stubBox(el);
     let clicked = 0;
     el.addEventListener("click", () => (clicked += 1));
 
-    clickSend(FRAME);
+    buttonClick(FRAME);
 
     expect(clicked).toBe(1);
   });
 
-  it("发送键禁用（class 带 ds-button--disabled）就抛，别假装发过了", () => {
+  it("圆键禁用（class 带 ds-button--disabled）就抛，别假装点过了", () => {
     document.body.innerHTML = `<div role="button" class="${SEND.split(".").slice(1).join(" ")} ds-button--disabled"></div>`;
 
-    expect(() => clickSend(FRAME)).toThrow();
+    expect(() => buttonClick(FRAME)).toThrow();
   });
 
-  it("找不到发送键也抛", () => {
+  it("找不到圆键也抛", () => {
     document.body.innerHTML = "<div>什么都没有</div>";
 
-    expect(() => clickSend(FRAME)).toThrow();
+    expect(() => buttonClick(FRAME)).toThrow();
   });
 
   it("回车：在写作框上派 keydown Enter", () => {
@@ -355,63 +354,128 @@ describe("think.* / search.* 开关执行器（#30）", () => {
   });
 });
 
-describe("stop.click 执行器", () => {
+describe("那个圆键：button.get / button.click", () => {
   // jsdom 不做布局，所有元素的 getClientRects 都是空——测试里手工补一个盒子。
   const stubBox = (el: Element): void => {
     (el as HTMLElement).getClientRects = () => [{ width: 1, height: 1 }] as unknown as DOMRectList;
   };
 
+  const circle = (): Element => document.querySelector(BUTTON_SELECTOR) as Element;
+
+  /** 执行器抛的 `PageError` 码；没抛或抛的不是 PageError 一律回 undefined。 */
+  function thrownCode(fn: () => unknown): string | undefined {
+    try {
+      fn();
+    } catch (error) {
+      return error instanceof PageError ? error.code : undefined;
+    }
+    return undefined;
+  }
+
   // 真机 2026-10-04 抓的（生成中 / 空闲各一次），原样进下面的常量。
-  // 两态的 class 一个不换，只有圆键里的图标不同——所以只能按图标认。
+  // 两态的 class 一个不换、aria-label 为空，只有圆键里的图标不同——**所以那不是两个控件，
+  // 是一个**：合成一个动作 button.click（可用就点），读的部分是 button.get（认图标）。
   const STOP_BUTTON_HTML =
     '<div role="button" class="ds-button ds-button--primary ds-button--filled ds-button--circle ds-button--m ds-button--icon-relative-m _52c986b" style="--dsl-button-height: 34px;" tabindex="0"><div class="ds-button__background"></div><div class="ds-button__icon ds-button__icon--last-child"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 4.88C2 3.68009 2 3.08013 2.30557 2.65954C2.40426 2.52371 2.52371 2.40426 2.65954 2.30557C3.08013 2 3.68009 2 4.88 2H11.12C12.3199 2 12.9199 2 13.3405 2.30557C13.4763 2.40426 13.5957 2.52371 13.6944 2.65954C14 3.08013 14 3.68009 14 4.88V11.12C14 12.3199 14 12.9199 13.6944 13.3405C13.5957 13.4763 13.4763 13.5957 13.3405 13.6944C12.9199 14 12.3199 14 11.12 14H4.88C3.68009 14 3.08013 14 2.65954 13.6944C2.52371 13.5957 2.40426 13.4763 2.30557 13.3405C2 12.9199 2 12.3199 2 11.12V4.88Z" fill="currentColor"></path></svg></div></div>';
 
+  // 真机抓的是**空输入框态**（带 ds-button--disabled），图标就是发送箭头。
   const SEND_BUTTON_HTML =
     '<div role="button" class="ds-button ds-button--primary ds-button--filled ds-button--circle ds-button--m ds-button--icon-relative-m ds-button--disabled _52c986b bd74640a" style="--dsl-button-height: 34px;"><div class="ds-button__background"></div><div class="ds-button__icon ds-button__icon--last-child"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8.3125 0.980206C8.66767 1.05312 8.97902 1.2042 9.2627 1.43235C9.48724 1.613 9.73029 1.85795 9.97949 2.10716L14.707 6.8347L13.293 8.24876L9 3.95579V15.0417H7V3.95579L2.70703 8.24876L1.29297 6.8347L6.02051 2.10716C6.26971 1.85795 6.51277 1.613 6.7373 1.43235C6.97662 1.23988 7.28445 1.04404 7.6875 0.980206C7.8973 0.947029 8.1031 0.955183 8.3125 0.980206Z" fill="currentColor"></path></svg></div></div>';
 
-  it("真机回归：生成中那个方块圆键认得出（与发送键同一个元素、同套 class）", () => {
-    document.body.innerHTML = STOP_BUTTON_HTML;
-    stubBox(document.querySelector(SEND_SELECTOR) as Element);
+  // 真机 2026-10-05 抓的**思考期**：圆键位置换成 `<div class="ds-loading">` 的 36×36 环形
+  // spinner（`data-icon="spin"`），class 里带 `ds-button--disabled`。图标不是 16×16 的
+  // 发送/停止两态之一 → `button.get` 报 `unknown`（成功返回），`button.click` 判它不可用。
+  const SPINNER_BUTTON_HTML =
+    '<div role="button" class="ds-button ds-button--primary ds-button--filled ds-button--circle ds-button--m ds-button--icon-relative-m ds-button--disabled _52c986b bd74640a" style="--dsl-button-height: 34px;"><div class="ds-button__background"></div><div class="ds-button__icon ds-button__icon--last-child"><div class="ds-loading"><svg viewBox="0 0 36 36" version="1.1" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" data-icon="spin"><defs><linearGradient x1="0%" y1="100%" x2="100%" y2="100%" id="linearGradient-:r3n:"><stop stop-color="currentColor" stop-opacity="0" offset="0%"></stop><stop stop-color="currentColor" stop-opacity="0.50" offset="39.9430698%"></stop><stop stop-color="currentColor" offset="100%"></stop></linearGradient></defs><g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd"><rect fill-opacity="0.01" fill="none" x="0" y="0" width="36" height="36"></rect><path d="M34,18 C34,9.163444 26.836556,2 18,2 C11.6597233,2 6.18078805,5.68784135 3.59122325,11.0354951" stroke="url(#linearGradient-:r3n:)" stroke-width="4" stroke-linecap="round"></path></g></svg></div></div></div>';
 
-    expect(findStopButton()).not.toBeNull();
-  });
+  /** 去掉禁用 class：模拟输入框里有内容的空闲态。 */
+  const SEND_READY_HTML = SEND_BUTTON_HTML.replace("ds-button--disabled ", "");
 
-  it("真机回归：空闲时那个箭头圆键不认（别把发送键当停止键）", () => {
+  it("button.get：箭头（空闲态）读出 send", () => {
     document.body.innerHTML = SEND_BUTTON_HTML;
-    stubBox(document.querySelector(SEND_SELECTOR) as Element);
+    stubBox(circle());
 
-    expect(findStopButton()).toBeNull();
+    expect(readButton(FRAME)).toEqual({ pressed: "send" });
   });
 
-  it("点停止键（真机那个方块圆键）", () => {
+  it("button.get：方块（生成中）读出 stop", () => {
     document.body.innerHTML = STOP_BUTTON_HTML;
-    const el = document.querySelector(SEND_SELECTOR) as HTMLElement;
+    stubBox(circle());
+
+    expect(readButton(FRAME)).toEqual({ pressed: "stop" });
+  });
+
+  it("button.get：图标认不出回 unknown —— 成功返回，不抛", () => {
+    // 换一条既非箭头也非方块的 path（站点换图标 / 思考期环形都是这种，见 site-dom）
+    document.body.innerHTML = STOP_BUTTON_HTML.replace("M2 4.88", "M9 9.99");
+    stubBox(circle());
+
+    expect(readButton(FRAME)).toEqual({ pressed: "unknown" });
+  });
+
+  it("button.get：键在但禁用（空输入框）照样读 —— 图标就是箭头，不是「找不到」", () => {
+    document.body.innerHTML = SEND_BUTTON_HTML; // 真机那份就带 ds-button--disabled
+    stubBox(circle());
+
+    expect(readButton(FRAME)).toEqual({ pressed: "send" });
+  });
+
+  it("button.get：圆键整个不在才抛 page-changed（与「认不出」是两回事）", () => {
+    document.body.innerHTML = "<div>什么都没有</div>";
+
+    expect(thrownCode(() => readButton(FRAME))).toBe(ACTION_ERROR_PAGE_CHANGED);
+  });
+
+  it("button.click：方块态（生成中）照点 —— 那就是停止，页面自己的语义", () => {
+    document.body.innerHTML = STOP_BUTTON_HTML;
+    const el = circle() as HTMLElement;
     stubBox(el);
     let clicked = 0;
     el.addEventListener("click", () => (clicked += 1));
 
-    stopClick(FRAME);
+    buttonClick(FRAME);
 
     expect(clicked).toBe(1);
   });
 
-  it("没渲染出盒子（不可见）也当没找到", () => {
+  it("button.click：箭头态（空闲）照点", () => {
+    document.body.innerHTML = SEND_READY_HTML;
+    const el = circle() as HTMLElement;
+    stubBox(el);
+    let clicked = 0;
+    el.addEventListener("click", () => (clicked += 1));
+
+    buttonClick(FRAME);
+
+    expect(clicked).toBe(1);
+  });
+
+  it("button.click：禁用态不点（空输入框时它按 class 禁用）", () => {
+    document.body.innerHTML = SEND_BUTTON_HTML;
+    const el = circle() as HTMLElement;
+    stubBox(el);
+    let clicked = 0;
+    el.addEventListener("click", () => (clicked += 1));
+
+    expect(() => buttonClick(FRAME)).toThrow();
+    expect(clicked).toBe(0);
+  });
+
+  it("没渲染出盒子（不可见）当没找到：get 与 click 都不认", () => {
     document.body.innerHTML = STOP_BUTTON_HTML;
     // 不 stub：jsdom 里天然 getClientRects().length === 0
-    expect(findStopButton()).toBeNull();
+
+    expect(findButton()).toBeNull();
+    expect(() => buttonClick(FRAME)).toThrow();
   });
 
-  it("空闲时（圆键是发送箭头）找不到停止键，stopClick 抛，别假装点过了", () => {
-    document.body.innerHTML = SEND_BUTTON_HTML;
-    stubBox(document.querySelector(SEND_SELECTOR) as Element);
+  it("真机回归：思考期的环形 spinner —— get 报 unknown、click 判不可用（真机 2026-10-05）", () => {
+    document.body.innerHTML = SPINNER_BUTTON_HTML;
+    stubBox(circle());
 
-    expect(() => stopClick(FRAME)).toThrow();
-  });
-
-  it("站点若给了 aria-label，优先认它（真机上现在没有，先接住）", () => {
-    document.body.innerHTML = '<div role="button" aria-label="停止生成"></div>';
-    stubBox(document.querySelector('[aria-label="停止生成"]') as Element);
-
-    expect(findStopButton()).not.toBeNull();
+    // 图标既非箭头也非方块：读得出「认不出」，是成功返回不是失败
+    expect(readButton(FRAME)).toEqual({ pressed: "unknown" });
+    // 它带 ds-button--disabled → 可用性判据挡住点击（真机确认过它带这个 class）
+    expect(thrownCode(() => buttonClick(FRAME))).toBe(ACTION_ERROR_PAGE_CHANGED);
   });
 });

@@ -15,7 +15,7 @@
 用法：
   uv run scripts/page-action.py list
   uv run scripts/page-action.py read
-  uv run scripts/page-action.py send stop.click
+  uv run scripts/page-action.py send button.get
   uv run scripts/page-action.py send composer.type --params '{"text": "你好"}'
   uv run scripts/page-action.py storage get --keys '["backoffUntil","toggle","speak"]'
 
@@ -538,7 +538,7 @@ def main() -> None:
     sub.add_parser("read", help="读 DeepSeek 页面状态")
     js = sub.add_parser("js", help="在 DeepSeek 页面上下文里跑一段只读 JS，打印结果")
     js.add_argument("expression", help="要 evaluate 的 JS 表达式（建议用 IIFE 返回字符串）")
-    stop_test = sub.add_parser("stop-test", help="端到端验 stop.click：起生成→等停止键→点→等复位")
+    stop_test = sub.add_parser("stop-test", help="端到端验 button.click：起生成→等停止键→点→等复位")
     stop_test.add_argument(
         "--text",
         default="请写一篇 3000 字的散文，主题是海边的灯塔，分段，慢慢写，一定要写满。",
@@ -546,7 +546,7 @@ def main() -> None:
     )
     stop_test.add_argument("--timeout", type=float, default=40.0, help="等某一相的秒数上限")
     send = sub.add_parser("send", help="给 DeepSeek 标签页发一件页面动作")
-    send.add_argument("action", help="动作名，如 stop.click")
+    send.add_argument("action", help="动作名，如 button.get")
     send.add_argument("--params", default="{}", help="动作参数 JSON，默认 {}")
     storage = sub.add_parser("storage", help="读写扩展 storage.local（开发探针）")
     storage.add_argument("op", choices=["get", "set", "remove"], help="get 读 / set 写 / remove 删")
@@ -610,8 +610,8 @@ def main() -> None:
         report["atStop"] = state.get("stopDetect")
         print(f"[stop-test] 进入停止相：{report['started']}  icon={state.get('circleIcon')}")
         if report["started"]:
-            report["stop"] = send_action("stop.click", {})
-            print(f"[stop-test] stop.click -> {json.dumps(report['stop'], ensure_ascii=False)}")
+            report["stop"] = send_action("button.click", {})
+            print(f"[stop-test] button.click -> {json.dumps(report['stop'], ensure_ascii=False)}")
             state2 = poll_state(is_send, args.timeout)
             report["stopped"] = is_send(state2)
             report["afterStop"] = state2.get("stopDetect")

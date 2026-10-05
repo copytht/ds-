@@ -26,11 +26,12 @@ import {
 } from "../src/lib/channel";
 import { nextMessageId } from "../src/lib/id";
 import {
+  buttonClick,
   clearComposer,
-  clickSend,
   newChat,
   pressEnter,
   readAccount,
+  readButton,
   readComposer,
   readComposerPresent,
   readPageState,
@@ -38,7 +39,6 @@ import {
   readThink,
   setSearch,
   setThink,
-  stopClick,
   typeComposer,
 } from "../src/lib/page";
 import { lastMessage, listMessages } from "../src/lib/messages";
@@ -223,9 +223,9 @@ export default defineContentScript({
       "think.set": setThink,
       "search.get": readSearch,
       "search.set": setSearch,
-      "send.click": clickSend,
+      "button.get": readButton,
+      "button.click": buttonClick,
       "send.enter": pressEnter,
-      "stop.click": stopClick,
       "chat.new": newChat,
       // 只读那批：读对话走 DOM（#20 口径），不碰站点的响应体。
       "messages.list": listMessages,

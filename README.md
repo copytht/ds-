@@ -67,8 +67,8 @@ pnpm quality               # TS 与 Python 两半一起过
 
 ```sh
 scripts/env-up.sh --debug                     # 起/换成带调试口的 ds-browser
-uv run scripts/page-action.py read            # 读页面状态（含停止/发送键判定）
-uv run scripts/page-action.py send stop.click # 给 DeepSeek 标签页发一件页面动作
+uv run scripts/page-action.py read            # 读页面状态（含圆键的图标判定）
+uv run scripts/page-action.py send button.get # 给 DeepSeek 标签页发一件页面动作
 uv run scripts/page-action.py stop-test       # 端到端：起生成→等停止键→点→等复位
 ```
 
