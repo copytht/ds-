@@ -23,7 +23,7 @@ import {
   rewriteContinuationBody,
   rewriteOutgoingBody,
 } from "../src/lib/inject";
-import { findSendButton } from "../src/lib/page";
+import { findButton, readPressed } from "../src/lib/page";
 import { nextMessageId } from "../src/lib/id";
 import { hasReplyAnchor, isInjectableReply } from "../src/lib/reply";
 import type { ToolInfo } from "../src/lib/relay";
@@ -469,8 +469,12 @@ async function triggerSend(composer: HTMLElement): Promise<boolean> {
   dispatchEnter(composer);
   if (await waitForSend(composer, 600)) return true;
 
-  const button = findSendButton();
-  if (button === null) return false;
+  // 兜底才去点圆键，而**只在它此刻真是「发送」时点**（`button.get` 那套读面）。
+  // 生成期那个圆键是停止（真机 2026-10-05：class 一个不换、只有图标在箭头与方块之间换），
+  // 点下去就是替用户中断一次生成——比这条回灌发不出去坏得多。认不出（思考期环形
+  // spinner，报 unknown）同样不点：宁可作废，也不赌那一下是发送。
+  const button = findButton();
+  if (button === null || readPressed(button) !== "send") return false;
   button.click();
   return waitForSend(composer, 1200);
 }

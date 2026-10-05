@@ -96,22 +96,22 @@ export const TOGGLE_ACTIONS: ReadonlySet<string> = new Set(["toggle.get", "toggl
 export const SPEAK_GATED_ACTIONS: ReadonlySet<string> = new Set([
   "composer.type",
   "composer.clear",
-  "send.click",
   "send.enter",
+  // 圆键（`button.click`）可能在发、也可能在停：一律按「可能是替你开口」拦。
+  // 闸关着时点击结果**判不出**，保守即正确（2026-10-05 用户定，不按 pressed 动态放行）。
+  "button.click",
 ]);
 
 /**
  * 「退避」闸下的动作：会改变页面状态的那些（写动作 + 开启新对话）。
- * 只读动作（`composer.read` / `messages.*` / `page.state` / `tabs.list`）
+ * 只读动作（`composer.read` / `messages.*` / `page.state` / `tabs.list` / `button.get`）
  * **不受退避影响**——账号在处罚区时人与 agent 仍要能读处境。
  * 名单是显式的（与 `SPEAK_GATED_ACTIONS` 同一规矩），新增写动作要
- * 记进来；`chat.new` 虽不动写作框，但它开新对话，也是写；
- * `stop.click` 不动写作框、却中断一次生成，同属改页面状态。
+ * 记进来；`chat.new` 虽不动写作框，但它开新对话，也是写。
  */
 export const BACKOFF_GATED_ACTIONS: ReadonlySet<string> = new Set([
   ...SPEAK_GATED_ACTIONS,
   "chat.new",
-  "stop.click",
   // 写作框旁的两个开关（#30）：会改页面状态，是写动作；但不「代你发言」，故不进 speak 闸。
   "think.set",
   "search.set",
