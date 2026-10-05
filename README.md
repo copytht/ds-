@@ -20,7 +20,7 @@
 中继完全被动：不推送、不轮询、无会话、一条 CORS 头都不下发；只有 background 打网络。
 
 dsb 另外内建五件工作工具（`ls` / `read` / `grep` / `write` / `edit`），钉死在工作文件夹
-root 内（`DSB_WORK_ROOT` 配置，缺省本仓根），不给任何命令执行；见 `docs/adr/0012`。
+root 内（`DSB_WORK_ROOT` 配置，缺省本仓根），不给任何命令执行；见 `adr/0012`。
 
 ## 限额与超时
 
@@ -45,7 +45,8 @@ root 内（`DSB_WORK_ROOT` 配置，缺省本仓根），不给任何命令执�
 ├── src/                # 扩展的纯逻辑层（TS，可单测）
 ├── dsb/                # 本机中继：MCP 网关（Python）
 ├── protocol/fixtures/  # TS 与 pytest 共读的线协议对拍
-├── docs/adr/           # 架构决策记录
+├── adr/                # 架构决策记录（与 openspec/ 平级）
+├── openspec/           # spec 与 change
 ├── tests/              # Python 测试（pytest）
 ├── wxt.config.ts       # 扩展构建配置
 ├── package.json        # pnpm 清单

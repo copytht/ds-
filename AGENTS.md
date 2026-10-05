@@ -111,12 +111,52 @@
 
 ### Issue tracker
 
-Issues live in GitHub Issues on `copytht/ds-`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues on `copytht/ds-`, via the `gh` CLI（repo 由 `git remote -v` 推出，
+在 clone 里跑就自动认）。约定：
+
+- **建**：`gh issue create --title "..." --body "..."`——多行正文用 heredoc。
+- **读**：`gh issue view <number> --comments`，用 `jq` 过滤、一并取 labels。
+- **列**：`gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'`，
+  按需加 `--label` / `--state`。
+- **评**：`gh issue comment <number> --body "..."`。
+- **标**：`gh issue edit <number> --add-label "..."` / `--remove-label "..."`。
+- **关**：`gh issue close <number> --comment "..."`。
+
+issue 与 PR 共用一个编号空间，裸 `#42` 可能是 PR：先 `gh pr view 42`，不中再回
+`gh issue view 42`。**PR 不是需求面**（本仓不把外部 PR 当 feature request 处理），要看 diff 用
+`gh pr diff <number>`。
+
+技能里的两句话照此落地：「publish to the issue tracker」= 建一个 GitHub issue；
+「fetch the relevant ticket」= `gh issue view <number> --comments`。
 
 ### Triage labels
 
-Five canonical roles, label string = role name. See `docs/agents/triage-labels.md`.
+技能说的五个规范角色，右列是本仓实际用的 label 字符串（用右列那个）：
+
+| 角色              | 含义                     |
+| ----------------- | ------------------------ |
+| `needs-triage`    | 维护者待评估             |
+| `needs-info`      | 等报告人补信息           |
+| `ready-for-agent` | 已写清，可交给 AFK agent |
+| `ready-for-human` | 要人来做                 |
+| `wontfix`         | 不做                     |
 
 ### Domain docs
 
-Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
+单上下文仓。探索前先读两样：
+
+- 根 **`CONTEXT.md`**（领域词条）
+- **`adr/`**（架构决策记录，与 `openspec/` 平级的仓库根目录）——读与你要动的那块相关的篇。
+
+两样都不存在就**默默继续**，别提示缺失、也别建议先建。
+
+**用词条里的词**：输出提到领域概念（issue 标题、重构建议、假设、测试名）时，用 `CONTEXT.md`
+定义的那个词，别漂到词条明说避开的同义词。缺词是信号——要么你在造项目不用的语言（重想），
+要么是真缺口（记下来）。
+
+**与 ADR 冲突要挑明**，别默默盖过：
+
+> _Contradicts ADR-0011 (stateless MCP gateway), but worth reopening because…_
+
+ADR 头三行是 `Status` / `Date` / `Supersedes`。**接受过的 ADR 不改**：要推翻就写一篇新 ADR、
+在它的 `Supersedes:` 里点名旧篇，旧篇原样留着——design 步靠这个图判断哪几篇还作数。

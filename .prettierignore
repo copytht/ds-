@@ -20,3 +20,7 @@ captures/
 
 # openspec 装出来的拷贝（与 .agents/skills 同内容），升级重生成 → 格式化会每次回潮
 .opencode/
+
+# vendor 进仓的第三方 schema 原样（intent-driven-dev/openspec-schemas）——
+# 格式化了就跟上游 diff 不上，升级时分不清是上游改的还是我们改的
+openspec/schemas/
