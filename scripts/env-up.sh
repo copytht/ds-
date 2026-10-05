@@ -177,6 +177,34 @@ else:
 PY
 }
 
+# ---- 中继的两个判据（放在 --status 之前：只读汇总也要报「跑的是旧代码」）----
+start_relay() {
+  nohup pnpm relay:dev >/tmp/dsb-relay.log 2>&1 &
+  disown
+}
+
+# dsb 跑的是旧代码的两个信号：压根不答 initialize（旧代码连 /mcp 路由都没有），
+# 或源码比进程新（长驻进程不重载代码）。
+relay_is_stale() {
+  local pid=$1
+  rpc '{"jsonrpc":"2.0","id":"status","method":"initialize"}' | grep -q '"result"' || return 0
+  local newest started
+  newest=$(find dsb -name '*.py' -exec "${MTIME[@]}" {} + 2>/dev/null | sort -rn | head -1)
+  started=$(proc_started "${pid:-0}")
+  if [ -n "$newest" ] && [ -n "$started" ] && [ "$newest" -gt "$started" ]; then return 0; fi
+  return 1
+}
+
+# 只动中继那一个进程：SIGTERM → 等它自己退 → 还不走再 -9。
+stop_relay() {
+  kill "$1" 2>/dev/null
+  for _ in 1 2 3 4 5; do
+    ps -p "$1" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  kill -9 "$1" 2>/dev/null
+}
+
 # ---- --status：只读汇总，不改动任何东西 ----
 STATUS=0
 DEBUG=0
@@ -199,10 +227,10 @@ if [ "$STATUS" = 1 ]; then
   fi
   RELAY_PID=$(listener_pid)
   if [ -n "$RELAY_PID" ]; then
-    if rpc '{"jsonrpc":"2.0","id":"status","method":"initialize"}' | grep -q '"result"'; then
-      say 中继 "在跑（PID ${RELAY_PID}），健康"
+    if relay_is_stale "$RELAY_PID"; then
+      say 中继 "在跑（PID ${RELAY_PID}）但是**旧代码**：跑 env-up 自动换新（--status 只读，不动它）"
     else
-      say 中继 "在跑（PID ${RELAY_PID}）却不答 initialize：跑的是旧代码"
+      say 中继 "在跑（PID ${RELAY_PID}），健康且代码是最新的"
     fi
   else
     say 中继 "没在跑（跑 env-up 起）"
@@ -261,31 +289,35 @@ fi
 # ---- 2) 中继 ----
 # 自检走 initialize（不记日志）：dsb 记 ping，ping 日志即纯扩展信号。
 RELAY_JUST_STARTED=0
-if curl -s -m 3 -X POST "$MCP" -H 'Content-Type: application/json' \
-    -d '{"jsonrpc":"2.0","id":"env-up","method":"initialize"}' | grep -q '"result"'; then
-  say 中继 "已在跑"
-  # dsb 是长驻进程、不重载代码：源码比进程新时跑的是旧代码。
-  # 只提示、不擅自动——重启会丢子进程（mcp.json 里起着的 server 要重拉一遍）。
+if rpc '{"jsonrpc":"2.0","id":"env-up","method":"initialize"}' | grep -q '"result"'; then
+  # **已在跑但可能是旧代码 → 自动换新**（2026-10-05 用户定：「起环境必须都对应最新」）。
+  # 之前只提示、要人手动 kill，那是把纪律外包给记性——浏览器那条早就自动重启了，
+  # 两条路不一致就等于永远有一半环境跑着旧代码。代价只是丢子进程（mcp.json 里
+  # 起着的 server 要重拉一遍），换来「跑的一定是当前代码」。
   RELAY_PID=$(listener_pid)
-  NEWEST_PY=$(find dsb -name '*.py' -exec "${MTIME[@]}" {} + 2>/dev/null | sort -rn | head -1)
-  STARTED_AT=$(proc_started "${RELAY_PID:-0}")
-  if [ -n "$NEWEST_PY" ] && [ -n "$STARTED_AT" ] && [ "$NEWEST_PY" -gt "$STARTED_AT" ]; then
-    say 提示 "dsb 源码比中继进程新——跑的是旧代码：kill $RELAY_PID 后重跑本脚本才生效"
+  if relay_is_stale "$RELAY_PID"; then
+    say 提示 "dsb 源码比中继进程新（PID ${RELAY_PID}）——跑的是旧代码：自动重启中继"
+    stop_relay "$RELAY_PID"
+    start_relay
+    RELAY_JUST_STARTED=1
+    say 中继 "已重启 → /tmp/dsb-relay.log（旧代码换新，会丢它起的子进程）"
+  else
+    say 中继 "已在跑（PID ${RELAY_PID}），代码是最新的"
   fi
 else
-  # initialize 不回话但端口有人占着 = 跑着旧代码的长驻中继（dsb 不重载
-  # 代码，旧代码连 /mcp 路由都没有）。只提示、不擅自动：kill 会丢子进程
-  # （mcp.json 里起着的 server 要重拉一遍）。
+  # initialize 不回话但端口有人占着 = 跑着旧代码的长驻中继。同样自动换新。
   RELAY_PID=$(listener_pid)
   if [ -n "$RELAY_PID" ]; then
-    say 提示 "中继在跑（PID ${RELAY_PID}）却不答 initialize：跑的是旧代码"
-    say 提示 "kill $RELAY_PID 后重跑本脚本才生效（会丢它起的子进程，需重拉一遍）"
-    exit 1
+    say 提示 "中继在跑（PID ${RELAY_PID}）却不答 initialize：跑的是旧代码，自动重启它"
+    stop_relay "$RELAY_PID"
+    start_relay
+    RELAY_JUST_STARTED=1
+    say 中继 "已重启 → /tmp/dsb-relay.log（旧代码换新，会丢它起的子进程）"
+  else
+    start_relay
+    RELAY_JUST_STARTED=1
+    say 中继 "已起 → /tmp/dsb-relay.log"
   fi
-  RELAY_JUST_STARTED=1
-  nohup pnpm relay:dev >/tmp/dsb-relay.log 2>&1 &
-  disown
-  say 中继 "已起 → /tmp/dsb-relay.log"
 fi
 
 # ---- 3) 浏览器：只认独立 profile；装的扩展比构建旧就自动重启 ----
