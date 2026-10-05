@@ -268,7 +268,11 @@ export const domProbe: StyleProbe = {
   },
 };
 
-/** 判角色用的阈值（真机量的，见任务 research/role-bubble.md）。 */
+/**
+ * 判角色用的阈值。数字是 2026-10-04 真机量的（那批 DOM 已随Trellis 迁移删除，证据
+ * 散在下面这段注释与 `site-dom` 的「角色三层解析」里）：用户气泡 22px 圆、头像 30px 圆
+ * → `border-radius` 100px。
+ */
 const AVATAR_RADIUS_PX = 100; // 头像圆：30px 圆 → border-radius 100px
 const BUBBLE_RADIUS_PX = 16; // 气泡 22px；助手内容块 12px（薄边界，取下界留余量）
 const EDGE_EPSILON_PX = 2; // 缘对齐容差
