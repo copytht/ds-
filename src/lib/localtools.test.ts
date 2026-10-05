@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { ActionOutcome } from "./action";
-import { LOCAL_TOOLS, findLocalTool, normalizeSeconds } from "./localtools";
-import { buildReply, okPayload } from "./reply";
+import { LOCAL_TOOLS, findLocalTool } from "./localtools";
+import { okPayload } from "./reply";
 
 const SEND_PAGE = findLocalTool("send.page");
 if (SEND_PAGE === null) throw new Error("名册里应有 send.page");
@@ -10,20 +10,15 @@ if (SEND_PAGE === null) throw new Error("名册里应有 send.page");
 type Call = { readonly action: string; readonly params: Record<string, unknown> };
 
 /**
- * 记录调用的假 `run`：默认每步成功、`wait.reply` 回一条正常回灌；
- * `overrides` 按动作名替换某一步的结果（模拟闸挡 / 超时）。
+ * 记录调用的假 `run`：默认每步成功；`overrides` 按动作名替换某一步的结果
+ * （模拟闸挡 / 超时）。
  */
 function recorder(overrides: Record<string, ActionOutcome> = {}) {
   const calls: Call[] = [];
   const run = async (action: string, params: Record<string, unknown>): Promise<ActionOutcome> => {
     calls.push({ action, params });
     const hit = overrides[action];
-    if (hit !== undefined) return hit;
-    if (action === "wait.fence") return { ok: true, result: { question: '{"tool":"x"}' } };
-    if (action === "wait.reply") {
-      return { ok: true, result: { text: buildReply(okPayload("答复正文")) } };
-    }
-    return { ok: true, result: {} };
+    return hit ?? { ok: true, result: {} };
   };
   return { calls, run };
 }
@@ -43,55 +38,30 @@ describe("findLocalTool · 名册", () => {
   });
 });
 
-describe("normalizeSeconds · 等待预算口径（与 wait.ts 一致）", () => {
-  it("非法 / 缺省按默认 25", () => {
-    expect(normalizeSeconds(undefined)).toBe(25);
-    expect(normalizeSeconds("10")).toBe(25);
-    expect(normalizeSeconds(Number.NaN)).toBe(25);
-  });
-
-  it("越界钳在 [1, 25]", () => {
-    expect(normalizeSeconds(0)).toBe(1);
-    expect(normalizeSeconds(-3)).toBe(1);
-    expect(normalizeSeconds(99)).toBe(25);
-    expect(normalizeSeconds(7)).toBe(7);
-  });
-});
-
-describe("send.page · 组合四步", () => {
-  it("依次 composer.type → send.enter → wait.fence → wait.reply，回答复正文", async () => {
+describe("send.page · 组合两步", () => {
+  it("依次 composer.type → send.enter，发完回空确认（不取答复）", async () => {
     const { calls, run } = recorder();
 
     const payload = await SEND_PAGE.run({ question: "帮我看看" }, { tabId: 42, run });
 
-    expect(payload).toEqual(okPayload("答复正文"));
-    expect(calls.map((call) => call.action)).toEqual([
-      "composer.type",
-      "send.enter",
-      "wait.fence",
-      "wait.reply",
-    ]);
+    // 正文是空的：页面的回答照旧进对话，模型从下一次输入里看到——不在这里取。
+    expect(payload).toEqual(okPayload(""));
+    expect(calls.map((call) => call.action)).toEqual(["composer.type", "send.enter"]);
     expect(calls[0]?.params).toEqual({ text: "帮我看看" });
     expect(calls[1]?.params).toEqual({});
-    expect(calls[2]?.params).toEqual({ timeout: 25 });
-    expect(calls[3]?.params).toEqual({ timeout: 25 });
   });
 
-  it("seconds 归一到等待入参（越界钳、缺省）", async () => {
+  it("入参只有 question 一个（seconds 没有等待对象，收缩时删掉）", () => {
+    expect(SEND_PAGE.params).toEqual(["question"]);
+  });
+
+  it("不再碰 wait.fence / wait.reply（那三段在 ADR-0014 之后失联）", async () => {
     const { calls, run } = recorder();
-    await SEND_PAGE.run({ question: "q", seconds: 99 }, { tabId: 1, run });
-    expect(calls[2]?.params).toEqual({ timeout: 25 });
-    expect(calls[3]?.params).toEqual({ timeout: 25 });
-  });
 
-  it("多行答复原样保真（buildReply↔parseReplyPayload 往返）", async () => {
-    const { run } = recorder({
-      "wait.reply": { ok: true, result: { text: buildReply(okPayload("第一行\n第二行")) } },
-    });
+    await SEND_PAGE.run({ question: "q" }, { tabId: 1, run });
 
-    expect(await SEND_PAGE.run({ question: "q" }, { tabId: 1, run })).toEqual(
-      okPayload("第一行\n第二行"),
-    );
+    expect(calls.map((call) => call.action)).not.toContain("wait.fence");
+    expect(calls.map((call) => call.action)).not.toContain("wait.reply");
   });
 
   it("没有 tab（消息不带 target）→ tab-gone，一步都不跑", async () => {
@@ -128,7 +98,7 @@ describe("send.page · 任一步没成就停、原码回", () => {
     expect(calls.map((call) => call.action)).toEqual(["composer.type"]);
   });
 
-  it("发送步被挡 → 只跑到 send.enter 就停", async () => {
+  it("发送步被挡（退避中）→ 原码回，就此打住", async () => {
     const { calls, run } = recorder({ "send.enter": { ok: false, error: "backing-off" } });
 
     expect(await SEND_PAGE.run({ question: "q" }, { tabId: 1, run })).toEqual({
@@ -136,33 +106,5 @@ describe("send.page · 任一步没成就停、原码回", () => {
       error: "backing-off",
     });
     expect(calls.map((call) => call.action)).toEqual(["composer.type", "send.enter"]);
-  });
-
-  it("等围栏超时 → timeout，不去等回灌", async () => {
-    const { calls, run } = recorder({ "wait.fence": { ok: false, error: "timeout" } });
-
-    expect(await SEND_PAGE.run({ question: "q" }, { tabId: 1, run })).toEqual({
-      status: "error",
-      error: "timeout",
-    });
-    expect(calls.map((call) => call.action)).toEqual(["composer.type", "send.enter", "wait.fence"]);
-  });
-});
-
-describe("send.page · 回灌解不出就说页面变了", () => {
-  it("回灌首行不是锚 → page-changed", async () => {
-    const { run } = recorder({ "wait.reply": { ok: true, result: { text: "不是回灌" } } });
-    expect(await SEND_PAGE.run({ question: "q" }, { tabId: 1, run })).toEqual({
-      status: "error",
-      error: "page-changed",
-    });
-  });
-
-  it("wait.reply 结果里没有 text → page-changed", async () => {
-    const { run } = recorder({ "wait.reply": { ok: true, result: {} } });
-    expect(await SEND_PAGE.run({ question: "q" }, { tabId: 1, run })).toEqual({
-      status: "error",
-      error: "page-changed",
-    });
   });
 });
