@@ -1,5 +1,9 @@
 # dsb 内建五件工作工具：root 钉死的 ls/read/grep/write/edit
 
+- **Status**: accepted
+- **Date**: 2026-10-04
+- **Supersedes**: none（本篇修订 ADR-0011 的一句，不整体取代它）
+
 给网页模型一套能动手改本机文件的工作面：dsb 内建 `ls` / `read` / `grep` / `write` / `edit`
 五件裸名工具，全部钉死在一个可配的**工作文件夹 root** 内（`DSB_WORK_ROOT`，缺省本仓根）；
 相对路径以 root 为基准，路径 `resolve()` 后越界一律 `out-of-root`——跟符号链接、挡 `..`。

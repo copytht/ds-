@@ -1,5 +1,9 @@
 # dsb 收成无状态 MCP 网关：唯一端点 `POST /mcp`
 
+- **Status**: accepted
+- **Date**: 2026-10-04
+- **Supersedes**: none（其一句被 ADR-0012 局部修订，见 0012 正文；其余仍有效）
+
 dsb 只干一件事：本机 MCP 网关。JSON-RPC 2.0 从 `POST /mcp` 进来（`initialize` / `ping` /
 `tools/list` / `tools/call`），把仓库根 `mcp.json` 配的 MCP servers 启动时 eager 拉起、
 汇总成一张工具表替扩展转调用（对外名 `<server>_<tool>`，非字母数字折 `_`），自家只留

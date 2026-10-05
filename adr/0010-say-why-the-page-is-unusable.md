@@ -1,5 +1,9 @@
 # 停机要说得出来：写作框不在时，报出账号处境而不是空等
 
+- **Status**: accepted
+- **Date**: 2026-10-03
+- **Supersedes**: none
+
 页面上找不到写作框时，`page.state` 带一个 `account` 字段说清是哪种处境（`ready` / `muted`（带解封时刻）/ `signed-out` / `unknown`）；写动作撞上没有写作框回 `composer-absent`，页面上找不到认得的东西回 `page-changed`，读不完回 `read-failed`——只有这一跳真的走不通才是 `tab-gone`。执行器抛带码的 `PageError`，收信那层（`channel.ts` 的 `failureCode`）才认，且**码必须在册**才认。
 
 依据是 2026-10-02/03 的真机：账号被禁言期间站点**根本不渲染写作框**，扩展此前一声不吭地空等一个永远不会出现的输入框——人在页面上看得见橙条，agent 什么都看不见，只能靠往产物里塞临时诊断表、重启浏览器三轮去猜。

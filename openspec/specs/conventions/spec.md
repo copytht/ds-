@@ -45,7 +45,7 @@
 
 改任何线协议（围栏内容、chain 消息 kind、runtime 消息类型、失败码、工具目录）时 SHALL 逐项同步：
 `protocol/fixtures/*.json`、扩展侧构造 / 解析与类型（成对加）与 `*.test.ts`、中继侧对应语义与
-`tests/test_*.py`、以及 `CONTEXT.md` 词条 / `docs/adr/` / 本 spec 相关篇。
+`tests/test_*.py`、以及 `CONTEXT.md` 词条 / `adr/` / 本 spec 相关篇。
 
 #### Scenario: 少改一处
 
