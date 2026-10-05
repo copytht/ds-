@@ -524,6 +524,68 @@ export default defineBackground(() => {
     }
   }
 
+  /** 一块围栏的处置：一条答案（进这一轮的正文），或一个失败载荷（整轮作废、不进对话流）。 */
+  type CallOutcome =
+    | { readonly ok: true; readonly answer: ToolAnswer }
+    | { readonly ok: false; readonly payload: ReplyPayload };
+
+  /**
+   * **本地工具的截获点**——`local-tools` 的 requirement 与 ADR-0013 都按这个名字指着这里
+   * （#50：这段以前内联在 `sendCalls` 的循环体里，于是两份文档指的是一个不存在的函数：
+   * 遵守的人找不到地方，将来谁建个同名函数那条 requirement 就「满足」了而截获在别处）。
+   *
+   * 位置照 spec 的话办：`parseToolCall` **之后**、`fetch` **之前**先查 `findLocalTool`，
+   * 命中就地跑（`runLocalTool`，一次 fetch 都不打），未命中交 `sendOneCall` 打网关。
+   * 普通工具路径一字不改。
+   */
+  async function sendCall(call: string, tabId: number | undefined): Promise<CallOutcome> {
+    const toolCall = parseToolCall(call);
+    if (toolCall === null) {
+      // 排坏了不出门：没问过网关，图标状态别动，把改法回灌给模型自己改。
+      return { ok: true, answer: { tool: "排坏的围栏", text: MALFORMED_CALL_HINT } };
+    }
+    const local = findLocalTool(toolCall.tool);
+    const payload =
+      local === null
+        ? await sendOneCall(toolCall)
+        : await runLocalTool(local, toolCall.arguments, tabId);
+    // 连不上 / 答不成样：整轮作废，照旧不进对话流（与单块时一个脾气）。
+    if (!isInjectableReply(payload)) return { ok: false, payload };
+    return { ok: true, answer: { tool: toolCall.tool, text: payload.answer } };
+  }
+
+  /**
+   * 一轮的工具调用：**一块一趟**打网关（每趟自己一份超时预算，不共用），
+   * 打完拼成一段正文交回。
+   *
+   * 一趟一趟而不是一次请求带多块：中继那一侧一次 `tools/call` 就是一件工具，
+   * 而扩展对一条在途 fetch 的保活与超时是**按请求**算的（`MCP_CALL_TIMEOUT_MS`）
+   * ——多块挤一趟，几件慢工具叠起来就会先撞扩展的超时，报出来的还是没信息量的
+   * 「中继不可达」。一趟一块，超时账各算各的。
+   *
+   * 本地工具（`findLocalTool` 命中）就地跑，同样占一轮里的一块——判定与分派都在
+   * `sendCall` 里（那是 spec 与 ADR-0013 点名的截获点，见它的注释）。
+   */
+  async function sendCalls(
+    calls: readonly string[],
+    tabId: number | undefined,
+  ): Promise<ReplyPayload> {
+    const planned = calls.slice(0, MAX_CALLS_PER_ROUND);
+    const answers: ToolAnswer[] = [];
+    for (const call of planned) {
+      const outcome = await sendCall(call, tabId); // 一块的处置在它那里：本地截获 / 转网关
+      if (!outcome.ok) return outcome.payload; // 整轮作废，不进对话流
+      answers.push(outcome.answer);
+    }
+
+    const dropped = calls.length - planned.length;
+    const joined = joinCallAnswers(answers);
+    if (dropped <= 0) return okPayload(joined);
+    return okPayload(
+      `${joined}\n\n（这一轮最多执行 ${MAX_CALLS_PER_ROUND} 块围栏，还有 ${dropped} 块没执行——下一轮再排。）`,
+    );
+  }
+
   /**
    * 打中继：一段围栏正文 → 一次 `tools/call`，一次 fetch 打到底。
    *
@@ -536,49 +598,6 @@ export default defineBackground(() => {
    *
    * 本地工具（`findLocalTool` 命中）不走这里：见 `runLocalTool`。
    */
-  /**
-   * 一轮的工具调用：**一块一趟**打网关（每趟自己一份超时预算，不共用），
-   * 打完拼成一段正文交回。
-   *
-   * 一趟一趟而不是一次请求带多块：中继那一侧一次 `tools/call` 就是一件工具，
-   * 而扩展对一条在途 fetch 的保活与超时是**按请求**算的（`MCP_CALL_TIMEOUT_MS`）
-   * ——多块挤一趟，几件慢工具叠起来就会先撞扩展的超时，报出来的还是没信息量的
-   * 「中继不可达」。一趟一块，超时账各算各的。
-   *
-   * 本地工具（`findLocalTool` 命中）就地跑，同样占一轮里的一块。
-   */
-  async function sendCalls(
-    calls: readonly string[],
-    tabId: number | undefined,
-  ): Promise<ReplyPayload> {
-    const planned = calls.slice(0, MAX_CALLS_PER_ROUND);
-    const answers: ToolAnswer[] = [];
-    for (const call of planned) {
-      const toolCall = parseToolCall(call);
-      if (toolCall === null) {
-        // 排坏了不出门：没问过网关，图标状态别动，把改法回灌给模型自己改。
-        answers.push({ tool: "排坏的围栏", text: MALFORMED_CALL_HINT });
-        continue;
-      }
-      // 本地工具（名册在扩展侧、执行不经过 dsb）：就地跑，不生成 `tools/call`。
-      const local = findLocalTool(toolCall.tool);
-      const payload =
-        local === null
-          ? await sendOneCall(toolCall)
-          : await runLocalTool(local, toolCall.arguments, tabId);
-      // 连不上 / 答不成样：整轮作废，照旧不进对话流（与单块时一个脾气）。
-      if (!isInjectableReply(payload)) return payload;
-      answers.push({ tool: toolCall.tool, text: payload.answer });
-    }
-
-    const dropped = calls.length - planned.length;
-    const joined = joinCallAnswers(answers);
-    if (dropped <= 0) return okPayload(joined);
-    return okPayload(
-      `${joined}\n\n（这一轮最多执行 ${MAX_CALLS_PER_ROUND} 块围栏，还有 ${dropped} 块没执行——下一轮再排。）`,
-    );
-  }
-
   async function sendOneCall(toolCall: ToolCall): Promise<ReplyPayload> {
     const releaseKeepAlive = keepAliveWhileSending();
     const id = nextMessageId("call");
