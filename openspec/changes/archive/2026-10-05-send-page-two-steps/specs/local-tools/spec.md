@@ -1,38 +1,6 @@
-# 扩展自带的围栏工具（local tools）
+# Spec Delta
 
-## Purpose
-
-定扩展自己在 background **就地执行**的那批围栏工具（不转发 dsb）的触发条件、名册契约、
-`send.page` 的行为与错误矩阵，以及必须跟上的测试。
-
-## Requirements
-
-### Requirement: 命中名册就地执行，未命中照旧转发
-
-围栏正文经 `parseToolCall` 后 SHALL 先查 `findLocalTool`：命中则在 background 本地执行，
-未命中照旧转发 dsb。截获点 SHALL 在 `entrypoints/background.ts` 的 `sendCall(call, tabId)`
-（`parseToolCall` 之后、`fetch` 之前）；普通工具（dsb）路径 MUST NOT 改动。
-
-#### Scenario: 命中
-
-- **WHEN** `tool` 是本地工具名（v1 只有 `send.page`）
-- **THEN** 本地执行，一次 `fetch` 都不打
-
-#### Scenario: 未命中
-
-- **WHEN** `tool` 不在名册
-- **THEN** 走原路径转发 dsb，一字不改
-
-### Requirement: 名册的形状
-
-本地工具 SHALL 满足固定签名：`LocalTool` 有 `name` / `description` / `params` / `run`，
-`run` 收 `(args, env)` 与 `LocalToolEnv`（`tabId` + `run(action, params)`），
-`findLocalTool(name)` 找不到回 `null`。
-
-#### Scenario: 元数据的用途
-
-- **WHEN** 工具进协议说明
-- **THEN** `name` / `params` / `description` 取自名册，不在别处手写
+## MODIFIED Requirements
 
 ### Requirement: `send.page` 的契约
 
@@ -60,16 +28,6 @@
 - **THEN** 本 change 取**删掉**（收缩成「发一条问题」后没有等待对象，留着会让模型以为要等）；
   若将来加回等动作，这个场景连同参数与钳位一起改
 
-### Requirement: `send.page` 不自我转发
-
-组合工具 SHALL 只等、不转发：模型排出的那条围栏由既有路径
-（`content → background.onMessage → sendCall`）独立转发 dsb 并回灌，避免双执行。
-
-#### Scenario: 双执行
-
-- **WHEN** 本地组合自己也把模型那条围栏转发给 dsb
-- **THEN** 判不合格（同一工具会被执行两次）
-
 ### Requirement: 本地工具的失败矩阵
 
 `send.page` SHALL 按固定矩阵回码：不带 tab → `tab-gone`；同标签页已有本地工具在跑 →
@@ -90,35 +48,6 @@
 - **WHEN** 页面模型迟迟不回答
 - **THEN** 与 `send.page` 无关——它已经回确认了；页面那侧的回答照旧走正常流程
 
-### Requirement: 本地工具不碰中继图标
-
-本地工具 SHALL NOT `applyOutcome`、MUST NOT 留失败痕（它一次 fetch 都没打，证明不了中继健不健康）；
-失败只进控制台。
-
-#### Scenario: 本地工具失败
-
-- **WHEN** 本地工具因闸关回 `disabled`
-- **THEN** 中继图标不变红（与 `deliverNudge` 同口径）
-
-### Requirement: 名册元数据与说明文案不许分手
-
-`description` / `params` SHALL 与协议说明文案保持对拍一致，任一边改动即红。
-
-#### Scenario: 改了一边
-
-- **WHEN** 只改了 `description` 没改说明，或反之
-- **THEN** `src/lib/instructions.test.ts` 变红
-
-### Requirement: 本地工具不进页面动作名册
-
-本地工具 SHALL 属于**围栏工具名册**（background 执行），MUST NOT 进 `ACTION_ROSTER`
-（那是页面动作名册，内容脚本执行）。
-
-#### Scenario: 放错册子
-
-- **WHEN** 把本地工具写进 `ACTION_ROSTER`
-- **THEN** 判不合格（两个名册两码事）
-
 ### Requirement: 本地工具的测试
 
 SHALL 有 `src/lib/localtools.test.ts`（两步顺序与入参、任一步没成即停并原码回、
@@ -130,6 +59,8 @@ SHALL 有 `src/lib/localtools.test.ts`（两步顺序与入参、任一步没成
 
 - **WHEN** 调整 `send.page` 的步骤顺序
 - **THEN** `localtools.test.ts` 先红
+
+## ADDED Requirements
 
 ### Requirement: 协议说明不承诺做不到的事
 

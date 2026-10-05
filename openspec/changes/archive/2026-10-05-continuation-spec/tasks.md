@@ -44,7 +44,7 @@
       带 `## Purpose`），`local-tools`「`send.page` 的契约」与 `conventions`「写新逻辑前先找」
       两条 MODIFIED 整块替换（保留原场景名「成功」「失败」「想写一个新 parse / 一个新信封」，
       分别新增「缩写口径」「要发消息到页面」）。验证：archive 后 `openspec validate --all
-    --strict` 6 passed 与 `--all --archived --strict` 4 passed 都过；无 delta 头残留。
+--strict` 6 passed 与 `--all --archived --strict` 4 passed 都过；无 delta 头残留。
 
 ## 回滚点
 

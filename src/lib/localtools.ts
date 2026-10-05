@@ -6,19 +6,16 @@
  * 模型在围栏里排本地工具名时，background 就地执行（`sendCall` 截获，
  * 不把这一条转发 dsb）。
  *
- * v1 只有 `send.page` 一件：往页面发一个问题 → 等页面模型排围栏 → 等回灌
- * → 返回答复正文。四步全走 `runAction`，总开关 / 替人发言 / 退避三道闸
- * 照拦；失败码全取现成册子，不新增。
+ * v1 只有 `send.page` 一件：**往页面发一条问题**，发完即回确认。
+ *
+ * 它曾经是四步（发问题 → 等页面模型排围栏 → 等回灌 → 取答复），2026-10-05 缩成两步
+ * （ADR-0014 之后那三段各自失联，且「取答复」那段根本做不到——页面动作没有 MCP 工具面，
+ * 模型读不到页面消息；详见 openspec change `send-page-two-steps` 与 issue #47）。
+ * 两步全走 `runAction`，总开关 / 替人发言 / 退避三道闸照拦；失败码全取现成册子，不新增。
  */
 
-import {
-  ACTION_ERROR_PAGE_CHANGED,
-  ACTION_ERROR_TAB_GONE,
-  ACTION_ERROR_UNKNOWN,
-  type ActionOutcome,
-} from "./action";
-import { errorPayload, parseReplyPayload, type ReplyPayload } from "./reply";
-import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, MIN_WAIT_SECONDS } from "./wait";
+import { ACTION_ERROR_TAB_GONE, ACTION_ERROR_UNKNOWN, type ActionOutcome } from "./action";
+import { errorPayload, okPayload, type ReplyPayload } from "./reply";
 
 /** 本地工具执行时由调用方（background）注入的环境。 */
 export type LocalToolEnv = {
@@ -36,42 +33,18 @@ export type LocalTool = {
   readonly run: (args: Record<string, unknown>, env: LocalToolEnv) => Promise<ReplyPayload>;
 };
 
-/**
- * 等待预算：`seconds` 可配，非法按默认，钳在 [1, 25]——与 `wait.ts` 的
- * `parseWaitSeconds` 同一口径（这边先归一，再交给 `wait.fence`/`wait.reply`）。
- */
-export function normalizeSeconds(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.min(Math.max(value, MIN_WAIT_SECONDS), MAX_WAIT_SECONDS)
-    : DEFAULT_WAIT_SECONDS;
-}
-
-/** 组合的四步：动作名 + 入参，顺序即执行顺序。 */
-function sendPageSteps(
-  question: string,
-  seconds: number,
-): readonly (readonly [string, Record<string, unknown>])[] {
+/** 组合的两步：动作名 + 入参，顺序即执行顺序。 */
+function sendPageSteps(question: string): readonly (readonly [string, Record<string, unknown>])[] {
   return [
     ["composer.type", { text: question }],
     ["send.enter", {}],
-    ["wait.fence", { timeout: seconds }],
-    ["wait.reply", { timeout: seconds }],
   ];
-}
-
-/** 从 `wait.reply` 的结果里取回灌原文（`{text}`，首行锚为 `agent:`）。 */
-function replyTextOf(outcome: ActionOutcome): string | null {
-  if (!outcome.ok) return null;
-  const result = outcome.result;
-  if (typeof result !== "object" || result === null) return null;
-  const text = (result as Record<string, unknown>)["text"];
-  return typeof text === "string" ? text : null;
 }
 
 const SEND_PAGE: LocalTool = {
   name: "send.page",
-  description: "往页面发一个问题，等页面模型排围栏、等回灌，返回答复正文。",
-  params: ["question", "seconds?"],
+  description: "往页面发一条问题，发完即回确认。",
+  params: ["question"],
   async run(args, env) {
     if (env.tabId === undefined) return errorPayload(ACTION_ERROR_TAB_GONE);
     const question = args["question"];
@@ -79,17 +52,13 @@ const SEND_PAGE: LocalTool = {
       // 排得不成形：与围栏里 JSON 排坏同一处置（不猜、当场说）。
       return errorPayload(ACTION_ERROR_UNKNOWN);
     }
-    const seconds = normalizeSeconds(args["seconds"]);
-    // 四步依次走；任一步没成就原码回，**不再往下**（前半句没成就不发后半句）。
-    let last: ActionOutcome | null = null;
-    for (const [action, params] of sendPageSteps(question, seconds)) {
-      last = await env.run(action, params);
-      if (!last.ok) return errorPayload(last.error);
+    // 两步依次走；任一步没成就原码回，**不再往下**（前半句没成就不发后半句）。
+    for (const [action, params] of sendPageSteps(question)) {
+      const outcome = await env.run(action, params);
+      if (!outcome.ok) return errorPayload(outcome.error);
     }
-    // 最后一步是 `wait.reply`：把回灌解回载荷再交回去（解不出就回页面变样了）。
-    const text = last === null ? null : replyTextOf(last);
-    if (text === null) return errorPayload(ACTION_ERROR_PAGE_CHANGED);
-    return parseReplyPayload(text) ?? errorPayload(ACTION_ERROR_PAGE_CHANGED);
+    // 正文是空的：它不取答复——页面的回答照旧进对话，模型从下一次输入里看到。
+    return okPayload("");
   },
 };
 
