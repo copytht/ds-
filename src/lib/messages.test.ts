@@ -200,7 +200,8 @@ describe("messages.list / messages.last 执行器", () => {
 /**
  * 角色三层里的**渲染层**（气泡）：jsdom 不做布局，`getComputedStyle` / `getBoundingClientRect`
  * 拿不到真值，所以用替身探测口，把「算出来的样式 / 几何」写在 `data-*` 上喂进去。
- * 数字照真机量的（`10-04-read-conversation/research/role-bubble.md`）。
+ * 数字照 2026-10-04 真机量的（那批 DOM 已随 Trellis 迁移删除；来历见 `messages.ts`
+ * 里那组阈值常量的注释）。
  */
 const attributeProbe: StyleProbe = {
   style: (el) => ({
