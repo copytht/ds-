@@ -108,7 +108,9 @@ start_browser() {
     exit 1
   fi
   STARTED_BROWSER=1
-  say 浏览器 "已起 → $CHROME（独立 profile：$PROFILE，清过 SW 脚本缓存与会话恢复，带会话标签页）"
+  # 注意 `${CHROME}` 的花括号：**紧跟的全角括号是合法标识符字符**，写成 `$CHROME（…`
+  # 会被 bash 当成变量名 `CHROME（…`，`set -u` 下当场报 `unbound variable`（2026-10-05 修）。
+  say 浏览器 "已起 → ${CHROME}（独立 profile：${PROFILE}，清过 SW 脚本缓存与会话恢复，带会话标签页）"
 }
 
 # ds-browser 的主进程 PID：主进程的首个 flag 是 --user-data-dir，
