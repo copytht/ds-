@@ -4,6 +4,7 @@ import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_READ_FAILED } from "./action";
 import type { ActionFrame } from "./action";
 import { parseWaitSeconds } from "./wait-budget";
 import {
+  conversationList,
   lastMessage,
   listMessages,
   nextFrame,
@@ -28,10 +29,14 @@ const FRAME: ActionFrame = {
 /**
  * 夹具照抄 2026-10-02 真机抓的结构（页面 commit-id 44809ea4），**文字全是编的**：
  * 行 key、`ds-*` 设计系统类、哈希 class 的位置都按真的来，这样站点一改版测试先红。
+ *
+ * 列表那层带 `--printable` 是**照抄真的**：真机主聊天区就是 `.ds-virtual-list--printable`，
+ * 而且它与「行里渲染出 `.ds-message` 了吗」无关——少了它，「行挂上、正文还没渲染」那种
+ * 未就绪状态会被误判成「认不出对话列表」（当场判死，坏了 #40 那条轮询语义）。
  */
 function conversationHtml(): string {
   return `
-    <div class="ds-virtual-list ds-scroll-area--enabled">
+    <div class="ds-virtual-list ds-virtual-list--printable ds-scroll-area--enabled">
       <div class="ds-virtual-list-items">
         <div class="ds-virtual-list-visible-items">
           <div class="_9663006 _2c189bc" data-virtual-list-item-key="1">
@@ -68,6 +73,11 @@ function conversationHtml(): string {
 
 function frameOf(action: string): ActionFrame {
   return { ...FRAME, action };
+}
+
+/** 带预算的帧：省得测试为「轮询到到点」真等 25 秒。 */
+function budgetFrame(action: string, timeout = 1): ActionFrame {
+  return { ...FRAME, action, params: { timeout } };
 }
 
 /** 第 index 条挂载出来的行；没有就当场抛，别把「没这行」演成 `undefined` 混过去。 */
@@ -194,6 +204,92 @@ describe("messages.list / messages.last 执行器", () => {
     expect(await lastMessage(frameOf("messages.last"))).toEqual({
       messages: [{ role: "unknown", text: "认不出" }],
     });
+  });
+});
+
+describe("多条虚拟列表：挑对话那一条（#54）", () => {
+  it("认装有写作框的主列表，不认右缘那个面板", () => {
+    document.body.innerHTML = twoListsHtml();
+
+    const list = conversationList(document);
+
+    expect(list?.classList.contains("ds-virtual-list--printable")).toBe(true);
+    expect(list?.querySelector("textarea")).not.toBeNull();
+  });
+
+  it("主列表一行没挂、面板里有行：在主列表上等，不回空数组也不读面板", async () => {
+    document.body.innerHTML = twoListsHtml();
+    stubLayer(document.querySelector(".ds-virtual-list--printable")!, "auto", 100);
+
+    // 页面上有行 → 不是新对话，进就绪轮询；预算耗尽才报 page-changed（不装作空对话）。
+    // 预算给 1s 免得测试真等 25s。
+    await expect(listMessages(budgetFrame("messages.list"))).rejects.toMatchObject({
+      code: ACTION_ERROR_PAGE_CHANGED,
+    });
+  });
+
+  it("主列表挂上无 key 的行：照读，且读出来的是主列表那些、不是面板的", async () => {
+    document.body.innerHTML = twoListsHtml(keylessRow("主列表第一条") + keylessRow("主列表第二条"));
+    stubLayer(document.querySelector(".ds-virtual-list--printable")!, "auto", 100);
+
+    const result = await listMessages(frameOf("messages.list"));
+
+    expect(result.messages.map((message) => message.text)).toEqual([
+      "主列表第一条",
+      "主列表第二条",
+    ]);
+    expect(JSON.stringify(result)).not.toContain("面板里");
+  });
+
+  it("没 key 的行：正文当身份，两条一样只留第一条", async () => {
+    document.body.innerHTML = twoListsHtml(
+      keylessRow("一样的话") + keylessRow("另一句") + keylessRow("一样的话"),
+    );
+    stubLayer(document.querySelector(".ds-virtual-list--printable")!, "auto", 100);
+
+    expect((await listMessages(frameOf("messages.list"))).messages.map((m) => m.text)).toEqual([
+      "一样的话",
+      "另一句",
+    ]);
+  });
+
+  it("没 key 也没正文的行（分隔条）：不收", async () => {
+    document.body.innerHTML = twoListsHtml(
+      '<div class="_81e7b5e"><div class="_a1b2c3"></div></div>' + keylessRow("真的那条"),
+    );
+    stubLayer(document.querySelector(".ds-virtual-list--printable")!, "auto", 100);
+
+    expect((await listMessages(frameOf("messages.list"))).messages.map((m) => m.text)).toEqual([
+      "真的那条",
+    ]);
+  });
+
+  it("三条判据都不中而页面上有行：当场 page-changed，一拍都不等", async () => {
+    // 去掉写作框（①②）与 --printable（②），行里也没有 .ds-message（③）—— 认不出对话列表
+    document.body.innerHTML = twoListsHtml(keylessRow("某条"))
+      .replace(
+        "ds-virtual-list ds-virtual-list--printable ds-scroll-area--enabled",
+        "ds-virtual-list",
+      )
+      .replace("<textarea></textarea>", "");
+    let polls = 0;
+
+    await expect(
+      readyWithin(READY_DEADLINE, fakeClock(1_000), (): Promise<void> => {
+        polls += 1;
+        return Promise.resolve();
+      }),
+    ).rejects.toMatchObject({ code: ACTION_ERROR_PAGE_CHANGED });
+
+    expect(polls).toBe(0); // 认不出就是认不出，等也没用
+  });
+
+  it("哪儿都没行：新对话，秒回空数组（不轮询）", async () => {
+    document.body.innerHTML = twoListsHtml(); // 把面板那三行也拆掉
+    document.querySelectorAll(".ds-virtual-list-visible-items > *").forEach((row) => row.remove());
+
+    expect(await listMessages(frameOf("messages.list"))).toEqual({ messages: [] });
+    expect(await lastMessage(frameOf("messages.last"))).toEqual({ messages: [] });
   });
 });
 
@@ -493,6 +589,47 @@ function stubLayer(element: Element, overflowY: string, client: number): number[
 }
 
 /**
+ * 夹具照抄 2026-10-05 真机量到的**两条**虚拟列表（会话 613e11ee，commit-id 44809ea4）：
+ *
+ * - 主聊天区 `.ds-virtual-list--printable`（x=261、1209×742、自己是滚动层、
+ *   写作框 `_871cbca` sticky 在里面）——**此刻 0 行**：`visible-items` 零子节点、
+ *   `items` 只有 `min-height: 1680px` 的占位；
+ * - 右缘一个 `position: fixed` 的 34px 窄条 `_189b4a0`（悬停展开成 240×210 面板）
+ *   ——**3 行**，行上没有 `data-virtual-list-item-key`、也没有 `.ds-message`。
+ *
+ * `mainRows` 是「行挂上之后」的形状（照抄站点新版行：只有哈希 class、没有 key），
+ * 空串表示还没挂。#54 的病根就在这两条并存：老实现拿第一个命中行倒推，认成了那个面板。
+ */
+function twoListsHtml(mainRows = ""): string {
+  return `
+    <div class="ds-virtual-list ds-virtual-list--printable ds-scroll-area--enabled">
+      <div class="ds-scroll-area__gutters"></div>
+      <div class="ds-virtual-list-items" style="min-height: 1680px">
+        <div class="ds-virtual-list-visible-items" style="transform: translateY(0px)">${mainRows}</div>
+      </div>
+      <div class="_871cbca"><textarea></textarea></div>
+    </div>
+    <div class="_189b4a0">
+      <div class="ds-scroll-area _4ce999d">
+        <div class="ds-virtual-list">
+          <div class="ds-virtual-list-items" style="height: 180px">
+            <div class="ds-virtual-list-visible-items">
+              <div class="_81e7b5e"><div class="_72b6158">面板里那条【ds 协议】</div></div>
+              <div class="_81e7b5e"><div class="_72b6158">面板里另一条</div></div>
+              <div class="_81e7b5e"><div class="_72b6158">面板里第三条</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+/** 站点新版的行（2026-10-04 起）：只有哈希 class，没有 key、没有 `ds-message`。 */
+function keylessRow(text: string): string {
+  return `<div class="_81e7b5e"><div class="_72b6158"><p>${text}</p></div></div>`;
+}
+
+/**
  * `readyWithin` 的替身件：jsdom 不做布局，滚动层不 `stub` 就永远不滚得动，
  * 而就绪判据要的就是「滚得动 + 至少一行读得出」。
  *
@@ -556,14 +693,24 @@ describe("就绪轮询（issue #40）", () => {
     expect(polls).toBe(0); // 一拍都没等：找不到就是找不到，等也没用
   });
 
-  it("新对话一行都没有：进轮询还是当场回空？（挂着列表但没行 = 没就绪）", async () => {
+  it("认得出列表但一行都没挂：等预算，到点才报 page-changed（不是当场）", async () => {
     // 挂着列表、一行都没有：那是「还没挂上来」，等预算；不是「空对话」。
-    document.body.innerHTML = conversationHtml();
+    // 列表要**认得出**（带 `--printable`），否则就落成「认不出对话列表」那条（当场报）。
+    document.body.innerHTML = conversationHtml().replace(
+      'class="ds-virtual-list ds-scroll-area--enabled"',
+      'class="ds-virtual-list ds-virtual-list--printable ds-scroll-area--enabled"',
+    );
     for (const row of document.querySelectorAll("[data-virtual-list-item-key]")) row.remove();
+    let polls = 0;
 
-    await expect(readyWithin(READY_DEADLINE, fakeClock(1_000), instant)).rejects.toMatchObject({
-      code: ACTION_ERROR_PAGE_CHANGED,
-    });
+    await expect(
+      readyWithin(READY_DEADLINE, fakeClock(1_000), (): Promise<void> => {
+        polls += 1;
+        return Promise.resolve();
+      }),
+    ).rejects.toMatchObject({ code: ACTION_ERROR_PAGE_CHANGED });
+
+    expect(polls).toBeGreaterThan(0); // 认得出列表 → 该等，不该当场判死
   });
 
   it("就绪探测不写 scrollTop：别污染 readMessages 的起点", async () => {
