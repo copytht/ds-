@@ -532,6 +532,58 @@ describe("退避闸（账号在处罚区，写动作停发）", () => {
     expect(sent.map((f) => f.action)).toEqual(["page.state", "chat.switch"]);
   });
 
+  it("消息工具栏六项与代码块两项都在退避闸下，读（chats.list 同理）不受影响", async () => {
+    const actions = [
+      "message.copy",
+      "message.retry",
+      "message.like",
+      "message.dislike",
+      "message.read",
+      "message.share",
+      "code.copy",
+      "code.download",
+    ];
+    for (const action of actions) {
+      const { send, sent } = recordingSendToTab(MUTED);
+      const ctx = context({ sendToTab: send });
+
+      expect(await runAction(frame({ action, params: { index: -1 }, target: "42" }), ctx)).toEqual({
+        ok: false,
+        error: "backing-off",
+      });
+      expect(sent.map((f) => f.action)).toEqual(["page.state"]);
+    }
+  });
+
+  it("只有 message.retry 进 speak 闸（重新生成等同发送）；其余 7 个 speak 关着也放行", async () => {
+    const others = [
+      "message.copy",
+      "message.like",
+      "message.dislike",
+      "message.read",
+      "message.share",
+      "code.copy",
+      "code.download",
+    ];
+    for (const action of others) {
+      const { send, sent } = recordingSendToTab({ kind: "ready" });
+      const ctx = context({ speak: false, sendToTab: send });
+
+      expect(await runAction(frame({ action, params: { index: -1 }, target: "42" }), ctx)).toEqual({
+        ok: true,
+        result: {},
+      });
+      expect(sent.map((f) => f.action)).toEqual(["page.state", action]);
+    }
+
+    const { send, sent } = recordingSendToTab({ kind: "ready" });
+    const ctx = context({ speak: false, sendToTab: send });
+    expect(
+      await runAction(frame({ action: "message.retry", params: { index: -1 }, target: "42" }), ctx),
+    ).toEqual({ ok: false, error: "disabled" });
+    expect(sent).toEqual([]);
+  });
+
   it("button.click 也在退避闸下（点圆键总是改页面状态）", async () => {
     const { send, sent } = recordingSendToTab(MUTED);
     const ctx = context({ sendToTab: send });

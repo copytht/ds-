@@ -1,22 +1,22 @@
 ## 1. 真机补存证（ADR-0018 前置，先于任何执行器）
 
-- [ ] 1.1 `scripts/env-up.sh --debug` 起 ds-browser；停在一条有多轮 assistant 回答的会话（人手动切，探针不点站点）
-- [ ] 1.2 只读抓一个 assistant 行的工具栏容器 `message.toolbar`（`div.ds-flex` 整段 `outerHTML`）与其中 6 颗按钮各一条：`message.copy` / `message.retry` / `message.like` / `message.dislike` / `message.read` / `message.share`（`row` 写容器、同排 6 颗、第几颗、从 `aria-label="朗读"` 数起；`capturedOn` 写当天）
-- [ ] 1.3 抓一个用户行的工具栏 `message.toolbar.user`（2 颗，反例，不编动作名）
-- [ ] 1.4 入档 `protocol/evidence/controls.json`（`probe` 都写成只读表达式；工具栏按钮 `live`，行相关的 `state-bound`）；`evidence.test.ts` 与 `test_evidence.py` 绿
-- [ ] 1.5 `scripts/page-action.py evidence` 对新条目全绿（`live` 一致 / `state-bound` 可「未比」，不许「过时」）
+- [x] 1.1 `scripts/env-up.sh --debug` 起 ds-browser；停在一条有多轮 assistant 回答的会话（人手动切，探针不点站点）
+- [x] 1.2 只读抓一个 assistant 行的工具栏容器 `message.toolbar`（`div.ds-flex` 整段 `outerHTML`）与其中 6 颗按钮各一条：`message.copy` / `message.retry` / `message.like` / `message.dislike` / `message.read` / `message.share`（`row` 写容器、同排 6 颗、第几颗、从 `aria-label="朗读"` 数起；`capturedOn` 写当天）
+- [x] 1.3 抓一个用户行的工具栏 `message.toolbar.user`（2 颗，反例，不编动作名）
+- [x] 1.4 入档 `protocol/evidence/controls.json`（`probe` 都写成只读表达式；工具栏按钮 `live`，行相关的 `state-bound`）；`evidence.test.ts` 与 `test_evidence.py` 绿
+- [x] 1.5 `scripts/page-action.py evidence` 对新条目全绿（`live` 一致 / `state-bound` 可「未比」，不许「过时」）
 
 ## 2. 执行器与闸
 
-- [ ] 2.1 新建 `src/lib/controls.ts`：挂载行 / 代码块的取集合与 `index` 解析（非负 / 负数从末尾 / 非整数 `unknown-action` / 越界 `page-changed`）；工具栏定位（恰好 6 颗 + `朗读` 在第 5 位，不符 `page-changed`）；`aria-disabled="true"` 当不可用；8 个动作导出
-- [ ] 2.2 `src/lib/action.ts`：8 个动作进 `BACKOFF_GATED_ACTIONS`；`message.retry` 另进 `SPEAK_GATED_ACTIONS`；`action.test.ts` 补退避 / speak 闸用例（含「其余 7 个不被 speak 闸拦」）
-- [ ] 2.3 `entrypoints/content.ts`：`ACTION_ROSTER` 加 8 条
+- [x] 2.1 新建 `src/lib/controls.ts`：挂载行 / 代码块的取集合与 `index` 解析（非负 / 负数从末尾 / 非整数 `unknown-action` / 越界 `page-changed`）；工具栏定位（恰好 6 颗 + `朗读` 在第 5 位，不符 `page-changed`）；`aria-disabled="true"` 当不可用；8 个动作导出
+- [x] 2.2 `src/lib/action.ts`：8 个动作进 `BACKOFF_GATED_ACTIONS`；`message.retry` 另进 `SPEAK_GATED_ACTIONS`；`action.test.ts` 补退避 / speak 闸用例（含「其余 7 个不被 speak 闸拦」）
+- [x] 2.3 `entrypoints/content.ts`：`ACTION_ROSTER` 加 8 条
 
 ## 3. 契约样例与回归用例
 
-- [ ] 3.1 `protocol/fixtures/action.json`：加成功 / 工具栏结构不符 / 越界 / 用户消息行样例
-- [ ] 3.2 `src/lib/controls.test.ts`：原件取自存证（`evidenceHtml("message.toolbar")` 等）最小变形造「正常 / 用户行 / 少一颗 / 多一颗 / 朗读不在第 5 位 / aria-disabled / 越界」，覆盖 spec 的 11 个场景；对拍栅栏不红
-- [ ] 3.3 `pnpm quality` 绿
+- [x] 3.1 `protocol/fixtures/action.json`：加成功 / 工具栏结构不符 / 越界 / 用户消息行样例
+- [x] 3.2 `src/lib/controls.test.ts`：原件取自存证（`evidenceHtml("message.toolbar")` 等）最小变形造「正常 / 用户行 / 少一颗 / 多一颗 / 朗读不在第 5 位 / aria-disabled / 越界」，覆盖 spec 的 11 个场景；对拍栅栏不红
+- [x] 3.3 `pnpm quality` 绿
 
 ## 4. 真机点验（只点可逆、无外部副作用的）
 
