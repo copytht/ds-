@@ -36,9 +36,11 @@ import {
   readComposer,
   readComposerPresent,
   readPageState,
+  readSidebar,
   readSearch,
   readThink,
   setSearch,
+  setSidebar,
   setThink,
   switchChat,
   typeComposer,
@@ -233,6 +235,9 @@ export default defineContentScript({
       // 会话切换（chat-switch-action）：先读列表拿 id，再按 id / 标题切。
       "chats.list": listChats,
       "chat.switch": switchChat,
+      // 侧栏开关（sidebar-toggle）：读写成对，同一个控件的两态。
+      "sidebar.get": readSidebar,
+      "sidebar.set": setSidebar,
       // 消息工具栏六项 + 代码块两项（message-and-code-actions）。
       ...CONTROL_ACTIONS,
       // 只读那批：读对话走 DOM（#20 口径），不碰站点的响应体。

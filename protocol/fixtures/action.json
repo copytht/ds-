@@ -359,6 +359,64 @@
       }
     },
     {
+      "name": "sidebar.get 成功",
+      "request": {
+        "action": "sidebar.get",
+        "params": {},
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "collapsed": false
+        }
+      }
+    },
+    {
+      "name": "sidebar.set 成功",
+      "request": {
+        "action": "sidebar.set",
+        "params": {
+          "collapsed": true
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "collapsed": true
+        }
+      }
+    },
+    {
+      "name": "sidebar.set 顶栏结构对不上",
+      "request": {
+        "action": "sidebar.set",
+        "params": {
+          "collapsed": true
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": false,
+        "error": "page-changed"
+      }
+    },
+    {
+      "name": "sidebar.set 参数不是布尔",
+      "request": {
+        "action": "sidebar.set",
+        "params": {
+          "collapsed": "yes"
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": false,
+        "error": "unknown-action"
+      }
+    },
+    {
       "name": "think.get 成功",
       "request": {
         "action": "think.get",

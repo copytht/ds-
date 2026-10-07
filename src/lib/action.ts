@@ -116,6 +116,8 @@ export const BACKOFF_GATED_ACTIONS: ReadonlySet<string> = new Set([
   "chat.new",
   // 切换会话：改页面状态是写；不动写作框、不「代你发言」，故不进 speak 闸。
   "chat.switch",
+  // 侧栏开关：改页面状态是写；不动写作框、不「代你发言」，故不进 speak 闸。
+  "sidebar.set",
   // 消息工具栏（除 retry 已在 speak 闸里）与代码块：点了会改页面 / 账号状态，是写；不动写作框。
   "message.copy",
   "message.like",

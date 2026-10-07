@@ -266,6 +266,89 @@ export function newChat(_frame: ActionFrame): Record<string, never> {
 }
 
 /**
+ * 侧栏开关（`frontend` spec「侧栏开关」）。**两态是同一个控件**：图标 `path` 不变，只是位置从
+ * 「展开：2 颗里第 2」变成「收起：3 颗里第 1」。顶栏图标键没有任何语义属性（无字、无 aria、无 title），
+ * 身份只靠位置——所以用结构不变量把「点错」变成「停下」：
+ *
+ * - 锚：「开启新对话」条目（同 `chat.new`）。它两态都在 DOM，收起时整块没有布局盒——**状态就看它**。
+ * - 顶栏图标键：锚的最近祖先里「无字、带 `ds-button--icon`、不在会话条目内、有布局盒」的图标键，
+ *   **以第一颗的父元素为顶栏组**，只数该父元素的直接子里的这类键（别处的——如会话列表里分组标题的
+ *   折叠小键——不参与，真机 2026-10-07 展开态下最近祖先里就有一颗）；展开必须恰好 2 颗取第 2、
+ *   收起必须恰好 3 颗取第 1。
+ * - 任一不符都当结构变了，`page-changed`、不点（点错会点到搜索或开出新会话）。
+ *
+ * 图标 `path`、屏幕坐标、哈希 class 都不作判据。
+ */
+const NEW_CHAT_LABEL = "开启新对话";
+const SIDEBAR_BUTTON_SELECTOR = '[role="button"].ds-button--icon';
+const CHAT_ROW_ANCESTOR = 'a[href^="/a/chat/s/"]';
+
+function newChatAnchor(): HTMLElement | null {
+  const entries = document.querySelectorAll<HTMLElement>('[tabindex="0"]');
+  return [...entries].find((entry) => (entry.textContent || "").trim() === NEW_CHAT_LABEL) ?? null;
+}
+
+function topIconButtons(root: ParentNode): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(SIDEBAR_BUTTON_SELECTOR)].filter(
+    (button) =>
+      (button.textContent || "").trim() === "" &&
+      button.closest(CHAT_ROW_ANCESTOR) === null &&
+      button.getClientRects().length > 0,
+  );
+}
+
+/** 当前是不是收起（锚没有布局盒）；锚不在回 `null`。 */
+function sidebarCollapsed(): boolean | null {
+  const anchor = newChatAnchor();
+  return anchor === null ? null : anchor.getClientRects().length === 0;
+}
+
+/** `sidebar.get`：`{ collapsed }`。锚找不到当控件不在。 */
+export function readSidebar(_frame: ActionFrame): { collapsed: boolean } {
+  const collapsed = sidebarCollapsed();
+  if (collapsed === null) {
+    throw new PageError(ACTION_ERROR_PAGE_CHANGED, `找不到「${NEW_CHAT_LABEL}」`);
+  }
+  return { collapsed };
+}
+
+/** 找开关键并做数量 / 位置校验；对不上就抛 `page-changed`。 */
+function sidebarToggleButton(collapsed: boolean): HTMLElement {
+  const anchor = newChatAnchor();
+  let root: HTMLElement | null = anchor?.parentElement ?? null;
+  while (root !== null && topIconButtons(root).length < 2) root = root.parentElement;
+  const all = root === null ? [] : topIconButtons(root);
+  const group = all[0]?.parentElement ?? null;
+  const buttons = all.filter((button) => button.parentElement === group);
+  const wantCount = collapsed ? 3 : 2;
+  if (buttons.length !== wantCount) {
+    throw new PageError(
+      ACTION_ERROR_PAGE_CHANGED,
+      `侧栏顶栏结构不符：${collapsed ? "收起" : "展开"}态顶栏组要恰好 ${wantCount} 颗图标键，实际 ${buttons.length} 颗`,
+    );
+  }
+  return (collapsed ? buttons[0] : buttons[1]) as HTMLElement;
+}
+
+/**
+ * `sidebar.set`：`{ collapsed: boolean }`。幂等（已在目标态不点不轮询）；点完走 `settleTo`，
+ * 回达成态。当前态由「开启新对话」锚判出，开关键的位置随之选定（收起取第 1 颗、展开取第 2 颗）。
+ */
+export async function setSidebar(frame: ActionFrame): Promise<{ collapsed: boolean }> {
+  const target = frame.params["collapsed"];
+  if (typeof target !== "boolean") {
+    throw new PageError(ACTION_ERROR_UNKNOWN, "collapsed 必须是布尔");
+  }
+  const current = readSidebar(frame).collapsed;
+  if (current === target) return { collapsed: target };
+  sidebarToggleButton(current).click();
+  const reached = await settleTo(sidebarCollapsed, target);
+  if (reached === null)
+    throw new PageError(ACTION_ERROR_PAGE_CHANGED, `找不到「${NEW_CHAT_LABEL}」`);
+  return { collapsed: reached };
+}
+
+/**
  * 侧栏会话条目：`a[href^="/a/chat/s/"]`，**`href` 末段即会话 id**。标题取条目的
  * `textContent`（「更多」按钮只有 svg 没有字，所以整条去空白就是标题）——不靠哈希 class。
  * 真机口径见存证 `sidebar.chat-row`（2026-10-07）。
@@ -349,17 +432,26 @@ function readToggleOption(label: string): { enabled: boolean } {
   return { enabled: readToggleState(el) };
 }
 
-/** 点完等开关稳定的上限与轮询间隔（毫秒）。真机观察站点是几百毫秒内更新 `aria-pressed`（#81）。 */
+/** 点完等控件稳定的上限与轮询间隔（毫秒）。真机观察站点是几百毫秒内更新状态（#81）。 */
 export const TOGGLE_SETTLE_MS = 1500;
 export const TOGGLE_POLL_MS = 50;
 
 /**
- * 把一个开关拨到目标态。**幂等**：已在目标态就不点、不轮询（点了反而拨反）。
- *
- * 点完 **等它稳定**再回**达成态**：每 `TOGGLE_POLL_MS` 读一次 `aria-pressed`，到目标态立刻收，
- * 超过 `TOGGLE_SETTLE_MS` 就按当时读到的收（上限内站点不拨就当被拒，回未变的值）。
+ * 点完 **等它稳定**再回**达成态**：每 `TOGGLE_POLL_MS` 读一次，到目标态立刻收，超过
+ * `TOGGLE_SETTLE_MS` 就返回当时读到的值（上限内站点不动就当被拒，回未变的值）。
  * 站点可能拒它或**异步生效**——回目标态会说谎，**点完立刻读又会把「还没生效」误报成「被拒」**（#81）。
- * 超时不抛：「站点拒」与「等不到」对开关而言下一步相同（再 `get` 一次看真值）。
+ * 超时不抛：「站点拒」与「等不到」下一步相同（再读一次看真值）。两个小开关与侧栏开关共用这一处。
+ */
+async function settleTo<T>(read: () => T, target: T): Promise<T> {
+  for (let waited = 0; waited < TOGGLE_SETTLE_MS; waited += TOGGLE_POLL_MS) {
+    if (read() === target) return target;
+    await new Promise((resolve) => setTimeout(resolve, TOGGLE_POLL_MS));
+  }
+  return read();
+}
+
+/**
+ * 把一个开关拨到目标态。**幂等**：已在目标态就不点、不轮询（点了反而拨反）；点完走 `settleTo`。
  *
  * `enabled` 非布尔当认不出形状（与主开关 `toggle.set` 同一口径），别把 `"false"`
  * 这种字符串按真值收下。
@@ -373,11 +465,7 @@ async function setToggleOption(label: string, frame: ActionFrame): Promise<{ ena
   if (el === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, `找不到「${label}」开关`);
   if (readToggleState(el) === enabled) return { enabled };
   el.click();
-  for (let waited = 0; waited < TOGGLE_SETTLE_MS; waited += TOGGLE_POLL_MS) {
-    if (readToggleState(el) === enabled) return { enabled };
-    await new Promise((resolve) => setTimeout(resolve, TOGGLE_POLL_MS));
-  }
-  return { enabled: readToggleState(el) };
+  return { enabled: await settleTo(() => readToggleState(el), enabled) };
 }
 
 /** `think.get` / `think.set`：深度思考开关。 */
