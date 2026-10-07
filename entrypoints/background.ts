@@ -17,6 +17,7 @@ import {
   parseAskClearedReport,
   parseAskReport,
   parseStopReport,
+  parseContinuationFailReport,
   parseSendRequest,
   parseSaidReport,
   parseToolsRequest,
@@ -799,6 +800,15 @@ export default defineBackground(() => {
     if (stop !== null) {
       console.log(`[ds-] 页面报停手：${stop.cause}`);
       recordFailure("rounds", describeStop(stop.cause));
+      return undefined;
+    }
+    // 续聊这一跳失败（#51）：发不出去、正文换不进去、钥匙不符…此前只有控制台
+    // 一行，扩展侧答不出「为什么这轮工具结果没回到模型手上」。cause 已是短句，
+    // 这里只落痕（正文进不来，ADR-0004）。
+    const continuationFail = parseContinuationFailReport(message);
+    if (continuationFail !== null) {
+      console.log(`[ds-] 页面报续聊失败：${continuationFail.cause}`);
+      recordFailure("continuation", continuationFail.cause);
       return undefined;
     }
     // 账号处境上报（#2）：记下最新值并上屏，悬停才说得出「禁言至何时」。

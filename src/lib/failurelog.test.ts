@@ -30,6 +30,12 @@ describe("readFailureLog · 存储是外部输入", () => {
     expect(readFailureLog({ at: 1 })).toEqual([]);
   });
 
+  it("续聊环节能读回（#51 新加的环节在判据与标签表里都对齐）", () => {
+    expect(readFailureLog([{ at: 1, where: "continuation", cause: "没找到输入框" }])).toEqual([
+      { at: 1, where: "continuation", cause: "没找到输入框" },
+    ]);
+  });
+
   it("长得不对的一条条丢掉，不猜也不补", () => {
     const records = readFailureLog([
       healthFailure(1),
@@ -143,6 +149,7 @@ describe("describeLastFailure · 一句里答得出三件事", () => {
     expect(where({ at, where: "call", cause: "x" })).toContain("工具调用");
     expect(where({ at, where: "watchdog", cause: "x" })).toContain("看门狗");
     expect(where({ at, where: "rounds", cause: "x" })).toContain("续聊刹车");
+    expect(where({ at, where: "continuation", cause: "没找到输入框" })).toContain("续聊");
   });
 
   it("册子外的环节名不进记录（免得悬停印出 undefined）", () => {

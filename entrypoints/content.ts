@@ -13,6 +13,7 @@ import {
   parseToolsResponse,
   resultMessage,
   saidReportMessage,
+  continuationFailReportMessage,
   stopReportMessage,
   toolsMessage,
   toolsRequestMessage,
@@ -21,6 +22,7 @@ import {
   type AskClearedMessage,
   type AskMessage,
   type CallMessage,
+  type ContinuationFailMessage,
   type SaidMessage,
   type StopMessage,
 } from "../src/lib/channel";
@@ -130,6 +132,17 @@ export default defineContentScript({
       }
     };
 
+    /** 续聊这一跳失败：报给 background 落一笔失败痕（#51），不进对话流。 */
+    const reportContinuationFail = async (fail: ContinuationFailMessage): Promise<void> => {
+      try {
+        await browser.runtime.sendMessage(
+          continuationFailReportMessage(fail.id, fail.cause, pageSessionIdOf(location.href)),
+        );
+      } catch (error) {
+        console.log("[ds-] 续聊失败上报没有送出去", error);
+      }
+    };
+
     /**
      * 工具目录同步（协议说明要照着它拼）：总开关开着时 60s 问 background 要一次，
      * 取到就广播给页面世界；没取到（网关没连上）一声不吭——页面世界沿用上一份，
@@ -207,6 +220,10 @@ export default defineContentScript({
       }
       if (chain?.kind === "stop") {
         void reportStop(chain);
+        return;
+      }
+      if (chain?.kind === "continuation-fail") {
+        void reportContinuationFail(chain);
         return;
       }
 
