@@ -331,6 +331,69 @@ MUST NOT 按 `pressed` 动态放行。
 - **WHEN** 登记或实现一个新的页面动作 / 候补
 - **THEN** 同批在 `controls.json` 加一条存证；**不许先写一句文字描述占位**
 
+### Requirement: 会话切换与会话列表
+
+名册 SHALL 含只读动作 `chats.list` 与写动作 `chat.switch`，两者按 `href` 里的会话 id 对应侧栏会话条目
+（`a[href^="/a/chat/s/"]`，id 为 `href` 末段）。定位 MUST NOT 用哈希 class；标题取条目的 `textContent`
+（去前后空白）。
+
+- `chats.list` SHALL 只读，返回 `{ chats: [{ id, title, current }] }`，按侧栏自上而下的顺序；
+  `current` 为该条 `href` 等于当前 `location.pathname`。不受任何闸。
+- `chat.switch` SHALL 接受 `{ id }` 或 `{ title }`——**恰好其一且为非空字符串**，否则回 `unknown-action`。
+  命中 0 条回 `page-changed`；`title` 命中多于 1 条回 `unknown-action`（歧义是参数的问题，
+  调用方改用 `id`）；命中恰好 1 条就点它，返回 `{}`。`chat.switch` SHALL 进「退避」闸，MUST NOT
+  进「代你发言」闸。
+
+#### Scenario: 列出会话
+
+- **WHEN** 侧栏有若干会话条目而 agent 发 `chats.list`
+- **THEN** 回 `{ chats: [...] }`，每条带 `id`（href 末段）、`title`、`current`；同名会话各占一条，靠 `id` 区分
+
+#### Scenario: 侧栏上没有会话条目
+
+- **WHEN** `chats.list` 到达而页面上一条 `a[href^="/a/chat/s/"]` 都没有
+- **THEN** 回 `{ chats: [] }`，不算错（与 `messages.list` 对新对话的口径一致）
+
+#### Scenario: 按 id 切换
+
+- **WHEN** agent 发 `chat.switch`，`params` 为 `{ id: "<uuid>" }` 而侧栏有 `href` 末段等于它的条目
+- **THEN** 点那一条，回 `{}`；调用方用 `page.state` 的 `url` 核实落点
+
+#### Scenario: 按标题切换且标题唯一
+
+- **WHEN** `params` 为 `{ title: "..." }` 而侧栏恰好一条条目标题与它相等
+- **THEN** 点那一条，回 `{}`
+
+#### Scenario: 标题重名
+
+- **WHEN** `params` 为 `{ title: "..." }` 而侧栏有多于一条同名条目
+- **THEN** 回 `unknown-action`，**不点任何一条**（宁可拒绝也不替人选一个）
+
+#### Scenario: 找不到那一条
+
+- **WHEN** `params` 里的 `id` 或 `title` 在侧栏上命中 0 条
+- **THEN** 回 `page-changed`，不点
+
+#### Scenario: 参数形状不对
+
+- **WHEN** `id` 与 `title` 都没给、都给了、或不是非空字符串
+- **THEN** 回 `unknown-action`，不点
+
+#### Scenario: 切到当前会话
+
+- **WHEN** 命中的那一条就是当前所在会话
+- **THEN** 不点，回 `{}`（幂等，同 `think.set` 已在目标态就不动）
+
+#### Scenario: 退避期点不了
+
+- **WHEN** 账号在退避期而 agent 发 `chat.switch`
+- **THEN** 回 `backing-off`；`chats.list` 不受影响，照样读得出
+
+#### Scenario: 总开关关着或「代你发言」闸关着
+
+- **WHEN** 总开关关着而 agent 发 `chat.switch`
+- **THEN** 回 `disabled`；而「代你发言」闸关着 MUST NOT 影响 `chat.switch`（它不动写作框）
+
 ### Requirement: 页面动作的候补控件只登记、不进名册
 
 页面上**不在**名册里的控件 SHALL 按「建议动作名 / 定位（真机实测）/ 返回形状」三列登记成
@@ -343,7 +406,7 @@ MUST NOT 按 `pressed` 动态放行。
 候补 SHALL 等真机确认后再升级，MUST NOT 凭文档里「待真机确认」的选择器直接上真机写执行器。
 **用途未认出的控件 SHALL 记「待查」并写下线索，MUST NOT 硬编一个动作名。**
 真机证据以 2026-10-06 爬取为准（`scripts/page-action.py`，会话 `976c5618`）；`chat.switch` 一项为
-2026-10-07 实测。
+2026-10-07 实测，**已实现并转入 v1 名册**（见「会话切换与会话列表」）。
 
 #### Scenario: 登记一个候选控件
 
@@ -389,14 +452,10 @@ MUST NOT 按 `pressed` 动态放行。
 #### Scenario: 切换会话 `chat.switch`（真机 2026-10-07 实测）
 
 - **WHEN** 想让 agent 自主切换到另一条会话继续
-- **THEN** 登记 `chat.switch`，定位口径：侧栏条目 `a[href^="/a/chat/s/"]`，**`href` 末段即会话 id**
-  （形如 `/a/chat/s/{uuid}`）；标题取条目内文本，**不靠哈希 class**（真机的标题容器是 `div.c08e6e93`，
-  属哈希）。返回形状按写动作记 `{}`。
-  **形状陷阱**：条目内嵌一颗 hover 才显形的「更多」按钮，与消息工具栏那批同形按钮一致
-  （`ds-button--iconLabelTertiary … _2090548`），所以这条存证是 `state-bound`，不是常驻。
-  **参数取舍**：标题可读但会重名（真机侧栏有 5 条同名「列出工作目录文件」），会话 id 唯一但不好
-  从人话里推——两个都收，实现时按标题匹配后回读 `location.href` 核实落到了哪条。
-  **只登记、不进名册**：切换会改页面状态，实现时须过「写动作登记闸门」并登记退避。
+- **THEN** **已实现，不再是候补**：`chat.switch` 与配套的只读 `chats.list` 进了 v1 名册，契约见
+  「会话切换与会话列表」。当时的真机口径保留为依据：侧栏条目 `a[href^="/a/chat/s/"]`，`href` 末段即
+  会话 id；条目内嵌一颗 hover 才显形的「更多」按钮（与消息工具栏同形），所以存证 `sidebar.chat-row`
+  是 `state-bound`。
 
 #### Scenario: 模型选择（真机 2026-10-06 实测）
 
@@ -406,9 +465,9 @@ MUST NOT 按 `pressed` 动态放行。
 #### Scenario: 为什么这些项只是登记（v1 名册边界）
 
 - **WHEN** 问候补为什么没进 v1
-- **THEN** v1 名册（`ACTION_ROSTER`）已含：`think.get/set`、`search.get/set`、`button.get/click`、`send.enter`、`chat.new`、`wait.fence/reply`、`messages.list/last`、`composer.read/type/clear`、`tabs.list`、`page.state`——这些都有执行器、四处对齐、测试过。
-  候补项（消息工具栏六项、代码块两项、附件上传、页头分享、侧栏两项、`chat.switch`）
-  **需要索引参数 / 文件数据 / 改动页面状态 / 改动面大**，改动与误伤面都大——理由记在候补里，
+- **THEN** v1 名册（`ACTION_ROSTER`）已含：`think.get/set`、`search.get/set`、`button.get/click`、`send.enter`、`chat.new`、`chat.switch`、`chats.list`、`wait.fence/reply`、`messages.list/last`、`composer.read/type/clear`、`tabs.list`、`page.state`——这些都有执行器、四处对齐、测试过。
+  候补项（消息工具栏六项、代码块两项、附件上传、页头分享、侧栏两项）
+  **需要索引参数 / 文件数据 / 改动面大**，改动与误伤面都大——理由记在候补里，
   **等真机存证对拍（ADR-0018）落地后再考虑实现**。
 
 #### Scenario: 候补项要上真机
