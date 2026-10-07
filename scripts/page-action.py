@@ -564,7 +564,8 @@ TEST_TOGGLES = (("think", "深度思考"), ("search", "智能搜索"))
 def toggles_off(args: argparse.Namespace) -> int:
     """把深度思考与智能搜索都拨到关（测试环境的已知起点）。
 
-    幂等：先读，已关的不动；开着的才点，**点之前照常限速**，点完回读核实（站点可能拒）。
+    幂等：先读，已关的不动；开着的才点，**点之前照常限速**；
+    `.set` 自己等站点稳定再回达成态（#81），据此核实。
     写作框不在（没登录 / 被禁言 / 页面没加载完）时报明原因并返回 1，不硬点。
     """
     state = poll_state(lambda one: bool(one.get("composer")), timeout=args.wait)
@@ -584,15 +585,12 @@ def toggles_off(args: argparse.Namespace) -> int:
             print(f"[toggles-off] {label}：已是关")
             continue
         pace(args.pace, no_pace=args.no_pace)
+        # `.set` 点完会等站点稳定再回达成态（#81），所以直接信它的返回；不再自己轮询 `.get`——
+        # 那样执行器哪天又坏了，这里照样绿，把回归藏起来。
         done = parse_outcome(send_action(f"{action}.set", {"enabled": False}))
-        # `.set` 点完立刻回读，站点是异步生效的，那一读常是旧值；这里等到真关上再认。
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            now = parse_outcome(send_action(f"{action}.get", {}))
-            if now.get("ok") and now["result"].get("enabled") is False:
-                print(f"[toggles-off] {label}：开→关")
-                break
-            time.sleep(0.5)
+        achieved = done.get("result", {}).get("enabled") if done.get("ok") else None
+        if achieved is False:
+            print(f"[toggles-off] {label}：开→关")
         else:
             print(f"[toggles-off] {label}：没关上 {json.dumps(done, ensure_ascii=False)}")
             code = 1
@@ -615,18 +613,19 @@ def first_difference(saved: str, live: str, context: int = 60) -> str:
 def reconcile_entry(entry: dict, live: object) -> tuple[str, str]:
     """一条存证对一次站点读数的结论：(状态, 说明)。状态：一致 / 过时 / 未比。
 
-    `live` 条目不逐字相等就是「站点改版，存证过时」；`state-bound` 条目只在某个态出现，
-    不等只能说「当前态不符、未比」——不算过时，免得一个瞬态把整本账报红。
+    `live` 条目**读到了那一颗**而不逐字相等，才是「站点改版，存证过时」。
+    `state-bound` 条目只在某个态出现，不等只能说「当前态不符、未比」——不算过时。
+    **读不到那一颗（probe 返回 null）一律「未比」**：页面可能根本不在对应的地方（首页没有消息行、
+    没有代码块），把它报成「过时」会让每次换页都满屏误报；站点真把控件删了，也会表现为
+    换到有该控件的页面后仍读不到，由人看「未比」数是否异常。
     """
     saved = entry["outerHTML"]
     if live == saved:
         return "一致", ""
-    bound = entry.get("reconcile") == "state-bound"
     if not isinstance(live, str):
-        detail = "站点上当前找不到这一颗（probe 返回 null）"
-    else:
-        detail = first_difference(saved, live)
-    if bound:
+        return "未比", "当前页面找不到这一颗（probe 返回 null）：换到有这个控件的页面再比"
+    detail = first_difference(saved, live)
+    if entry.get("reconcile") == "state-bound":
         return "未比", f"当前态不符、未比：{detail}"
     return "过时", f"站点改版，存证过时：{detail}"
 
