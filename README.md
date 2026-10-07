@@ -18,7 +18,10 @@
 ````
 
 一圈的交互图（archify 生成，源文件在同目录）：
-[自动续聊：一圈是怎么转的](docs/diagrams/continuation-round.html)
+
+![自动续聊：一圈是怎么转的](docs/diagrams/continuation-round.png)
+
+<sub>交互版（可缩放、悬浮看细节）：[HTML](docs/diagrams/continuation-round.html) · [JSON 源文件](docs/diagrams/continuation-round.json)</sub>
 
 中继完全被动：不推送、不轮询、无会话、一条 CORS 头都不下发；只有 background 打网络。
 
