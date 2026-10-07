@@ -22,4 +22,4 @@
 ## 4. 收尾
 
 - [x] 4.1 `openspec validate --all --archived --strict` 绿；提交、开 PR（`Fixes #81`）、CI 绿后合并、删分支
-- [ ] 4.2 归档本 change（delta 同步进 `site-dom` 主 spec）
+- [x] 4.2 归档本 change（delta 同步进 `site-dom` 主 spec）

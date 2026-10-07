@@ -303,8 +303,10 @@ MUST NOT 直接回空数组（那是拿「没就绪」冒充「空对话」）�
 
 状态 SHALL 只认 `aria-pressed === "true"` 为开，**别的一律算关**（不认 `data-*`、不看样式）。
 
-`set` SHALL **幂等**：已在目标态就不点（点了反而拨反）；点完 SHALL 再读一次回**达成态**——
-站点可能拒绝或异步生效，回目标态会说谎。`params.enabled` 非布尔时 SHALL 判形状认不出、
+`set` SHALL **幂等**：已在目标态就不点（点了反而拨反）；点完 SHALL **等它稳定**再读，回**达成态**——
+站点可能拒绝或异步生效，回目标态会说谎，**点完立刻读又会把「还没生效」误报成「被拒」**。
+「等它稳定」= 轮询 `aria-pressed`，到目标态就收，或超过 1500ms 上限就按当时读到的收（上限内站点不拨就当被拒）。
+`params.enabled` 非布尔时 SHALL 判形状认不出、
 回 `unknown-action`，MUST NOT 把 `"false"` 这种字符串按真值收下（与主开关 `toggle.set`
 同一口径）。
 
@@ -320,8 +322,13 @@ MUST NOT 直接回空数组（那是拿「没就绪」冒充「空对话」）�
 
 #### Scenario: 站点拒了这一拨
 
-- **WHEN** 点过之后 `aria-pressed` 仍是关的
-- **THEN** 返回 `{ enabled: false }`（达成态），MUST NOT 返回想要的目标态
+- **WHEN** 点过之后 `aria-pressed` 一直是关的，直到上限
+- **THEN** 等满上限后返回 `{ enabled: false }`（达成态），MUST NOT 返回想要的目标态
+
+#### Scenario: 站点异步生效
+
+- **WHEN** `think.set` 收到 `{ enabled: true }`，点过之后 `aria-pressed` 要过一小会儿（上限内）才变成开
+- **THEN** 等到它变成开就返回 `{ enabled: true }`，MUST NOT 在点完那一刻就读出旧值、报成 `{ enabled: false }`
 
 #### Scenario: `enabled` 传了字符串
 
