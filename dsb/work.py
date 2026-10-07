@@ -2,10 +2,14 @@
 
 给网页模型一套能动手改本机文件的工作面，但**不给 SHELL**——任意命令天生能越界，与
 「全部动作钉死在一个工作文件夹 root 内」冲突。五件工具全部把路径 ``resolve()`` 后判在
-root 内，越界当场拒绝（``out-of-root``），相对路径以 root 为基准；写/改只额外拒 ``.git/``。
+root 内，越界当场拒绝（``out-of-root``），相对路径以 root 为基准。
 
-模块自己一件事：路径沙箱与五件工具的**纯逻辑**（对 ``root: Path`` 的函数），与 MCP 信封
-解耦。``work_tools(root)`` 是唯一的薄适配层，把纯函数包成
+root 内还有一层**权限规则**（:mod:`dsb.permissions`，#89）：按操作分类、最后一条命中的
+规则赢，默认拒读写 ``mcp.json`` 与 ``.env`` 系文件，写/改另拒 ``.git/``。原先 ``.git/``
+是写死在代码里的一条特例，现已收进那张表。
+
+模块自己一件事：路径沙箱、权限规则与五件工具的**纯逻辑**（对 ``root: Path`` 的函数），
+与 MCP 信封解耦。``work_tools(root)`` 是唯一的薄适配层，把纯函数包成
 ``参数 -> (载荷, 这算不算失败)`` 的处理器（见 :class:`dsb.mcp.Tool`）。dsb 只在
 :func:`dsb.server.build_tools` 一处挂上它——将来换实现或挪进程，只动那一行。
 
@@ -22,8 +26,9 @@ from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
-from dsb.config import env_value, repo_root
+from dsb.config import env_value, find_dotenv, repo_root
 from dsb.mcp import Tool
+from dsb.permissions import Operation, is_allowed
 
 #: 工作文件夹 root 的配置键：进程环境变量优先，其次 ``.env``，最后本仓根。
 WORK_ROOT_ENV_KEY = "DSB_WORK_ROOT"
@@ -50,7 +55,16 @@ ERROR_BAD_REGEX = "bad-regex"
 ERROR_IO_FAILED = "io-failed"
 
 #: 只写不读的护栏：``<root>/.git`` 之下（含 ``.git`` 本身、worktree 里 ``.git`` 是文件也算）。
+#: #89 起它是 :data:`dsb.permissions.DEFAULT_RULES` 里 ``edit`` 那份表的一条规则
+#: （``.git`` / ``.git/*`` deny），这里只留字面量给遍历时裁目录用。
 PROTECTED_DIR = ".git"
+
+#: dsb 实际会去读的那两个本机配置文件（#89）：默认在仓根，但都能被配置改到别处。
+#: 保护的是**真实生效的那两个文件**，不只是名字——落在 root 内它们同样读写都拒。
+#: ``DSB_MCP_CONFIG`` 指向的中继配置由 :mod:`dsb.gateway` 解析，``.env`` 由
+#: :func:`dsb.config.env_value` 读（root 解析也走它）。
+MCP_CONFIG_ENV_KEY = "DSB_MCP_CONFIG"
+ENV_FILE_NAME = ".env"
 
 Payload = dict[str, Any]
 
@@ -102,8 +116,8 @@ def _inside(root_real: Path, resolved: Path) -> bool:
     return resolved == root_real or root_real in resolved.parents
 
 
-def protected_git(root: Path, resolved: Path) -> bool:
-    """``resolved`` 是否在 ``<root>/.git`` 之下（含 ``.git`` 本身）。读侧不拦，只写/改拦。
+def root_relative(root: Path, resolved: Path) -> str | None:
+    """``resolved`` 的**根相对 POSIX 路径**（权限规则比对的输入）；不在 root 内回 ``None``。
 
     两侧现各解析一次：``resolved`` 正常已由 :func:`resolve_in_root` 归一，这里再兜一层，
     免得调用方递来未归一的路径（``/var`` 与 ``/private/var`` 这类）时护栏**静默放行**。
@@ -111,8 +125,71 @@ def protected_git(root: Path, resolved: Path) -> bool:
     try:
         relative = resolved.resolve().relative_to(root.resolve())
     except (ValueError, OSError, RuntimeError):
+        return None
+    return relative.as_posix()
+
+
+def _effective_sensitive(root: Path) -> tuple[Path, ...]:
+    """dsb **真实生效**的那两个本机配置文件的绝对路径（可能不在 root 内，不做拦截）。
+
+    ``mcp.json`` 走 :data:`MCP_CONFIG_ENV_KEY`（未配置时是仓根那个，与
+    :func:`dsb.gateway` 同一口径），``.env`` 走 :func:`dsb.config.find_dotenv`
+    （先当前目录、再仓根）。两者被配置改到别处时，护栏跟过去：**保护的是那两个真文件，
+    不只是「叫这个名字的文件」**。
+    """
+    root_real = root.resolve()
+    mcp_raw = os.environ.get(MCP_CONFIG_ENV_KEY)
+    if mcp_raw is None:
+        dotenv = find_dotenv()
+        if dotenv is not None:
+            try:
+                mcp_raw = env_value(dotenv.read_text(encoding="utf-8"), MCP_CONFIG_ENV_KEY)
+            except OSError:
+                mcp_raw = None
+    mcp_path = Path(mcp_raw).expanduser() if mcp_raw else root_real / "mcp.json"
+    sensitive = [mcp_path.resolve(), root_real / ENV_FILE_NAME]
+    dotenv = find_dotenv()
+    if dotenv is not None:
+        sensitive.append(dotenv.resolve())
+    return tuple(dict.fromkeys(sensitive))
+
+
+def is_protected(root: Path, resolved: Path, operation: Operation) -> bool:
+    """这个操作对这条路径**允不允许**（#89）。不允许时调用方回 ``protected-path``。
+
+    三层，顺序即代价从低到高：
+
+    1. **规则表**（:mod:`dsb.permissions`）：根相对 POSIX 路径 + 操作类别，
+       最后命中的规则赢，大小写不敏感；
+    2. **真实生效的本机配置**：``mcp.json``（或 ``DSB_MCP_CONFIG`` 指的那个）与 ``.env``，
+       即便名字或位置与默认不同、即便 root 被配成别处，落在 root 内一律读写都拒；
+    3. 路径不在 root 内 → 这里不判（那是 :func:`resolve_in_root` 的 ``out-of-root``）。
+    """
+    relative = root_relative(root, resolved)
+    if relative is None:
         return False
-    return relative.parts[:1] == (PROTECTED_DIR,)
+    if not is_allowed(operation, relative):
+        return True
+    try:
+        target = resolved.resolve()
+        if target in _effective_sensitive(root):
+            return True
+    except (OSError, RuntimeError):
+        return False
+    return False
+
+
+def protected_git(root: Path, resolved: Path) -> bool:
+    """``resolved`` 是否在 ``<root>/.git`` 之下（含 ``.git`` 本身）。读侧不拦，只写/改拦。
+
+    #89 之后是 :func:`is_protected` 的一个薄壳（走 ``edit`` 那份规则表），留这个名字是
+    因为既有测试与遍历裁剪都在用。
+    """
+    return (
+        is_protected(root, resolved, "edit")
+        and root_relative(root, resolved) is not None
+        and root_relative(root, resolved).split("/")[0] == PROTECTED_DIR
+    )
 
 
 def _require_root(root: Path) -> None:
@@ -148,9 +225,15 @@ def list_dir(root: Path, raw: str = ".") -> str:
 
 
 def read_text(root: Path, raw: str) -> str:
-    """``read``：读 root 内一个文件；超 :data:`WORK_READ_LIMIT` 截断并标注。"""
+    """``read``：读 root 内一个文件；超 :data:`WORK_READ_LIMIT` 截断并标注。
+
+    受 ``read`` 那份规则表管（#89）：``mcp.json`` 与 ``.env`` 系文件读不出来——读出来的
+    内容会**随回灌进对话，也就是发给站点**。
+    """
     _require_root(root)
     path = resolve_in_root(root, raw)
+    if is_protected(root, path, "read"):
+        raise WorkError(ERROR_PROTECTED, detail=f"路径 {raw}（读侧受保护）")
     if not path.exists():
         raise WorkError(ERROR_NOT_FOUND, detail=f"路径 {raw}")
     if not path.is_file():
@@ -168,10 +251,13 @@ def read_text(root: Path, raw: str) -> str:
 
 
 def write_text(root: Path, raw: str, content: str) -> int:
-    """``write``：在 root 内新建/覆盖文件（自动建父目录），回写入的字节数。"""
+    """``write``：在 root 内新建/覆盖文件（自动建父目录），回写入的字节数。
+
+    受 ``edit`` 那份规则表管（#89）：``.git/`` 与 ``mcp.json`` / ``.env`` 系文件写不进去。
+    """
     _require_root(root)
     path = resolve_in_root(root, raw)
-    if protected_git(root, path):
+    if is_protected(root, path, "edit"):
         raise WorkError(ERROR_PROTECTED, detail=f"路径 {raw}")
     if path.is_dir():
         raise WorkError(ERROR_NOT_A_FILE, detail=f"路径 {raw}")
@@ -184,10 +270,13 @@ def write_text(root: Path, raw: str, content: str) -> int:
 
 
 def edit_text(root: Path, raw: str, old_string: str, new_string: str) -> int:
-    """``edit``：``old_string`` 在文件里**唯一命中**才替换；0 处/多处回错码且文件不变。"""
+    """``edit``：``old_string`` 在文件里**唯一命中**才替换；0 处/多处回错码且文件不变。
+
+    受 ``edit`` 那份规则表管（#89），与 :func:`write_text` 同一份表。
+    """
     _require_root(root)
     path = resolve_in_root(root, raw)
-    if protected_git(root, path):
+    if is_protected(root, path, "edit"):
         raise WorkError(ERROR_PROTECTED, detail=f"路径 {raw}")
     if not path.exists():
         raise WorkError(ERROR_NOT_FOUND, detail=f"路径 {raw}")
@@ -212,7 +301,11 @@ def edit_text(root: Path, raw: str, old_string: str, new_string: str) -> int:
 
 
 def _walk_files(base: Path) -> Iterator[Path]:
-    """``base`` 下的文件（不跟符号链接目录，遍历时跳过 ``.git``）。"""
+    """``base`` 下的文件（不跟符号链接目录，遍历时跳过 ``.git``——纯为省时间）。
+
+    内容侧的拦截不在这里：``grep`` 逐个文件套 ``read`` 规则表（#89），那才是决定
+    「读不读」的地方。
+    """
     for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
         dirnames[:] = sorted(name for name in dirnames if name != PROTECTED_DIR)
         for name in sorted(filenames):
@@ -222,7 +315,10 @@ def _walk_files(base: Path) -> Iterator[Path]:
 def grep_tree(root: Path, pattern: str, raw: str = ".") -> str:
     """``grep``：在 root 内按正则搜文本行，回 ``相对路径:行号: 行``。
 
-    有上限、跳二进制与 ``.git/``（体积/噪音）。
+    有上限、跳二进制；**对每个文件套 ``read`` 那份规则表**，命中 deny 就跳过（#89）——
+    ``mcp.json`` / ``.env`` 的内容**一个字都不进结果**，哪怕模式正好命中里面的某行。
+
+    ``ls`` 仍如实列出这些文件的名字（只拦内容、不隐藏存在，与 opencode 一致）。
     """
     _require_root(root)
     try:
@@ -241,7 +337,7 @@ def grep_tree(root: Path, pattern: str, raw: str = ".") -> str:
             resolved = file.resolve()  # 逐个再解析：别让 root 内指向外面的符号链接漏读
         except (OSError, RuntimeError):
             continue
-        if not _inside(root_real, resolved) or protected_git(root, resolved):
+        if not _inside(root_real, resolved) or is_protected(root, resolved, "read"):
             continue
         try:
             if resolved.stat().st_size > WORK_FILE_LIMIT:
@@ -398,7 +494,11 @@ __all__ = [
     "ERROR_NOT_FOUND",
     "ERROR_OUT_OF_ROOT",
     "ERROR_PROTECTED",
+    "ENV_FILE_NAME",
+    "MCP_CONFIG_ENV_KEY",
     "PROTECTED_DIR",
+    "is_protected",
+    "root_relative",
     "WORK_FILE_LIMIT",
     "WORK_GREP_LIMIT",
     "WORK_LINE_LIMIT",
