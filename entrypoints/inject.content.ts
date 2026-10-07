@@ -31,6 +31,8 @@ import {
   disarm,
   expireIfStale,
   idleArmed,
+  matchesMarker,
+  pend as pendState,
   type ArmedState,
 } from "../src/lib/armed";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
@@ -117,6 +119,12 @@ export default defineContentScript({
      * 不迁状态、不写 DOM 属性。
      */
     let sendPace: SendPace = newSendPace();
+
+    /**
+     * 「代你发言」闸（#52）：隔离世界广播过来的，默认关（关 = 续聊只落草稿、等用户按）。
+     * 勾选即时生效——选项页改 `storage`，那边立刻再广播一次。
+     */
+    let speak = false;
 
     /** 上一次见过的页面会话 id：换了会话 = 换了条任务，轮数归零。 */
     let sessionKey: string | null = null;
@@ -215,6 +223,39 @@ export default defineContentScript({
       return rewriteOutgoing(body);
     };
 
+    /**
+     * 半自动那一跳（#52）：「代你发言」闸关着时，把短标记**写进输入框**、**不按发送**，
+     * 等用户自己按。
+     *
+     * 三个结果分得清清楚楚（每一件都留痕，见 `continuationfail.ts`）：
+     *
+     * - 找不到输入框 → `composer-absent`；
+     * - **输入框里有你的草稿** → **不覆盖**，`draft-in-composer`（宁可少一轮，也不吃人
+     *   正在打的东西——这与「宁可少一轮，也不能吃人说的话」是同一条原则）；
+     * - 写不进去 → `composer-unwritable`。
+     *
+     * 返回 true 表示标记已经落在输入框里（pending 态可以挂着等用户按）。
+     */
+    function stagePendingMarker(): boolean {
+      const composer = pickComposer();
+      if (composer === null) {
+        reportContinuationFailure("composer-absent");
+        return false;
+      }
+      const draft = readComposer(composer);
+      if (draft.trim() !== "" && !matchesMarker(draft)) {
+        console.log("[ds-] 输入框里还有你正在打的字，这一轮不覆盖");
+        reportContinuationFailure("draft-in-composer");
+        return false;
+      }
+      if (!writeComposer(composer, CONTINUATION_MARKER)) {
+        reportContinuationFailure("composer-unwritable");
+        return false;
+      }
+      console.log("[ds-] 「代你发言」闸关着：短标记已写进输入框，等你按发送");
+      return true;
+    }
+
     /** 排下一次开窗：队列空着就不排。 */
     function scheduleFlush(): void {
       const at = nextOpenAt(gate);
@@ -233,9 +274,17 @@ export default defineContentScript({
         // 早武装就会把他的真消息换成工具结果。
         const isContinuation = queuedContinuation !== null && message === CONTINUATION_MARKER;
         if (isContinuation && queuedContinuation !== null) {
-          // armed 态（有 TTL）。#52 起，闸关着时这里会改挂 pending 态（无 TTL）。
-          armed = armState(queuedContinuation, Date.now());
+          const continuation = queuedContinuation;
           queuedContinuation = null;
+          if (speak) {
+            // 闸开着：照旧自动发（armed 态，有 TTL）。
+            armed = armState(continuation, Date.now());
+          } else {
+            // 闸关着（#52）：**只写进输入框，不按发送**。正文挂 pending 态等用户自己
+            // 按——没有期限（钥匙使时间不再是安全判据），单槽，新一轮顶掉旧的。
+            armed = pendState(continuation);
+            if (!stagePendingMarker()) armed = idleArmed();
+          }
         }
         void paceSend(
           () => sendToPage(message),
@@ -299,10 +348,16 @@ export default defineContentScript({
     function detect(raw: string): void {
       if (!enabled) return;
       // 换了页面会话 = 换了条任务：轮数归零，别把上一条的刹车额度带过来。
+      // 待发的那条（#52 的 pending 态）同样作废：它写进的是**这条**会话的输入框，
+      // 到了新会话，那条待发的工具结果已经不对话了。
       const key = pageSessionIdOf(location.href);
       if (key !== sessionKey) {
         sessionKey = key;
         rounds = resetRounds();
+        if (armed.phase === "pending") {
+          armed = idleArmed();
+          reportContinuationFailure("key-mismatch");
+        }
       }
       const calls = detectToolCalls(raw);
       // **围栏之外的话**一律报给协调者：有围栏时围栏转网关，围栏以外那些别的话不能被吞掉。
@@ -477,7 +532,15 @@ export default defineContentScript({
       }
 
       const toggle = parseToggleMessage(event.data);
-      if (toggle?.kind === "state") apply(toggle.enabled);
+      if (toggle?.kind === "state") {
+        if (toggle.speak !== speak) {
+          speak = toggle.speak;
+          // 闸从开变关：挂着等用户按的那条（pending 态）不该还在——那时它是按「闸开」
+          // 的假设挂上去的，而它的写入前提（输入框空着）多半已经不成立了。
+          if (!speak) armed = idleArmed();
+        }
+        apply(toggle.enabled);
+      }
 
       // 隔离世界那边（催办 / send.page / message.retry）也发过消息：并进它的时刻，
       // 两边的发送节奏合成一条线（#61）。不认自己发的通报。

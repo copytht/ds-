@@ -70,6 +70,8 @@ import {
   readToggle,
   stateMessage,
   TOGGLE_STORAGE_KEY,
+  SPEAK_STORAGE_KEY,
+  readSpeak,
 } from "../src/lib/toggle";
 
 /**
@@ -84,9 +86,19 @@ export default defineContentScript({
   matches: ["https://chat.deepseek.com/*"],
   runAt: "document_start",
   async main() {
+    /**
+     * 把两个开关的当前状态广播给页面世界。
+     *
+     * 「代你发言」闸一起来了（#52）：自动续聊在 MAIN 世界直接写输入框、按发送，不经
+     * `runAction`，所以那个世界拿不到 `storage`——只能由这边每次广播时带上。选项页
+     * 改闸 → `storage.onChanged` → 再广播一次，不必刷新页面。
+     */
     const broadcast = async () => {
-      const stored = await browser.storage.local.get(TOGGLE_STORAGE_KEY);
-      window.postMessage(stateMessage(readToggle(stored[TOGGLE_STORAGE_KEY])), "*");
+      const stored = await browser.storage.local.get([TOGGLE_STORAGE_KEY, SPEAK_STORAGE_KEY]);
+      window.postMessage(
+        stateMessage(readToggle(stored[TOGGLE_STORAGE_KEY]), readSpeak(stored[SPEAK_STORAGE_KEY])),
+        "*",
+      );
     };
 
     /** 页面世界认出的围栏 → background 打网关 → 结果按同一条信封原路回去。 */
@@ -341,11 +353,14 @@ export default defineContentScript({
     // 认不出的信封一声不吭，不抢 send 那条路的消息。
     browser.runtime.onMessage.addListener(actionListener(paceRoster(ACTION_ROSTER)));
 
-    // 总开关改了立刻广播，刷新与重启靠 storage 自己保持。
+    // 总开关或「代你发言」闸改了立刻广播，刷新与重启靠 storage 自己保持。
+    // speak 也要广播（#52）：自动续聊那一侧靠它决定是自动发还是只落草稿，
+    // 选项页勾一下就生效，不必刷新页面。
     browser.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== "local") return;
-      if (!(TOGGLE_STORAGE_KEY in changes)) return;
+      if (!(TOGGLE_STORAGE_KEY in changes) && !(SPEAK_STORAGE_KEY in changes)) return;
       void broadcast();
+      if (!(TOGGLE_STORAGE_KEY in changes)) return;
       // 账号处境上报跟着总开关走：关着时内容脚本不发声。
       if (readToggle(changes[TOGGLE_STORAGE_KEY].newValue)) {
         startAccountReporting();

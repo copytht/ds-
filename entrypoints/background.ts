@@ -400,12 +400,19 @@ export default defineBackground(() => {
 
   /**
    * 催办投递：固定正文打进取页作框并发送。两步都走同一套执行门
-   * （`runAction`）——总开关 / 替人发言 / 退避
-   * 三道闸照样拦，拦着就回 false（不算催，下扫再试）；前半句
-   * 没成就不发后半句，免得空消息上屏。
+   * （`runAction`）——总开关 / 退避照拦，拦着就回 false（不算催，下扫再试）；
+   * 前半句没成就不发后半句，免得空消息上屏。
+   *
+   * **「代你发言」闸关着时整个跳过**（#52）：催办是「写 + 发」成对的动作，只写不发
+   * 会在用户的输入框里留下半截「继续」。跳过即不算催（计数不动），下扫再试。
+   * 写步本身现在不受 speak 闸管（#52：只管发），所以这个判断必须在这里显式做。
    */
   async function deliverNudge(tabId: number, text: string): Promise<boolean> {
     const context = await actionContext();
+    if (!context.speak) {
+      console.log("[ds-] 「代你发言」闸关着，这次催办整个跳过（不留半截在输入框里）");
+      return false;
+    }
     const frame = (action: string, params: Record<string, unknown>): ActionFrame => ({
       type: "action",
       id: nextMessageId("watchdog"),
