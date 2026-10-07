@@ -29,4 +29,4 @@
 ## 5. 收尾
 
 - [x] 5.1 `openspec validate --all --archived --strict` 绿；提交、开 PR（`Refs #66`）、CI 绿后合并、删分支
-- [ ] 5.2 #66 评论：8 项已实现，写明未验证项与「header.share / sidebar.search / sidebar.collapse 因无语义锚留候补」；#66 保持 open 或按用户意见处理
+- [x] 5.2 #66 评论：8 项已实现，写明未验证项与「header.share / sidebar.search / sidebar.collapse 因无语义锚留候补」；#66 保持 open 或按用户意见处理
