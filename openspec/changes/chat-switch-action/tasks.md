@@ -2,7 +2,7 @@
 
 - [x] 1.1 `scripts/env-up.sh --debug` 起 ds-browser；`page-action.py js` 在页面里手工读 `a[href^="/a/chat/s/"]`，确认条目数、`href` 末段、标题 `textContent` 与 design 一致
 - [x] 1.2 验 `el.click()` 点 `<a>` 是 SPA 路由还是整页刷新：切到另一条会话，看 `location.pathname` 是否变、内容脚本回包是否送达（**实测：SPA 路由**，页面里预埋的标记在切换后还在、回包送达；顺序上调整为先写执行器再经 `send` 验，因为探针不许用 `js` 点站点）；**若整页刷新且回包丢，停下，改 design 再继续**
-- [ ] 1.3 验侧栏收起时 `a[href^="/a/chat/s/"]` 还在不在 DOM（只读；收起是人手动做，agent 不点）；结果写进 design 的 Open Questions 并据此定 `chats.list` 的空列表口径
+- [ ] 1.3 （**未做**：收起是写动作、探针不许点；等人手动收起后只读验一次，不阻塞合并，但阻塞归档）验侧栏收起时 `a[href^="/a/chat/s/"]` 还在不在 DOM（只读；收起是人手动做，agent 不点）；结果写进 design 的 Open Questions 并据此定 `chats.list` 的空列表口径
 
 ## 2. 执行器与闸
 
@@ -21,5 +21,5 @@
 - [x] 4.1 真机 `page-action.py send chats.list`：与侧栏肉眼一致；`send chat.switch --params '{"id": "<另一条>"}'` 后 `page.state` 的 `url` 以该 id 结尾，再切回原会话
 - [x] 4.2 真机验重名：对 5 条同名之一用 `{title}` 切换回 `unknown-action` 且不点；用 `{id}` 能切
 - [x] 4.3 `scripts/page-action.py evidence --id sidebar.chat-row` 仍一致（或「未比」），未被改坏
-- [ ] 4.4 `openspec validate --all --archived --strict` 绿；提交、开 PR（`Refs #66`）、CI 绿后合并、删分支
+- [x] 4.4 `openspec validate --all --archived --strict` 绿；提交、开 PR（`Refs #66`）、CI 绿后合并、删分支
 - [ ] 4.5 在 #66 评论：`chat.switch` / `chats.list` 已实现，写明未验证项（如侧栏滚动加载、回包在整页刷新下的行为）
