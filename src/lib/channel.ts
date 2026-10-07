@@ -152,6 +152,37 @@ export const STOP_MESSAGE_TYPE = "ds-/stop";
 /** 隔离世界 → background 的「续聊这一跳失败了」上报信封标记（#51）。 */
 export const CONTINUATION_FAIL_MESSAGE_TYPE = "ds-/continuation-fail";
 
+/**
+ * 发送限速的跨世界通报（#61）：任一世界替用户发出去一条消息，就通报一声时刻，
+ * 另一个世界并进自己的「最近一次发送时刻」。
+ *
+ * 走既有的 `window.postMessage` 通道——**不迁状态、不写 DOM 属性**。带 `world` 是为了
+ * 让自己不认自己的通报（`postMessage` 也投递给发送方自己）。
+ */
+export const SEND_NOTE_MESSAGE_SOURCE = "ds-/send-note";
+
+export type SendNoteMessage = {
+  readonly source: typeof SEND_NOTE_MESSAGE_SOURCE;
+  readonly world: "main" | "isolated";
+  /** 那一刻（epoch 毫秒）。 */
+  readonly at: number;
+};
+
+/** 认通报：形状不对、时刻不是有限数的一律不收，不猜。 */
+export function parseSendNote(data: unknown): SendNoteMessage | null {
+  if (typeof data !== "object" || data === null) return null;
+  const message = data as { source?: unknown; world?: unknown; at?: unknown };
+  if (message.source !== SEND_NOTE_MESSAGE_SOURCE) return null;
+  if (message.world !== "main" && message.world !== "isolated") return null;
+  if (typeof message.at !== "number" || !Number.isFinite(message.at)) return null;
+  return { source: SEND_NOTE_MESSAGE_SOURCE, world: message.world, at: message.at };
+}
+
+/** 通报构造（两个世界共用一条构造点）。 */
+export function sendNoteMessage(world: "main" | "isolated", at: number): SendNoteMessage {
+  return { source: SEND_NOTE_MESSAGE_SOURCE, world, at };
+}
+
 /** 网页排了 ask 围栏问人：记下来，扩展侧露出「在等人回」。 */
 export type AskReport = {
   readonly type: typeof ASK_MESSAGE_TYPE;

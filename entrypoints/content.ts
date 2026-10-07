@@ -15,6 +15,8 @@ import {
   saidReportMessage,
   continuationFailReportMessage,
   stopReportMessage,
+  parseSendNote,
+  sendNoteMessage,
   toolsMessage,
   toolsRequestMessage,
   unreachableResult,
@@ -30,12 +32,14 @@ import { nextMessageId } from "../src/lib/id";
 import {
   buttonClick,
   clearComposer,
+  findButton,
   listChats,
   newChat,
   pressEnter,
   readAccount,
   readButton,
   readComposer,
+  readPressed,
   readComposerPresent,
   readPageState,
   readSidebar,
@@ -48,6 +52,17 @@ import {
   typeComposer,
 } from "../src/lib/page";
 import { CONTROL_ACTIONS } from "../src/lib/controls";
+import type { ActionFrame } from "../src/lib/action";
+import {
+  checkSendIntent,
+  mergeSendPace,
+  newSendPace,
+  noteSend,
+  realSleep,
+  SEND_PRIMITIVES,
+  type SendIntent,
+  type SendPace,
+} from "../src/lib/sendpace";
 import { lastMessage, listMessages } from "../src/lib/messages";
 import { waitFence, waitReply } from "../src/lib/wait";
 import {
@@ -265,9 +280,66 @@ export default defineContentScript({
       "wait.reply": waitReply,
     };
 
+    /**
+     * 发送限速（#61）：三种「替用户把消息发出去」的原语，执行前先过检查点——
+     * 距上一次发送不够 3~5 秒就**等**够（等，不拒、不增失败码）。
+     *
+     * 圆键那一下可能不是发送（`readPressed` 分得出发送 / 停止 / 认不出），按
+     * `checkSendIntent` 的三条口径分别处理：**停止永不延迟**、认不出不延迟但照样记账。
+     * 其余两种原语（`send.enter` / `message.retry`）恒是发送。
+     *
+     * 记账之后向页面世界通报一声（`send-note`），让另一边也并进这个时刻——
+     * 两边的发送节奏因此合成一条线。
+     */
+    let sendPace: SendPace = newSendPace();
+
+    function paceRoster(roster: ActionRoster): ActionRoster {
+      const paced: Record<string, (frame: ActionFrame) => unknown> = { ...roster };
+      for (const action of SEND_PRIMITIVES) {
+        const run = roster[action];
+        if (run === undefined) continue;
+        paced[action] = async (frame: ActionFrame) => {
+          const intent: SendIntent = action === "button.click" ? readCircleIntent() : "send";
+          const verdict = checkSendIntent(sendPace, Date.now(), intent);
+          if (verdict.waitMs > 0) {
+            console.log(`[ds-] 发送限速：上一条刚发过，等 ${verdict.waitMs}ms 再发`);
+            await realSleep(verdict.waitMs);
+          }
+          const result = run(frame);
+          // 意图**重读一次**（等的时候圆键可能已变成「停止」），再决定记不记。
+          const after =
+            action === "button.click" ? readCircleIntent() : verdict.record ? "send" : "stop";
+          if (verdict.record && after !== "stop") {
+            sendPace = noteSend(sendPace, Date.now(), Math.random);
+            window.postMessage(sendNoteMessage("isolated", sendPace.lastSentAt ?? 0), "*");
+          }
+          return result;
+        };
+      }
+      return paced;
+    }
+
+    /** 圆键此刻承载的意图：分不出「发送 / 停止 / 认不出」三种。 */
+    function readCircleIntent(): SendIntent {
+      const button = findButton();
+      if (button === null) return "unknown";
+      const pressed = readPressed(button);
+      if (pressed === "send") return "send";
+      if (pressed === "stop") return "stop";
+      return "unknown";
+    }
+
+    // 页面世界（自动续聊）也发过消息：并进它的时刻，两边的节奏合成一条线。
+    window.addEventListener("message", (event) => {
+      if (event.source !== window) return;
+      const note = parseSendNote(event.data);
+      if (note === null || note.world === "isolated") return; // 不认自己发的
+      sendPace = mergeSendPace(sendPace, note.at);
+    });
+
     // background 打过来的动作帧（走 `tabs.sendMessage`）：当场交回一个 ActionOutcome；
     // 认不出的信封一声不吭，不抢 send 那条路的消息。
-    browser.runtime.onMessage.addListener(actionListener(ACTION_ROSTER));
+    browser.runtime.onMessage.addListener(actionListener(paceRoster(ACTION_ROSTER)));
 
     // 总开关改了立刻广播，刷新与重启靠 storage 自己保持。
     browser.storage.onChanged.addListener((changes, areaName) => {

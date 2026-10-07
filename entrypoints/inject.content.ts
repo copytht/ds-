@@ -8,7 +8,9 @@ import {
   continuationFailMessage,
   pageSessionIdOf,
   parseChainMessage,
+  parseSendNote,
   saidMessage,
+  sendNoteMessage,
   stopMessage,
   type ResultMessage,
 } from "../src/lib/channel";
@@ -32,6 +34,14 @@ import {
   type ArmedState,
 } from "../src/lib/armed";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
+import {
+  checkSendIntent,
+  mergeSendPace,
+  newSendPace,
+  noteSend,
+  realSleep,
+  type SendPace,
+} from "../src/lib/sendpace";
 import {
   isOutgoingChatRequest,
   outgoingUserTextOf,
@@ -101,6 +111,13 @@ export default defineContentScript({
      */
     let armed: ArmedState = idleArmed();
 
+    /**
+     * 发送限速（#61）：自动续聊这一路的发送也归同一条 3~5 秒的线，与隔离世界那三条
+     * （`send.enter` / 圆键 / `message.retry`）**合成一条**——靠 `send-note` 通报并时刻，
+     * 不迁状态、不写 DOM 属性。
+     */
+    let sendPace: SendPace = newSendPace();
+
     /** 上一次见过的页面会话 id：换了会话 = 换了条任务，轮数归零。 */
     let sessionKey: string | null = null;
 
@@ -125,6 +142,29 @@ export default defineContentScript({
       const id = nextMessageId("cont-fail");
       window.postMessage(continuationFailMessage(id, describeThrownFailure(error)), "*");
       console.log(`[ds-] 续聊发送抛错：${describeThrownFailure(error)}（已留痕）`);
+    }
+
+    /**
+     * 发送限速检查点（#61）：自动续聊这一下发送前先问一次，间隔不够就**等**够
+     * （等，不拒、不增失败码——agent 侧看不出差别）。真发出去才记一笔，并通报隔离世界。
+     *
+     * 与隔离世界那边（`content.ts` 的 `paceRoster`）是**同一个模块的同一个检查点**：
+     * 两边各记各的「最近一次发送时刻」，靠 `send-note` 通报并起来，成一条线。
+     *
+     * @param sent 这次到底有没有真发出去（没发出去不记账——没发出去就不是一次发送）。
+     */
+    async function paceSend<T>(send: () => Promise<T>, sent: (result: T) => boolean): Promise<T> {
+      const verdict = checkSendIntent(sendPace, Date.now(), "send");
+      if (verdict.waitMs > 0) {
+        console.log(`[ds-] 发送限速：上一条刚发过，等 ${verdict.waitMs}ms 再发`);
+        await realSleep(verdict.waitMs);
+      }
+      const result = await send();
+      if (sent(result)) {
+        sendPace = noteSend(sendPace, Date.now(), Math.random);
+        window.postMessage(sendNoteMessage("main", sendPace.lastSentAt ?? 0), "*");
+      }
+      return result;
     }
 
     /**
@@ -197,7 +237,10 @@ export default defineContentScript({
           armed = armState(queuedContinuation, Date.now());
           queuedContinuation = null;
         }
-        void sendToPage(message)
+        void paceSend(
+          () => sendToPage(message),
+          (outcome) => outcome.sent,
+        )
           .then((outcome) => {
             // 没发出去就把武装撤掉（发出去的已经被认领那一步消费掉了）：
             // 留着它，下一个出站就是用户自己发的消息，正文会被工具结果顶掉。
@@ -435,6 +478,13 @@ export default defineContentScript({
 
       const toggle = parseToggleMessage(event.data);
       if (toggle?.kind === "state") apply(toggle.enabled);
+
+      // 隔离世界那边（催办 / send.page / message.retry）也发过消息：并进它的时刻，
+      // 两边的发送节奏合成一条线（#61）。不认自己发的通报。
+      const note = parseSendNote(event.data);
+      if (note !== null && note.world !== "main") {
+        sendPace = mergeSendPace(sendPace, note.at);
+      }
     });
 
     // 两个内容脚本谁先谁后都可能：这边开口要一次，那边自己也会报一次。
