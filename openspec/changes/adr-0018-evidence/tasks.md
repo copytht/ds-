@@ -1,16 +1,16 @@
 ## 1. 存证文件与加载
 
-- [ ] 1.1 建 `protocol/evidence/controls.json`：顶层 `description` + `entries` 数组，条目形状见 design 决定 1
-- [ ] 1.2 把 `page.test.ts` 里三份圆键常量原样搬成 `circle.stop` / `circle.send` / `circle.spinner` 三条（`reconcile: state-bound`，日期取原注释），并为每条写 `probe`
-- [ ] 1.3 写 `src/lib/evidence.ts`：读存证、按 id 取（`evidenceHtml(id)`）、导出类型；不碰 console、不碰站点
-- [ ] 1.4 `src/lib/page.test.ts` 的圆键用例改成 `evidenceHtml(...)` 取原件；用例全绿，且字符串常量里不再出现整条 `path`
+- [x] 1.1 建 `protocol/evidence/controls.json`：顶层 `description` + `entries` 数组，条目形状见 design 决定 1
+- [x] 1.2 把 `page.test.ts` 里三份圆键常量原样搬成 `circle.stop` / `circle.send` / `circle.spinner` 三条（`reconcile: state-bound`，日期取原注释），并为每条写 `probe`
+- [x] 1.3 写 `src/lib/evidence.ts`：读存证、按 id 取（`evidenceHtml(id)`）、导出类型；不碰 console、不碰站点
+- [x] 1.4 `src/lib/page.test.ts` 的圆键用例改成 `evidenceHtml(...)` 取原件；用例全绿，且字符串常量里不再出现整条 `path`
 
 ## 2. CI 对拍
 
-- [ ] 2.1 `src/lib/evidence.test.ts`：完整性（字段齐、`capturedOn` 合法、无省略占位、jsdom 解析的 `svg` 与 `svgs` 逐项相等、id 唯一、tag 成对）
-- [ ] 2.2 `src/lib/evidence.test.ts`：扫 `src/**/*.test.ts` 源码，出现任何存证 `path` 的 `d` 整条原文就红（存证自己不算）；先临时手抄一条确认它真会红，再还原
-- [ ] 2.3 `tests/test_evidence.py`：用标准库 `html.parser` 独立实现 2.1 的同一判据；缺一个字段的坏条目要红（造一个确认）
-- [ ] 2.4 确认 `fixtures.test.ts` / `test_fixtures.py` 的 `EXPECTED_FILES` 不受影响（存证不在 `protocol/fixtures/`）
+- [x] 2.1 `src/lib/evidence.test.ts`：完整性（字段齐、`capturedOn` 合法、无省略占位、jsdom 解析的 `svg` 与 `svgs` 逐项相等、id 唯一、tag 成对）
+- [x] 2.2 `src/lib/evidence.test.ts`：扫 `src/**/*.test.ts` 源码，出现任何存证 `path` 的 `d` 整条原文就红（存证自己不算）；先临时手抄一条确认它真会红，再还原
+- [x] 2.3 `tests/test_evidence.py`：用标准库 `html.parser` 独立实现 2.1 的同一判据；缺一个字段的坏条目要红（造一个确认）
+- [x] 2.4 确认 `fixtures.test.ts` / `test_fixtures.py` 的 `EXPECTED_FILES` 不受影响（存证不在 `protocol/fixtures/`）
 
 ## 3. 真机重抓代码块并回补
 

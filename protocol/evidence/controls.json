@@ -1,0 +1,56 @@
+{
+  "description": "页面控件存证（ADR-0018）：真机抓到的按钮原件——outerHTML 一字不缩写 + 完整 svg path + 真机日期。证据，不是定位判据。回归用例用 evidenceHtml(id) 读，不许手抄。",
+  "entries": [
+    {
+      "id": "circle.stop",
+      "note": "圆键·生成中（方块图标）",
+      "capturedOn": "2026-10-04",
+      "reconcile": "state-bound",
+      "row": null,
+      "probe": "(() => { const el = document.querySelector('div[role=\"button\"].ds-button--primary.ds-button--filled.ds-button--circle'); return el ? el.outerHTML : null; })()",
+      "outerHTML": "<div role=\"button\" class=\"ds-button ds-button--primary ds-button--filled ds-button--circle ds-button--m ds-button--icon-relative-m _52c986b\" style=\"--dsl-button-height: 34px;\" tabindex=\"0\"><div class=\"ds-button__background\"></div><div class=\"ds-button__icon ds-button__icon--last-child\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M2 4.88C2 3.68009 2 3.08013 2.30557 2.65954C2.40426 2.52371 2.52371 2.40426 2.65954 2.30557C3.08013 2 3.68009 2 4.88 2H11.12C12.3199 2 12.9199 2 13.3405 2.30557C13.4763 2.40426 13.5957 2.52371 13.6944 2.65954C14 3.08013 14 3.68009 14 4.88V11.12C14 12.3199 14 12.9199 13.6944 13.3405C13.5957 13.4763 13.4763 13.5957 13.3405 13.6944C12.9199 14 12.3199 14 11.12 14H4.88C3.68009 14 3.08013 14 2.65954 13.6944C2.52371 13.5957 2.40426 13.4763 2.30557 13.3405C2 12.9199 2 12.3199 2 11.12V4.88Z\" fill=\"currentColor\"></path></svg></div></div>",
+      "svgs": [
+        {
+          "viewBox": "0 0 16 16",
+          "paths": [
+            "M2 4.88C2 3.68009 2 3.08013 2.30557 2.65954C2.40426 2.52371 2.52371 2.40426 2.65954 2.30557C3.08013 2 3.68009 2 4.88 2H11.12C12.3199 2 12.9199 2 13.3405 2.30557C13.4763 2.40426 13.5957 2.52371 13.6944 2.65954C14 3.08013 14 3.68009 14 4.88V11.12C14 12.3199 14 12.9199 13.6944 13.3405C13.5957 13.4763 13.4763 13.5957 13.3405 13.6944C12.9199 14 12.3199 14 11.12 14H4.88C3.68009 14 3.08013 14 2.65954 13.6944C2.52371 13.5957 2.40426 13.4763 2.30557 13.3405C2 12.9199 2 12.3199 2 11.12V4.88Z"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "circle.send",
+      "note": "圆键·空闲、输入框为空（带 ds-button--disabled，箭头图标）",
+      "capturedOn": "2026-10-04",
+      "reconcile": "state-bound",
+      "row": null,
+      "probe": "(() => { const el = document.querySelector('div[role=\"button\"].ds-button--primary.ds-button--filled.ds-button--circle'); return el ? el.outerHTML : null; })()",
+      "outerHTML": "<div role=\"button\" class=\"ds-button ds-button--primary ds-button--filled ds-button--circle ds-button--m ds-button--icon-relative-m ds-button--disabled _52c986b bd74640a\" style=\"--dsl-button-height: 34px;\"><div class=\"ds-button__background\"></div><div class=\"ds-button__icon ds-button__icon--last-child\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M8.3125 0.980206C8.66767 1.05312 8.97902 1.2042 9.2627 1.43235C9.48724 1.613 9.73029 1.85795 9.97949 2.10716L14.707 6.8347L13.293 8.24876L9 3.95579V15.0417H7V3.95579L2.70703 8.24876L1.29297 6.8347L6.02051 2.10716C6.26971 1.85795 6.51277 1.613 6.7373 1.43235C6.97662 1.23988 7.28445 1.04404 7.6875 0.980206C7.8973 0.947029 8.1031 0.955183 8.3125 0.980206Z\" fill=\"currentColor\"></path></svg></div></div>",
+      "svgs": [
+        {
+          "viewBox": "0 0 16 16",
+          "paths": [
+            "M8.3125 0.980206C8.66767 1.05312 8.97902 1.2042 9.2627 1.43235C9.48724 1.613 9.73029 1.85795 9.97949 2.10716L14.707 6.8347L13.293 8.24876L9 3.95579V15.0417H7V3.95579L2.70703 8.24876L1.29297 6.8347L6.02051 2.10716C6.26971 1.85795 6.51277 1.613 6.7373 1.43235C6.97662 1.23988 7.28445 1.04404 7.6875 0.980206C7.8973 0.947029 8.1031 0.955183 8.3125 0.980206Z"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "circle.spinner",
+      "note": "圆键·思考期（环形 spinner，非 16×16 图标）",
+      "capturedOn": "2026-10-05",
+      "reconcile": "state-bound",
+      "row": null,
+      "probe": "(() => { const el = document.querySelector('div[role=\"button\"].ds-button--primary.ds-button--filled.ds-button--circle'); return el ? el.outerHTML : null; })()",
+      "outerHTML": "<div role=\"button\" class=\"ds-button ds-button--primary ds-button--filled ds-button--circle ds-button--m ds-button--icon-relative-m ds-button--disabled _52c986b bd74640a\" style=\"--dsl-button-height: 34px;\"><div class=\"ds-button__background\"></div><div class=\"ds-button__icon ds-button__icon--last-child\"><div class=\"ds-loading\"><svg viewBox=\"0 0 36 36\" version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\" data-icon=\"spin\"><defs><linearGradient x1=\"0%\" y1=\"100%\" x2=\"100%\" y2=\"100%\" id=\"linearGradient-:r3n:\"><stop stop-color=\"currentColor\" stop-opacity=\"0\" offset=\"0%\"></stop><stop stop-color=\"currentColor\" stop-opacity=\"0.50\" offset=\"39.9430698%\"></stop><stop stop-color=\"currentColor\" offset=\"100%\"></stop></linearGradient></defs><g stroke=\"none\" stroke-width=\"1\" fill=\"none\" fill-rule=\"evenodd\"><rect fill-opacity=\"0.01\" fill=\"none\" x=\"0\" y=\"0\" width=\"36\" height=\"36\"></rect><path d=\"M34,18 C34,9.163444 26.836556,2 18,2 C11.6597233,2 6.18078805,5.68784135 3.59122325,11.0354951\" stroke=\"url(#linearGradient-:r3n:)\" stroke-width=\"4\" stroke-linecap=\"round\"></path></g></svg></div></div></div>",
+      "svgs": [
+        {
+          "viewBox": "0 0 36 36",
+          "paths": [
+            "M34,18 C34,9.163444 26.836556,2 18,2 C11.6597233,2 6.18078805,5.68784135 3.59122325,11.0354951"
+          ]
+        }
+      ]
+    }
+  ]
+}
