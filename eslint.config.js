@@ -17,8 +17,6 @@ export default [
       "tests/**",
       // 真机抓下来的站点证据（page-action.py capture），本机产物不进 lint
       "captures/**",
-      // OpenSpec 生成的命令与技能（`openspec update` 会重生成）→ 不进本仓库的 lint
-      ".opencode/**",
     ],
   },
   js.configs.recommended,

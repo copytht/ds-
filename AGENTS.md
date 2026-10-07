@@ -13,15 +13,16 @@
 与用户会话的 agent 只做两件事：**把目标和验收标准交给网页、把链子回来的结果原样喂回去**。
 怎么拆、怎么排围栏、错了怎么修，让**网页**自己想——不替它读文档、不替它诊断、不逐步指派。
 
-## 规格与流程
+## 流程与技能
 
-2026-10-04 起用 **OpenSpec**（换掉 Trellis）：新活走 `/opsx-propose "<想法>"` →
-`/opsx-apply` → `/opsx-archive`；spec 在 `openspec/specs/`（`openspec list --specs` 看清单、
-`openspec show <能力>` 读一篇、`openspec validate` 查格式）。`/opsx-*` 命令与技能由
-`openspec init` / `openspec update` 生成在 `.opencode/`，别手改。
+2026-10-07 起用 **Matt 的技能**（上游 `mattpocock/skills`，换掉 OpenSpec，见 ADR-0019）。技能在
+`.agents/skills/`，`skills-lock.json` 记版本；装 / 更新：`npx skills@latest add mattpocock/skills -a opencode -s '*' -y --copy`
+/ `npx skills update`。别手改技能文件（升级会冲掉）；想调整就在 `AGENTS.md` 里写覆盖规则。
 
-**MODIFIED 是整块替换**：改主 spec 里的某条 requirement 时，原有场景名必须一字不差地搬过来
-（校验器会报 `omits scenario(s) the current spec still has`）——新增场景可以，**改名不行**。
+日常流：想法还不清 → `/grill-with-docs`（边问边补 `GLOSSARY.md` 与 ADR）；成型 → `/to-spec`（发成 GitHub issue）
+→ `/to-tickets`（拆成 tracer-bullet 票）→ `/implement`（或 `/implement-spec`）；坏了 → `/diagnosing-bugs`；
+过票 → `/triage`；不知道该用哪个 → `/ask-matt`。**没有 spec 目录**：「必须怎样」由 `GLOSSARY.md`、ADR、测试、
+`protocol/fixtures/action.json` 契约样例与 `protocol/evidence/controls.json` 存证承载。
 
 ## 浏览器边界
 
@@ -117,52 +118,16 @@
 
 ### Issue tracker
 
-Issues live in GitHub Issues on `copytht/ds-`, via the `gh` CLI（repo 由 `git remote -v` 推出，
-在 clone 里跑就自动认）。约定：
-
-- **建**：`gh issue create --title "..." --body "..."`——多行正文用 heredoc。
-- **读**：`gh issue view <number> --comments`，用 `jq` 过滤、一并取 labels。
-- **列**：`gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'`，
-  按需加 `--label` / `--state`。
-- **评**：`gh issue comment <number> --body "..."`。
-- **标**：`gh issue edit <number> --add-label "..."` / `--remove-label "..."`。
-- **关**：`gh issue close <number> --comment "..."`。
-
-issue 与 PR 共用一个编号空间，裸 `#42` 可能是 PR：先 `gh pr view 42`，不中再回
-`gh issue view 42`。**PR 不是需求面**（本仓不把外部 PR 当 feature request 处理），要看 diff 用
-`gh pr diff <number>`。
-
-技能里的两句话照此落地：「publish to the issue tracker」= 建一个 GitHub issue；
-「fetch the relevant ticket」= `gh issue view <number> --comments`。
+Issues live in GitHub Issues on `copytht/ds-`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+issue 与 PR 共用一个编号空间，裸 `#42` 可能是 PR；**PR 不是需求面**（本仓不把外部 PR 当 feature request 处理）。
 
 ### Triage labels
 
-技能说的五个规范角色，右列是本仓实际用的 label 字符串（用右列那个）：
-
-| 角色              | 含义                     |
-| ----------------- | ------------------------ |
-| `needs-triage`    | 维护者待评估             |
-| `needs-info`      | 等报告人补信息           |
-| `ready-for-agent` | 已写清，可交给 AFK agent |
-| `ready-for-human` | 要人来做                 |
-| `wontfix`         | 不做                     |
+Five canonical roles, label strings equal to the role names (`needs-triage` / `needs-info` / `ready-for-agent` /
+`ready-for-human` / `wontfix`). See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-单上下文仓。探索前先读两样：
-
-- 根 **`CONTEXT.md`**（领域词条）
-- **`adr/`**（架构决策记录，与 `openspec/` 平级的仓库根目录）——读与你要动的那块相关的篇。
-
-两样都不存在就**默默继续**，别提示缺失、也别建议先建。
-
-**用词条里的词**：输出提到领域概念（issue 标题、重构建议、假设、测试名）时，用 `CONTEXT.md`
-定义的那个词，别漂到词条明说避开的同义词。缺词是信号——要么你在造项目不用的语言（重想），
-要么是真缺口（记下来）。
-
-**与 ADR 冲突要挑明**，别默默盖过：
-
-> _Contradicts ADR-0011 (stateless MCP gateway), but worth reopening because…_
-
-ADR 头三行是 `Status` / `Date` / `Supersedes`。**接受过的 ADR 不改**：要推翻就写一篇新 ADR、
-在它的 `Supersedes:` 里点名旧篇，旧篇原样留着——design 步靠这个图判断哪几篇还作数。
+Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
+接受过的 ADR 不改，要推翻就写新 ADR 并在 `Supersedes:` 点名旧篇。输出提到领域概念时用 `GLOSSARY.md` 里的词；
+与 ADR 冲突要挑明，别默默盖过。
