@@ -12,7 +12,7 @@
 
 **定位**（MUST NOT 用哈希 class、图标 `path` 不作判据）：
 
-- 消息工具栏：该行内（`.ds-message` 之外）**恰好有 6 颗直接子 `[role=button]` 且第 5 颗带
+- 消息工具栏：该行内（真机它在 `.ds-message` 之外，但这只是描述、不作判据）**恰好有 6 颗直接子 `[role=button]` 且第 5 颗带
   `aria-label="朗读"` 的那个容器**；动作名对应第几颗：`copy`=1、`retry`=2、`like`=3、`dislike`=4、`read`=5、`share`=6。
 - 代码块：块内 `[role=button]` 的 `textContent`（去前后空白）为「复制」/「下载」。
 

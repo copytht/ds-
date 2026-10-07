@@ -97,6 +97,8 @@ export const SPEAK_GATED_ACTIONS: ReadonlySet<string> = new Set([
   "composer.type",
   "composer.clear",
   "send.enter",
+  // 重新生成：让账号再生成一条回答，等同发送——按最坏拦（同圆键的先例）。
+  "message.retry",
   // 圆键（`button.click`）可能在发、也可能在停：一律按「可能是替你开口」拦。
   // 闸关着时点击结果**判不出**，保守即正确（2026-10-05 用户定，不按 pressed 动态放行）。
   "button.click",
@@ -114,6 +116,14 @@ export const BACKOFF_GATED_ACTIONS: ReadonlySet<string> = new Set([
   "chat.new",
   // 切换会话：改页面状态是写；不动写作框、不「代你发言」，故不进 speak 闸。
   "chat.switch",
+  // 消息工具栏（除 retry 已在 speak 闸里）与代码块：点了会改页面 / 账号状态，是写；不动写作框。
+  "message.copy",
+  "message.like",
+  "message.dislike",
+  "message.read",
+  "message.share",
+  "code.copy",
+  "code.download",
   // 写作框旁的两个开关（#30）：会改页面状态，是写动作；但不「代你发言」，故不进 speak 闸。
   "think.set",
   "search.set",

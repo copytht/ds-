@@ -121,7 +121,25 @@ def http_json(path: str) -> object:
         return json.load(resp)
 
 
-def open_tab(url: str) -> dict:
+def open_tab(url: str, *, background: bool = False) -> dict:
+    """开一个标签页。`background=True` 走 CDP `Target.createTarget` 且不抢前台。
+
+    为什么需要后台开：探针开的扩展入口页（options）若抢了前台，DeepSeek 标签页就退到后台，
+    浏览器会节流后台页——虚拟列表不挂行、历史不加载，`messages.*` 与按位置点控件全读成空。
+    那是探针造成的假象，不是站点或动作的问题。
+    """
+    if background:
+        version = http_json("/json/version")
+        ws_url = version["webSocketDebuggerUrl"] if isinstance(version, dict) else ""
+        reply = asyncio.run(
+            call_cdp(ws_url, "Target.createTarget", {"url": url, "background": True})
+        )
+        target_id = reply.get("result", {}).get("targetId") if isinstance(reply, dict) else None
+        if target_id:
+            for target in targets():
+                if target.get("id") == target_id:
+                    return target
+        return {}
     query = urllib.parse.quote(url, safe="")
     req = urllib.request.Request(f"{CDP}/json/new?{query}", method="PUT")
     with urllib.request.urlopen(req, timeout=5) as resp:
@@ -460,7 +478,7 @@ def ensure_extension_page() -> dict:
     if tab is not None:
         return tab
     print("[page-action] 没有扩展页，开 options.html 当消息入口")
-    open_tab(f"chrome-extension://{extension_id()}/options.html")
+    open_tab(f"chrome-extension://{extension_id()}/options.html", background=True)
     tab = find_target("page", "chrome-extension://", timeout=10)
     if tab is None:
         print("[page-action] 扩展页没起来", file=sys.stderr)

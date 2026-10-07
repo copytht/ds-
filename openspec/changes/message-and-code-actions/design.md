@@ -72,7 +72,7 @@
 
 ## Risks / Trade-offs
 
-- [合成 `el.click()` 不带用户激活，站点可能拒绝 copy / download / read] → 点验时先查；若确认被拒，该动作回 `{}` 但实际无效，
+- [合成 `el.click()` 不带用户激活，站点可能拒绝 copy / download / read] → **copy 已验有效**（按钮图标换成对勾又复原；剪贴板内容本身没能直接读，浏览器拦了 readText）；download / read 未点；若确认被拒，该动作回 `{}` 但实际无效，
   spec 要加「点了不等于生效」的说明，或改走别的路径——停下来改 artifact，不硬上。
 - [`index` 的坐标系与 `messages.list` 不同，agent 容易混] → spec 与 `instructions` 都写明；推荐只用 `-1`。
 - [站点虚拟列表卸载行] → 点击在同一同步段内完成（找行→点），不跨 await，不存在「找到后被卸载」。
@@ -83,6 +83,6 @@
 ## Open Questions
 
 - 用户消息工具栏第 2 颗（`aria-disabled=false`）疑为「编辑」，用途未认出——**不登记、不编名**，只入存证作反例。
-- `message.like` 点第二次是取消还是无事发生？点验时记录，写进 spec 或留作「站点行为」。
+- `message.like` 点第二次是取消还是无事发生？**已验：是取消**（点完状态与点前一致）。这是站点行为，不写进 spec 契约。
 - `instructions.ts` 里要不要给模型讲这 8 个动作？页面动作目前没有外露调用面（ADR-0011），暂不需要；若以后有，另开 change。
 - 本 change 不引入新的长期架构决策。

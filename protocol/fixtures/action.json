@@ -289,6 +289,76 @@
       }
     },
     {
+      "name": "message.copy 成功",
+      "request": {
+        "action": "message.copy",
+        "params": {
+          "index": -1
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {}
+      }
+    },
+    {
+      "name": "message.like 点到用户消息",
+      "request": {
+        "action": "message.like",
+        "params": {
+          "index": 0
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": false,
+        "error": "page-changed"
+      }
+    },
+    {
+      "name": "message.copy index 越界",
+      "request": {
+        "action": "message.copy",
+        "params": {
+          "index": 99
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": false,
+        "error": "page-changed"
+      }
+    },
+    {
+      "name": "message.copy index 不是整数",
+      "request": {
+        "action": "message.copy",
+        "params": {
+          "index": "last"
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": false,
+        "error": "unknown-action"
+      }
+    },
+    {
+      "name": "code.download 成功",
+      "request": {
+        "action": "code.download",
+        "params": {
+          "index": 0
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {}
+      }
+    },
+    {
       "name": "think.get 成功",
       "request": {
         "action": "think.get",

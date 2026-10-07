@@ -43,6 +43,7 @@ import {
   switchChat,
   typeComposer,
 } from "../src/lib/page";
+import { CONTROL_ACTIONS } from "../src/lib/controls";
 import { lastMessage, listMessages } from "../src/lib/messages";
 import { waitFence, waitReply } from "../src/lib/wait";
 import {
@@ -232,6 +233,8 @@ export default defineContentScript({
       // 会话切换（chat-switch-action）：先读列表拿 id，再按 id / 标题切。
       "chats.list": listChats,
       "chat.switch": switchChat,
+      // 消息工具栏六项 + 代码块两项（message-and-code-actions）。
+      ...CONTROL_ACTIONS,
       // 只读那批：读对话走 DOM（#20 口径），不碰站点的响应体。
       "messages.list": listMessages,
       "messages.last": lastMessage,
