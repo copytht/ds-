@@ -65,6 +65,10 @@
 - **`target: null` 只有 `tabs.list` 与 `toggle.*` 答得出**。`page.state` / `composer.*` /
   `messages.*` / `chat.new` 要先 `tabs.list` 拿标签页 id 再带上，其余一律落
   `ACTION_ERROR_UNKNOWN`——**那是探针错了，不是链子坏了**，别照着它去修扩展。
+- **DeepSeek 标签页必须留在前台**：后台标签页被浏览器节流，虚拟列表不挂行、历史不加载，
+  `messages.*` 与按位置点控件会读成空（2026-10-07 踩过，当时前台被探针开的选项页占了）。
+  探针开扩展入口页走后台（`open_tab(..., background=True)`）；若看到「对话区 0 行」先查
+  `document.visibilityState`，别先怀疑动作。
 - **`--no-pace` / `--pace` 是全局 flag，必须放在子命令前**（`… --no-pace read`，不是
   `… read --no-pace`）。碰站点默认等 8–20 秒随机；**抓瞬态**（生成中、思考期那种几秒的窗口）
   必须 `--no-pace` 连读，否则限速下根本抓不到。`list` 只读本地目标清单，不等。

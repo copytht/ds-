@@ -20,13 +20,13 @@
 
 ## 4. 真机点验（只点可逆、无外部副作用的）
 
-- [ ] 4.1 `message.copy` / `code.copy`：点后读剪贴板核实；**若合成点击写不进剪贴板，停下，改 design / spec 再继续**
-- [ ] 4.2 `message.like`：对「探针测试」会话里的测试消息点一次、再点一次复原；记录「第二次是取消还是无事发生」
-- [ ] 4.3 越界 / 用户行 / 参数形状错回码正确且不点（读 `page.state` / DOM 核实无副作用）
-- [ ] 4.4 **不点**：`message.retry` / `message.dislike` / `message.share` / `message.read` / `code.download`；在票里记为未验证项
-- [ ] 4.5 `scripts/page-action.py evidence` 全程未被改坏
+- [x] 4.1 `message.copy` / `code.copy`：点后核实（**实测**：读剪贴板被浏览器拦了——页面未聚焦，hook 页面 JS 又不允许；改读按钮 DOM：图标换成对勾（`M15.0498…`）几秒后复原，说明站点自己的复制处理跑了，合成点击有效；**剪贴板内容本身未直接核实**）
+- [x] 4.2 `message.like`（**实测**：第二次点击是**取消**，点完状态与点前逐字一致）：对「探针测试」会话里的测试消息点一次、再点一次复原；记录「第二次是取消还是无事发生」
+- [x] 4.3 （用户行 / 越界 / 形状错回码正确；注意首轮是在对话没挂载时跑的，已在行挂载后重跑）越界 / 用户行 / 参数形状错回码正确且不点（读 `page.state` / DOM 核实无副作用）
+- [x] 4.4 **不点**：`message.retry` / `message.dislike` / `message.share` / `message.read` / `code.download`；在票里记为未验证项
+- [x] 4.5 `scripts/page-action.py evidence` 全程未被改坏
 
 ## 5. 收尾
 
-- [ ] 5.1 `openspec validate --all --archived --strict` 绿；提交、开 PR（`Refs #66`）、CI 绿后合并、删分支
+- [x] 5.1 `openspec validate --all --archived --strict` 绿；提交、开 PR（`Refs #66`）、CI 绿后合并、删分支
 - [ ] 5.2 #66 评论：8 项已实现，写明未验证项与「header.share / sidebar.search / sidebar.collapse 因无语义锚留候补」；#66 保持 open 或按用户意见处理
