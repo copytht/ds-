@@ -112,6 +112,8 @@ export const SPEAK_GATED_ACTIONS: ReadonlySet<string> = new Set([
 export const BACKOFF_GATED_ACTIONS: ReadonlySet<string> = new Set([
   ...SPEAK_GATED_ACTIONS,
   "chat.new",
+  // 切换会话：改页面状态是写；不动写作框、不「代你发言」，故不进 speak 闸。
+  "chat.switch",
   // 写作框旁的两个开关（#30）：会改页面状态，是写动作；但不「代你发言」，故不进 speak 闸。
   "think.set",
   "search.set",

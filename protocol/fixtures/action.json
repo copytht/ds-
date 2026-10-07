@@ -222,6 +222,73 @@
       }
     },
     {
+      "name": "chats.list 成功",
+      "request": {
+        "action": "chats.list",
+        "params": {},
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "chats": [
+            {
+              "id": "f9108f6a-d7b6-4238-93c8-56f0c0d5d62a",
+              "title": "列出工作目录文件",
+              "current": true
+            },
+            {
+              "id": "976c5618-ed42-4cdb-be6b-61343d8b3b7c",
+              "title": "列出工作目录文件",
+              "current": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "chat.switch 成功",
+      "request": {
+        "action": "chat.switch",
+        "params": {
+          "id": "976c5618-ed42-4cdb-be6b-61343d8b3b7c"
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": true,
+        "result": {}
+      }
+    },
+    {
+      "name": "chat.switch 标题重名",
+      "request": {
+        "action": "chat.switch",
+        "params": {
+          "title": "列出工作目录文件"
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": false,
+        "error": "unknown-action"
+      }
+    },
+    {
+      "name": "chat.switch 找不到",
+      "request": {
+        "action": "chat.switch",
+        "params": {
+          "id": "no-such-chat"
+        },
+        "target": "42"
+      },
+      "response": {
+        "ok": false,
+        "error": "page-changed"
+      }
+    },
+    {
       "name": "think.get 成功",
       "request": {
         "action": "think.get",

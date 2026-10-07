@@ -28,6 +28,7 @@ import { nextMessageId } from "../src/lib/id";
 import {
   buttonClick,
   clearComposer,
+  listChats,
   newChat,
   pressEnter,
   readAccount,
@@ -39,6 +40,7 @@ import {
   readThink,
   setSearch,
   setThink,
+  switchChat,
   typeComposer,
 } from "../src/lib/page";
 import { lastMessage, listMessages } from "../src/lib/messages";
@@ -227,6 +229,9 @@ export default defineContentScript({
       "button.click": buttonClick,
       "send.enter": pressEnter,
       "chat.new": newChat,
+      // 会话切换（chat-switch-action）：先读列表拿 id，再按 id / 标题切。
+      "chats.list": listChats,
+      "chat.switch": switchChat,
       // 只读那批：读对话走 DOM（#20 口径），不碰站点的响应体。
       "messages.list": listMessages,
       "messages.last": lastMessage,

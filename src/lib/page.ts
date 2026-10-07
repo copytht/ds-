@@ -266,6 +266,63 @@ export function newChat(_frame: ActionFrame): Record<string, never> {
 }
 
 /**
+ * 侧栏会话条目：`a[href^="/a/chat/s/"]`，**`href` 末段即会话 id**。标题取条目的
+ * `textContent`（「更多」按钮只有 svg 没有字，所以整条去空白就是标题）——不靠哈希 class。
+ * 真机口径见存证 `sidebar.chat-row`（2026-10-07）。
+ */
+const CHAT_ROW_SELECTOR = 'a[href^="/a/chat/s/"]';
+
+export type ChatRow = {
+  readonly id: string;
+  readonly title: string;
+  readonly current: boolean;
+};
+
+function chatRows(): { el: HTMLAnchorElement; row: ChatRow }[] {
+  return [...document.querySelectorAll<HTMLAnchorElement>(CHAT_ROW_SELECTOR)].map((el) => {
+    const href = el.getAttribute("href") ?? "";
+    return {
+      el,
+      row: {
+        id: href.split("/").pop() ?? "",
+        title: (el.textContent || "").trim(),
+        current: href === location.pathname,
+      },
+    };
+  });
+}
+
+/** `chats.list`：侧栏**当前有的**会话，按自上而下的顺序；一条都没有是空数组，不算错。 */
+export function listChats(_frame: ActionFrame): { chats: ChatRow[] } {
+  return { chats: chatRows().map(({ row }) => row) };
+}
+
+/**
+ * `chat.switch`：`{id}` 或 `{title}` 恰好其一（非空字符串）。0 命中 `page-changed`；
+ * `title` 命中多条回 `unknown-action`（参数不够指明一条，**宁可拒绝也不替人选一个**）；
+ * 命中的就是当前会话则不点（幂等）。点完**不回读**——站点异步生效，核实用 `page.state` 的 `url`。
+ */
+export function switchChat(frame: ActionFrame): Record<string, never> {
+  const { id, title } = frame.params;
+  const given = [id, title].filter((value) => value !== undefined);
+  const value = id !== undefined ? id : title;
+  if (given.length !== 1 || typeof value !== "string" || value === "") {
+    throw new PageError(ACTION_ERROR_UNKNOWN, "chat.switch 要 id 或 title，恰好其一且为非空字符串");
+  }
+  const wanted = value.trim();
+  const hits = chatRows().filter(({ row }) =>
+    id !== undefined ? row.id === value : row.title === wanted,
+  );
+  if (hits.length === 0) throw new PageError(ACTION_ERROR_PAGE_CHANGED, "侧栏上找不到那一条会话");
+  if (hits.length > 1) {
+    throw new PageError(ACTION_ERROR_UNKNOWN, `标题「${wanted}」命中 ${hits.length} 条，改用 id`);
+  }
+  const hit = hits[0];
+  if (hit !== undefined && !hit.row.current) hit.el.click();
+  return {};
+}
+
+/**
  * 写作框旁边那两个小开关（#30）：站点设计系统的 `div.ds-toggle-button`，状态在
  * `aria-pressed`。**按按钮文字认控件**——文字是本地化的（这里只认中文），认不出当
  * 控件不在、由调用方回 `page-changed`，不猜。
