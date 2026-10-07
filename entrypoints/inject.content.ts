@@ -14,12 +14,21 @@ import {
 import {
   buildContinuation,
   CONTINUATION_MARKER,
-  isArmedFresh,
   STOP_CONTINUATION_LIMIT,
 } from "../src/lib/continuation";
+import {
+  arm as armState,
+  armedBody,
+  claimArmed,
+  disarm,
+  expireIfStale,
+  idleArmed,
+  type ArmedState,
+} from "../src/lib/armed";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
 import {
   isOutgoingChatRequest,
+  outgoingUserTextOf,
   rewriteContinuationBody,
   rewriteOutgoingBody,
 } from "../src/lib/inject";
@@ -80,11 +89,11 @@ export default defineContentScript({
     /** 排着队、还没到出站窗口的续聊正文；放行那一刻才武装（见 `flush`）。 */
     let queuedContinuation: string | null = null;
 
-    /** 已武装：下一条出站聊天请求的正文会被换成它（一次即作废）。 */
-    let armedContinuation: string | null = null;
-
-    /** 武装的时刻：过期（`ARMED_TTL_MS`）一样作废，见下。 */
-    let armedAt = 0;
+    /**
+     * 武装状态机（`armed.ts`）：idle / armed（有 TTL）/ pending（#52 的「等你按发送」）。
+     * 显式的态而不是几个布尔量，#52 加态时不用重写判据。
+     */
+    let armed: ArmedState = idleArmed();
 
     /** 上一次见过的页面会话 id：换了会话 = 换了条任务，轮数归零。 */
     let sessionKey: string | null = null;
@@ -99,25 +108,35 @@ export default defineContentScript({
      * 会被当成续聊那趟、正文被工具结果顶掉（把人说的话吃了，比少一轮严重得多）。
      */
     const rewriteOutgoing = (body: string): string | null => {
-      if (armedContinuation !== null && !isArmedFresh(armedAt, Date.now())) {
-        // 挂太久了：多半是那一趟没真发出去。作废——不能让它顶掉用户下一条消息。
+      // armed 态挂太久（ARMED_TTL_MS）就作废——多半是那一趟没真发出去。
+      // pending 态不看时间：等用户自己按发送（#52）。
+      const before = armed;
+      armed = expireIfStale(armed, Date.now());
+      if (before.phase === "armed" && armed.phase === "idle") {
         console.log("[ds-] 挂着的续聊已过期，作废（不拿它顶用户的下一句话）");
-        armedContinuation = null;
       }
-      if (armedContinuation === null) {
-        const next = rewriteOutgoingBody(body, catalog);
-        if (next !== null) console.log("[ds-] 已把协议说明拼到这条消息开头");
-        return next;
+
+      // 钥匙（#49）：只有「这条出站请求的正文逐字等于短标记」才认领。claimArmed
+      // 顺手做状态迁移——认不走就把武装撤了（用户发的不是我们的标记）。
+      const pending = armedBody(armed);
+      if (pending !== null) {
+        const outcome = claimArmed(armed, outgoingUserTextOf(body), true);
+        armed = outcome.state;
+        if (!outcome.claimed) {
+          console.log("[ds-] 这条出站不是我们那条短标记，原样放行（不拿工具结果顶用户的话）");
+        } else {
+          const next = rewriteContinuationBody(body, pending);
+          console.log(
+            next === null
+              ? "[ds-] 续聊正文没能替换进出站请求，这一轮作废（结果没送到模型手上）"
+              : "[ds-] 续聊正文已替换进这次出站请求（工具结果不走可见消息）",
+          );
+          return next;
+        }
       }
-      const pending = armedContinuation;
-      armedContinuation = null;
-      armedAt = 0;
-      const next = rewriteContinuationBody(body, pending);
-      console.log(
-        next === null
-          ? "[ds-] 续聊正文没能替换进出站请求，这一轮作废（结果没送到模型手上）"
-          : "[ds-] 续聊正文已替换进这次出站请求（工具结果不走可见消息）",
-      );
+
+      const next = rewriteOutgoingBody(body, catalog);
+      if (next !== null) console.log("[ds-] 已把协议说明拼到这条消息开头");
       return next;
     };
 
@@ -144,18 +163,17 @@ export default defineContentScript({
         // 武装放在放行这一刻：从入队到开窗有几秒，期间用户可能自己在发消息——
         // 早武装就会把他的真消息换成工具结果。
         const isContinuation = queuedContinuation !== null && message === CONTINUATION_MARKER;
-        if (isContinuation) {
-          armedContinuation = queuedContinuation;
-          armedAt = Date.now();
+        if (isContinuation && queuedContinuation !== null) {
+          // armed 态（有 TTL）。#52 起，闸关着时这里会改挂 pending 态（无 TTL）。
+          armed = armState(queuedContinuation, Date.now());
           queuedContinuation = null;
         }
         void sendToPage(message)
           .then((sent) => {
-            // 没发出去就把武装撤掉（发出去的已经被替换那一步消费掉了）：
+            // 没发出去就把武装撤掉（发出去的已经被认领那一步消费掉了）：
             // 留着它，下一个出站就是用户自己发的消息，正文会被工具结果顶掉。
             if (!sent && isContinuation) {
-              armedContinuation = null;
-              armedAt = 0;
+              armed = disarm(armed);
             }
             console.log(
               sent ? "[ds-] 续聊已作为一条短标记发出" : "[ds-] 续聊没有发出去，页面里没有新消息",
@@ -163,8 +181,7 @@ export default defineContentScript({
           })
           .catch((error) => {
             if (isContinuation) {
-              armedContinuation = null;
-              armedAt = 0;
+              armed = disarm(armed);
             }
             console.log("[ds-] 续聊发送出岔，页面里没有新消息", error);
           });
@@ -355,8 +372,7 @@ export default defineContentScript({
         gate = newGate();
         // 续聊这两笔与轮数也一样作废：关着时挂着的正文不该在下一次开闸时冒出来。
         queuedContinuation = null;
-        armedContinuation = null;
-        armedAt = 0;
+        armed = idleArmed();
         rounds = resetRounds();
         sessionKey = null;
       }
