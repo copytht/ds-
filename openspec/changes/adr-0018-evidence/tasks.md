@@ -27,7 +27,7 @@
 
 ## 5. 验收与提交
 
-- [ ] 5.1 `openspec validate --all --archived --strict` 绿
-- [ ] 5.2 `pnpm quality` 绿
+- [x] 5.1 `openspec validate --all --archived --strict` 绿
+- [x] 5.2 `pnpm quality` 绿
 - [ ] 5.3 提交、开 PR（`Refs #66`，**不写 Fixes**，#66 还剩 11 项实现）、CI 绿后合并、删分支
 - [ ] 5.4 #66 评论：A 已落（存证 + 对拍 + 对账 + 回补），B（11 项实现）待另开 change；写明未验证项
