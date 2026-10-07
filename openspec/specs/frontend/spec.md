@@ -471,6 +471,76 @@ MUST NOT 按 `pressed` 动态放行。
 - **THEN** 6 颗工具栏按钮、工具栏容器、用户消息的 2 颗工具栏（反例）都已按 ADR-0018 入档
   `protocol/evidence/controls.json`，回归用例原件取自存证、不手抄
 
+### Requirement: 侧栏开关
+
+名册 SHALL 含只读动作 `sidebar.get` 与写动作 `sidebar.set`，指向**同一个控件**——侧栏开关键
+（展开与收起两态图标不变，只是位置变）。
+
+- `sidebar.get` SHALL 只读，返回 `{ collapsed: boolean }`；不受任何闸。
+- `sidebar.set` SHALL 接受 `{ collapsed: boolean }`（非布尔回 `unknown-action`）；已在目标态就不点（幂等）；
+  点完 SHALL **等稳定**再回达成态（轮询状态到目标，上限与「两个小开关」同口径），MUST NOT 点完立刻读。
+  SHALL 进「退避」闸，MUST NOT 进「代你发言」闸。
+
+**定位**（MUST NOT 用哈希 class、图标 `path` 不作判据、屏幕坐标不作判据）：
+
+- 锚：`[tabindex="0"]` 里 `textContent` 去空白后为「开启新对话」的条目（与 `chat.new` 同一个锚）。
+  文字是本地化的，认不出当控件不在。
+- 状态：该条目**没有布局盒**（`getClientRects()` 为空）= 收起；有 = 展开。
+- 开关键：取该锚的最近祖先里「无字（`textContent` 为空）、带 `ds-button--icon`、不在会话条目 `a[href^="/a/chat/s/"]` 内、
+  有布局盒」的图标键（文档序），**以其中第一颗的父元素为顶栏组**，只数该父元素的**直接子**里满足同样条件的图标键
+  （别处的图标键——如会话列表里分组标题的折叠小键——不参与）；**展开态必须恰好 2 颗、开关键是第 2 颗；收起态必须恰好
+  3 颗、开关键是第 1 颗**。数量与状态对不上、找不到锚，一律当控件不在。
+
+#### Scenario: 读侧栏状态
+
+- **WHEN** agent 发 `sidebar.get`
+- **THEN** 回 `{ collapsed: false }`（展开）或 `{ collapsed: true }`（收起），不点任何东西
+
+#### Scenario: 收起侧栏
+
+- **WHEN** `sidebar.set` 收到 `{ collapsed: true }` 而侧栏是展开的
+- **THEN** 点展开态 2 颗里的第 2 颗，等稳定后回 `{ collapsed: true }`
+
+#### Scenario: 展开侧栏
+
+- **WHEN** `sidebar.set` 收到 `{ collapsed: false }` 而侧栏是收起的
+- **THEN** 点收起态 3 颗里的第 1 颗，等稳定后回 `{ collapsed: false }`
+
+#### Scenario: 已在目标态
+
+- **WHEN** `sidebar.set` 的目标态就是当前态
+- **THEN** 不点、不轮询，立即回当前态
+
+#### Scenario: 站点异步生效
+
+- **WHEN** 点过之后侧栏要过一小会儿（上限内）才变到目标态
+- **THEN** 等到变好再回达成态，MUST NOT 点完那一刻就读出旧值
+
+#### Scenario: 站点拒了这一点
+
+- **WHEN** 点过之后状态一直没变，直到上限
+- **THEN** 回未变的状态（达成态），MUST NOT 回目标态
+
+#### Scenario: 顶栏结构对不上
+
+- **WHEN** 展开态里顶栏组的图标键不是恰好 2 颗，或收起态不是恰好 3 颗，或找不到「开启新对话」锚
+- **THEN** 回 `page-changed`，不点——宁可停也不点到搜索或新对话
+
+#### Scenario: 参数形状不对
+
+- **WHEN** `collapsed` 缺失或不是布尔
+- **THEN** 回 `unknown-action`，不点
+
+#### Scenario: 退避期点不了
+
+- **WHEN** 账号在退避期而 agent 发 `sidebar.set`
+- **THEN** 回 `backing-off`；`sidebar.get` 不受影响
+
+#### Scenario: 存证先行
+
+- **WHEN** 新增这两个动作的执行器
+- **THEN** 展开 / 收起两态的顶栏容器与开关键都已按 ADR-0018 入档 `protocol/evidence/controls.json`，回归用例读存证、不手抄
+
 ### Requirement: 页面动作的候补控件只登记、不进名册
 
 页面上**不在**名册里的控件 SHALL 按「建议动作名 / 定位（真机实测）/ 返回形状」三列登记成
@@ -522,12 +592,12 @@ MUST NOT 按 `pressed` 动态放行。
 #### Scenario: 侧栏搜索与收起边栏（真机 2026-10-06 实测）
 
 - **WHEN** 想给侧栏顶部两颗按钮做动作
-- **THEN** 登记：
-  - `sidebar.search`（搜索 ⌘K）
-  - `sidebar.collapse`（收起边栏）
-    2026-10-07 真机更正：这两颗**不是**「有文字标签」——`textContent` 为空、无 `aria-label`、无 `title`，
-    同一容器里的两颗兄弟（`ds-button--iconLabelTertiary … ds-button--m`，末尾哈希不同），**身份只靠顺序**
-    （名字来自 2026-10-06 悬停 tooltip）。没有可靠锚点之前**只登记、不进名册**。
+- **THEN** `sidebar.search`（搜索 ⌘K）**只登记、不进名册**；`sidebar.collapse`（收起边栏）**已实现，不再是候补**——
+  它与展开动作是同一个控件，做成读写成对的 `sidebar.get` / `sidebar.set`，契约见「侧栏开关」。
+  2026-10-07 真机更正：这两颗**不是**「有文字标签」——`textContent` 为空、无 `aria-label`、无 `title`，
+  同一容器里的兄弟（`ds-button--iconLabelTertiary … ds-button--m`），**身份只靠顺序**
+  （名字来自 2026-10-06 悬停 tooltip）。`sidebar.search` 在展开态排第 1、收起态排第 2，
+  没有可靠锚点之前不实现。
 
 #### Scenario: 切换会话 `chat.switch`（真机 2026-10-07 实测）
 
@@ -545,8 +615,8 @@ MUST NOT 按 `pressed` 动态放行。
 #### Scenario: 为什么这些项只是登记（v1 名册边界）
 
 - **WHEN** 问候补为什么没进 v1
-- **THEN** v1 名册（`ACTION_ROSTER`）已含：`think.get/set`、`search.get/set`、`button.get/click`、`send.enter`、`chat.new`、`chat.switch`、`chats.list`、`message.copy/retry/like/dislike/read/share`、`code.copy/download`、`wait.fence/reply`、`messages.list/last`、`composer.read/type/clear`、`tabs.list`、`page.state`——这些都有执行器、四处对齐、测试过。
-  候补项（附件上传、页头分享、侧栏两项）
+- **THEN** v1 名册（`ACTION_ROSTER`）已含：`think.get/set`、`search.get/set`、`button.get/click`、`send.enter`、`chat.new`、`chat.switch`、`chats.list`、`message.copy/retry/like/dislike/read/share`、`code.copy/download`、`sidebar.get/set`、`wait.fence/reply`、`messages.list/last`、`composer.read/type/clear`、`tabs.list`、`page.state`——这些都有执行器、四处对齐、测试过。
+  候补项（附件上传、页头分享、侧栏搜索）
   **需要文件数据 / 缺可靠语义锚 / 改动面大**，改动与误伤面都大——理由记在候补里，
   **等真机存证对拍（ADR-0018）落地后再考虑实现**。
 
