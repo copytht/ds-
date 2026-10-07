@@ -21,9 +21,9 @@
 
 ## 4. 真机对账子命令
 
-- [ ] 4.1 `scripts/page-action.py` 加 `evidence [--id <id>]`：读 `controls.json`，对 `live` 条目跑 `probe` 逐字比；不等打印 id + 差异片段 + 「站点改版，存证过时」、退出码 1；`state-bound` 不等只报「当前态不符、未比」；沿用 `pace()`、只读不 dispatch
-- [ ] 4.2 更新脚本顶部用法文档与 `--help`
-- [ ] 4.3 真机跑一遍 `evidence`：`code.*` 三条应全绿；再改坏本地一份存证的一个字符，确认它报「存证过时」后还原
+- [x] 4.1 `scripts/page-action.py` 加 `evidence [--id <id>]`：读 `controls.json`，对 `live` 条目跑 `probe` 逐字比；不等打印 id + 差异片段 + 「站点改版，存证过时」、退出码 1；`state-bound` 不等只报「当前态不符、未比」；沿用 `pace()`、只读不 dispatch
+- [x] 4.2 更新脚本顶部用法文档与 `--help`
+- [x] 4.3 真机跑一遍 `evidence`：`code.*` 三条应全绿；再改坏本地一份存证的一个字符，确认它报「存证过时」后还原
 
 ## 5. 验收与提交
 
