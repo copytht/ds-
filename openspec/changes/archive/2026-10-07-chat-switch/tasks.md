@@ -7,9 +7,9 @@
 ## 2. Spec
 
 - [x] 2.1 `frontend` spec 的候补 requirement 加 `chat.switch` 场景（定位口径 / 形状陷阱 / 参数取舍 / 只登记不进名册）——delta 已在 `specs/frontend/spec.md`，主 spec 随归档同步
-- [ ] 2.2 `openspec validate --all --archived --strict` 绿
+- [x] 2.2 `openspec validate --all --archived --strict` 绿
 
 ## 3. 验收与提交
 
-- [ ] 3.1 提交、开 PR（`Refs #66`——#66 那 11 项候补不含本项，实现另开 change）、CI 绿后合并、删分支
-- [ ] 3.2 回贴说明：`chat.switch` 已登记，实现留待另一个 change（要过写动作登记闸门 + 退避 + 真机点验）
+- [x] 3.1 提交、开 PR（`Refs #66`——#66 那 11 项候补不含本项，实现另开 change）、CI 绿后合并、删分支
+- [x] 3.2 回贴说明：`chat.switch` 已登记，实现留待另一个 change（要过写动作登记闸门 + 退避 + 真机点验）
