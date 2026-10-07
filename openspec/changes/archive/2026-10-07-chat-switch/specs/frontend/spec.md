@@ -2,6 +2,10 @@
 
 ### Requirement: 页面动作的候补控件只登记、不进名册
 
+页面上**不在**名册里的控件 SHALL 按「建议动作名 / 定位（真机实测）/ 返回形状」三列登记成
+候补，状态记「只登记」，MUST NOT 写进 `entrypoints/content.ts` 的 `ACTION_ROSTER`——
+**登记 ≠ 名册**：写了却没执行器，点下去只会回 `unknown-action`，是假实现。
+
 定位口径同「控件定位优先设计系统语义锚」（`ds-*` / `role` / `aria-*`，不碰哈希 class）；
 已实现动作另见 `protocol/fixtures/action.json` 与 `src/lib/page.ts`。
 

@@ -342,7 +342,8 @@ MUST NOT 按 `pressed` 动态放行。
 
 候补 SHALL 等真机确认后再升级，MUST NOT 凭文档里「待真机确认」的选择器直接上真机写执行器。
 **用途未认出的控件 SHALL 记「待查」并写下线索，MUST NOT 硬编一个动作名。**
-真机证据以 2026-10-06 爬取为准（`scripts/page-action.py`，会话 `976c5618`）。
+真机证据以 2026-10-06 爬取为准（`scripts/page-action.py`，会话 `976c5618`）；`chat.switch` 一项为
+2026-10-07 实测。
 
 #### Scenario: 登记一个候选控件
 
@@ -385,6 +386,18 @@ MUST NOT 按 `pressed` 动态放行。
   - `sidebar.collapse`（收起边栏，位置 (232,25)）
     真机均为 `ds-button` 系、有文字标签，**只登记、不进名册**
 
+#### Scenario: 切换会话 `chat.switch`（真机 2026-10-07 实测）
+
+- **WHEN** 想让 agent 自主切换到另一条会话继续
+- **THEN** 登记 `chat.switch`，定位口径：侧栏条目 `a[href^="/a/chat/s/"]`，**`href` 末段即会话 id**
+  （形如 `/a/chat/s/{uuid}`）；标题取条目内文本，**不靠哈希 class**（真机的标题容器是 `div.c08e6e93`，
+  属哈希）。返回形状按写动作记 `{}`。
+  **形状陷阱**：条目内嵌一颗 hover 才显形的「更多」按钮，与消息工具栏那批同形按钮一致
+  （`ds-button--iconLabelTertiary … _2090548`），所以这条存证是 `state-bound`，不是常驻。
+  **参数取舍**：标题可读但会重名（真机侧栏有 5 条同名「列出工作目录文件」），会话 id 唯一但不好
+  从人话里推——两个都收，实现时按标题匹配后回读 `location.href` 核实落到了哪条。
+  **只登记、不进名册**：切换会改页面状态，实现时须过「写动作登记闸门」并登记退避。
+
 #### Scenario: 模型选择（真机 2026-10-06 实测）
 
 - **WHEN** 找模型选择控件
@@ -394,7 +407,9 @@ MUST NOT 按 `pressed` 动态放行。
 
 - **WHEN** 问候补为什么没进 v1
 - **THEN** v1 名册（`ACTION_ROSTER`）已含：`think.get/set`、`search.get/set`、`button.get/click`、`send.enter`、`chat.new`、`wait.fence/reply`、`messages.list/last`、`composer.read/type/clear`、`tabs.list`、`page.state`——这些都有执行器、四处对齐、测试过。
-  候补项（消息工具栏六项、代码块两项、附件上传、页头分享、侧栏两项）**需要索引参数 / 文件数据 / 改动面大**，改动与误伤面都大——理由记在候补里，**等真机存证对拍（ADR-0018）落地后再考虑实现**。
+  候补项（消息工具栏六项、代码块两项、附件上传、页头分享、侧栏两项、`chat.switch`）
+  **需要索引参数 / 文件数据 / 改动页面状态 / 改动面大**，改动与误伤面都大——理由记在候补里，
+  **等真机存证对拍（ADR-0018）落地后再考虑实现**。
 
 #### Scenario: 候补项要上真机
 
