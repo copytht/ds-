@@ -17,11 +17,11 @@
 - [x] 3.3 **若合成点击无效或点到别的键**：停下，改 design / spec，不硬上（**触发了一半**：合成点击有效；但真机展开态下最近祖先里多出一颗会话列表分组折叠小键，原先的「同属一个父元素」不成立，已改成「以第一颗的父元素为组」并改了 spec / design / 代码 / 存证 probe，再验两个方向各来回两次）
 - [x] 3.4 `protocol/fixtures/action.json`：加 `sidebar.get 成功`、`sidebar.set 成功`、`sidebar.set 顶栏结构对不上`、`sidebar.set 参数不是布尔`
 - [x] 3.5 `src/lib/page.test.ts`：原件取自存证，覆盖 spec 的 10 个场景（含数量 / 位置 / 别处的图标键不参与 / 异步生效 / 站点拒绝；jsdom 里 `getClientRects` 要 stub）；对拍栅栏不红
-- [ ] 3.6 `pnpm quality` 绿
+- [x] 3.6 `pnpm quality` 绿
 
 ## 4. 收尾
 
 - [x] 4.1 `scripts/page-action.py evidence` 新增条目全绿或「未比」，无「过时」
 - [x] 4.2 `openspec validate --all --archived --strict` 绿；提交、开 PR（`Refs #66`）、CI 绿后合并、删分支
-- [ ] 4.3 #66 评论：`sidebar.get/set` 已实现；`sidebar.search` / `header.share` 仍留候补
-- [ ] 4.4 归档本 change（delta 同步进 `frontend` 主 spec）
+- [x] 4.3 #66 评论：`sidebar.get/set` 已实现；`sidebar.search` / `header.share` 仍留候补
+- [x] 4.4 归档本 change（delta 同步进 `frontend` 主 spec）
