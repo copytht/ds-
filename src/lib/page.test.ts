@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_UNKNOWN, PageError } from "./action";
 import { evidenceHtml } from "./evidence";
@@ -8,6 +8,7 @@ import {
   buttonClick,
   clearComposer,
   findButton,
+  listChats,
   newChat,
   pressEnter,
   readButton,
@@ -17,6 +18,7 @@ import {
   readThink,
   setSearch,
   setThink,
+  switchChat,
   typeComposer,
 } from "./page";
 
@@ -475,5 +477,163 @@ describe("那个圆键：button.get / button.click", () => {
     expect(readButton(FRAME)).toEqual({ pressed: "unknown" });
     // 它带 ds-button--disabled → 可用性判据挡住点击（真机确认过它带这个 class）
     expect(thrownCode(() => buttonClick(FRAME))).toBe(ACTION_ERROR_PAGE_CHANGED);
+  });
+});
+
+describe("chats.list / chat.switch 执行器", () => {
+  // 原件取自存证 `sidebar.chat-row`（真机 2026-10-07，ADR-0018）：整条 `<a>`，含「更多」按钮。
+  // 只在取到的原件上做最小变形——换 href 里的 uuid、换标题文字；不手抄一整条。
+  const ROW = evidenceHtml("sidebar.chat-row");
+  const ROW_ID = /\/a\/chat\/s\/[0-9a-f-]+/;
+  const ROW_TITLE = />[^<>]+<\/div><div class="_254829d">/;
+
+  function row(id: string, title: string): string {
+    return ROW.replace(ROW_ID, `/a/chat/s/${id}`).replace(
+      ROW_TITLE,
+      `>${title}</div><div class="_254829d">`,
+    );
+  }
+
+  function sidebar(...rows: string[]): void {
+    document.body.innerHTML = `<div class="_3098d02"><div>7 天内</div>${rows.join("")}</div>`;
+  }
+
+  const switchFrame = (params: Record<string, unknown>) =>
+    ({ ...FRAME, action: "chat.switch", params }) as const;
+
+  /** 点了谁：给每条挂计数，返回按 id 取点击次数的函数。 */
+  function trackClicks(): (id: string) => number {
+    const counts = new Map<string, number>();
+    for (const el of document.querySelectorAll<HTMLAnchorElement>('a[href^="/a/chat/s/"]')) {
+      // 真浏览器点 `<a>` 会真导航；jsdom 里拦下默认行为只数次数。
+      el.addEventListener("click", (event) => {
+        event.preventDefault();
+        const id = (el.getAttribute("href") ?? "").split("/").pop() ?? "";
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      });
+    }
+    return (id) => counts.get(id) ?? 0;
+  }
+
+  const thrownCode = (fn: () => unknown): string | undefined => {
+    try {
+      fn();
+    } catch (error) {
+      return error instanceof PageError ? error.code : undefined;
+    }
+    return undefined;
+  };
+
+  beforeEach(() => history.pushState({}, "", "/"));
+
+  it("存证原件解析得出 id 与标题（变形没把原件改坏）", () => {
+    sidebar(row("aaaa-1111", "协议确认"));
+
+    expect(listChats(FRAME)).toEqual({
+      chats: [{ id: "aaaa-1111", title: "协议确认", current: false }],
+    });
+  });
+
+  it("chats.list：按侧栏顺序列出，同名各占一条，当前会话 current 为真", () => {
+    history.pushState({}, "", "/a/chat/s/bbbb-2222");
+    sidebar(row("aaaa-1111", "协议确认"), row("bbbb-2222", "重名"), row("cccc-3333", "重名"));
+
+    expect(listChats(FRAME)).toEqual({
+      chats: [
+        { id: "aaaa-1111", title: "协议确认", current: false },
+        { id: "bbbb-2222", title: "重名", current: true },
+        { id: "cccc-3333", title: "重名", current: false },
+      ],
+    });
+  });
+
+  it("chats.list：侧栏上一条都没有回空数组，不算错", () => {
+    document.body.innerHTML = "<div>空的</div>";
+
+    expect(listChats(FRAME)).toEqual({ chats: [] });
+  });
+
+  it("chat.switch：按 id 点中那一条，只点它", () => {
+    sidebar(row("aaaa-1111", "协议确认"), row("bbbb-2222", "重名"));
+    const clicks = trackClicks();
+
+    expect(switchChat(switchFrame({ id: "bbbb-2222" }))).toEqual({});
+    expect([clicks("aaaa-1111"), clicks("bbbb-2222")]).toEqual([0, 1]);
+  });
+
+  it("chat.switch：按标题切，标题唯一就点", () => {
+    sidebar(row("aaaa-1111", "协议确认"), row("bbbb-2222", "重名"));
+    const clicks = trackClicks();
+
+    expect(switchChat(switchFrame({ title: "协议确认" }))).toEqual({});
+    expect([clicks("aaaa-1111"), clicks("bbbb-2222")]).toEqual([1, 0]);
+  });
+
+  it("chat.switch：标题重名回 unknown-action，一条都不点", () => {
+    sidebar(row("aaaa-1111", "重名"), row("bbbb-2222", "重名"));
+    const clicks = trackClicks();
+
+    expect(thrownCode(() => switchChat(switchFrame({ title: "重名" })))).toBe(ACTION_ERROR_UNKNOWN);
+    expect([clicks("aaaa-1111"), clicks("bbbb-2222")]).toEqual([0, 0]);
+  });
+
+  it("chat.switch：id 或标题命中 0 条回 page-changed，不点", () => {
+    sidebar(row("aaaa-1111", "协议确认"));
+    const clicks = trackClicks();
+
+    expect(thrownCode(() => switchChat(switchFrame({ id: "none" })))).toBe(
+      ACTION_ERROR_PAGE_CHANGED,
+    );
+    expect(thrownCode(() => switchChat(switchFrame({ title: "没有这一条" })))).toBe(
+      ACTION_ERROR_PAGE_CHANGED,
+    );
+    expect(clicks("aaaa-1111")).toBe(0);
+  });
+
+  it.each([
+    ["都没给", {}],
+    ["都给了", { id: "aaaa-1111", title: "协议确认" }],
+    ["空串", { id: "" }],
+    ["不是字符串", { id: 1111 }],
+    ["标题是空串", { title: "" }],
+  ])("chat.switch：参数形状不对（%s）回 unknown-action，不点", (_name, params) => {
+    sidebar(row("aaaa-1111", "协议确认"));
+    const clicks = trackClicks();
+
+    expect(thrownCode(() => switchChat(switchFrame(params)))).toBe(ACTION_ERROR_UNKNOWN);
+    expect(clicks("aaaa-1111")).toBe(0);
+  });
+
+  it("chat.switch：命中的就是当前会话，不点、回 {}（幂等）", () => {
+    history.pushState({}, "", "/a/chat/s/aaaa-1111");
+    sidebar(row("aaaa-1111", "协议确认"), row("bbbb-2222", "别的"));
+    const clicks = trackClicks();
+
+    expect(switchChat(switchFrame({ id: "aaaa-1111" }))).toEqual({});
+    expect([clicks("aaaa-1111"), clicks("bbbb-2222")]).toEqual([0, 0]);
+  });
+
+  it("chat.switch：标题前后空白容忍，其余严格相等", () => {
+    sidebar(row("aaaa-1111", "协议确认"));
+    const clicks = trackClicks();
+
+    expect(switchChat(switchFrame({ title: "  协议确认 " }))).toEqual({});
+    expect(clicks("aaaa-1111")).toBe(1);
+    expect(thrownCode(() => switchChat(switchFrame({ title: "协议" })))).toBe(
+      ACTION_ERROR_PAGE_CHANGED,
+    );
+  });
+
+  it("结果的键与共享 fixture 的 chats.list 样例一致（TS 与 Python 共读）", () => {
+    const sample = fixtureCases<ActionCase>("action.json").find(
+      ({ name }) => name === "chats.list 成功",
+    )?.response;
+    if (!sample || !sample.ok) throw new Error("fixture 里没有 chats.list 成功样例");
+    const fixtureRow = (sample.result as { chats: object[] }).chats[0] as object;
+    sidebar(row("aaaa-1111", "协议确认"));
+
+    expect(Object.keys(listChats(FRAME).chats[0] as object).sort()).toEqual(
+      Object.keys(fixtureRow).sort(),
+    );
   });
 });

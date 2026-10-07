@@ -505,6 +505,33 @@ describe("退避闸（账号在处罚区，写动作停发）", () => {
     expect(sent.map((f) => f.action)).toEqual(["page.state", "think.set"]);
   });
 
+  it("chat.switch 在退避闸下（切会话改页面状态），chats.list 不受影响", async () => {
+    const { send, sent } = recordingSendToTab(MUTED);
+    const ctx = context({ sendToTab: send });
+
+    expect(
+      await runAction(frame({ action: "chat.switch", params: { id: "a" }, target: "42" }), ctx),
+    ).toEqual({ ok: false, error: "backing-off" });
+    expect(sent.map((f) => f.action)).toEqual(["page.state"]);
+    // 读会话列表是只读：不探针、不拦。
+    sent.length = 0;
+    expect(await runAction(frame({ action: "chats.list", target: "42" }), ctx)).toEqual({
+      ok: true,
+      result: {},
+    });
+    expect(sent.map((f) => f.action)).toEqual(["chats.list"]);
+  });
+
+  it("chat.switch 只进退避闸、不进 speak 闸（不动写作框、不代你发言）", async () => {
+    const { send, sent } = recordingSendToTab({ kind: "ready" });
+    const ctx = context({ speak: false, sendToTab: send });
+
+    expect(
+      await runAction(frame({ action: "chat.switch", params: { id: "a" }, target: "42" }), ctx),
+    ).toEqual({ ok: true, result: {} });
+    expect(sent.map((f) => f.action)).toEqual(["page.state", "chat.switch"]);
+  });
+
   it("button.click 也在退避闸下（点圆键总是改页面状态）", async () => {
     const { send, sent } = recordingSendToTab(MUTED);
     const ctx = context({ sendToTab: send });
