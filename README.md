@@ -17,6 +17,9 @@
         → 唯一出站口(ADR-0002) → 页面
 ````
 
+一圈的交互图（archify 生成，源文件在同目录）：
+[自动续聊：一圈是怎么转的](docs/diagrams/continuation-round.html)
+
 中继完全被动：不推送、不轮询、无会话、一条 CORS 头都不下发；只有 background 打网络。
 
 dsb 另外内建五件工作工具（`ls` / `read` / `grep` / `write` / `edit`），钉死在工作文件夹
