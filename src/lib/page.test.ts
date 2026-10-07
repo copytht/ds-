@@ -15,8 +15,10 @@ import {
   readComposer,
   readPageState,
   readSearch,
+  readSidebar,
   readThink,
   setSearch,
+  setSidebar,
   setThink,
   switchChat,
   TOGGLE_POLL_MS,
@@ -684,5 +686,217 @@ describe("chats.list / chat.switch 执行器", () => {
     expect(Object.keys(listChats(FRAME).chats[0] as object).sort()).toEqual(
       Object.keys(fixtureRow).sort(),
     );
+  });
+});
+
+describe("sidebar.get / sidebar.set 执行器", () => {
+  // 原件取自存证（真机 2026-10-07，ADR-0018）：展开 / 收起两态的顶栏容器。只做最小变形，不手抄。
+  const EXPANDED_BAR = evidenceHtml("sidebar.topbar.expanded");
+  const COLLAPSED_BAR = evidenceHtml("sidebar.topbar.collapsed");
+  const NEW_CHAT = '<div tabindex="0">开启新对话</div>';
+  const CHAT_ROW = '<a href="/a/chat/s/aaaa-1111"><div>一条会话</div></a>';
+
+  /** jsdom 没有布局：给元素钉上「有 / 没有布局盒」。 */
+  function layout(el: Element, visible: boolean): void {
+    (el as HTMLElement).getClientRects = () =>
+      (visible ? [{ width: 1, height: 1 }] : []) as unknown as DOMRectList;
+  }
+
+  /** 搭一个侧栏：顶栏容器原件 + 带文字的锚 + 一条会话；按状态给每个元素钉布局盒。 */
+  function sidebar(collapsed: boolean, bar = collapsed ? COLLAPSED_BAR : EXPANDED_BAR): void {
+    document.body.innerHTML = `<div id="root"><div>${bar}</div><div>${NEW_CHAT}${CHAT_ROW}</div></div>`;
+    for (const el of document.querySelectorAll("#root *")) layout(el, true);
+    // 收起：锚与会话条目没有布局盒（顶栏的几颗按钮仍在）。
+    const hidden = document.querySelectorAll('[tabindex="0"]:not([role]), a');
+    for (const el of hidden) layout(el, !collapsed);
+  }
+
+  const toggleFrame = (params: Record<string, unknown>) =>
+    ({ ...FRAME, action: "sidebar.set", params }) as const;
+
+  /** 给顶栏组里的按钮记点击；`flip` 为真时点中开关键就把侧栏翻成另一态（模拟站点）。 */
+  function wire(flip?: { afterMs: number; to: boolean }): Map<number, number> {
+    const clicks = new Map<number, number>();
+    const group = document.querySelector('[role="button"].ds-button--icon')?.parentElement;
+    [...(group?.children ?? [])]
+      .filter((child) => child.getAttribute("role") === "button")
+      .forEach((button, index) => {
+        button.addEventListener("click", () => {
+          clicks.set(index + 1, (clicks.get(index + 1) ?? 0) + 1);
+          if (flip !== undefined) {
+            setTimeout(() => {
+              const anchor = [...document.querySelectorAll('[tabindex="0"]')].find(
+                (e) => e.textContent === "开启新对话",
+              );
+              if (anchor) layout(anchor, !flip.to);
+            }, flip.afterMs);
+          }
+        });
+      });
+    return clicks;
+  }
+
+  const thrownCode = async (fn: () => unknown): Promise<string | undefined> => {
+    try {
+      await fn();
+    } catch (error) {
+      return error instanceof PageError ? error.code : undefined;
+    }
+    return undefined;
+  };
+
+  afterEach(() => vi.useRealTimers());
+
+  it("存证原件的前提：展开顶栏 2 颗、收起顶栏 3 颗，都是无字图标键", () => {
+    sidebar(false);
+    expect(document.querySelectorAll('[role="button"].ds-button--icon').length).toBe(2);
+    sidebar(true);
+    expect(document.querySelectorAll('[role="button"].ds-button--icon').length).toBe(3);
+  });
+
+  it("sidebar.get：锚有布局盒 = 展开，没有 = 收起", () => {
+    sidebar(false);
+    expect(readSidebar(FRAME)).toEqual({ collapsed: false });
+    sidebar(true);
+    expect(readSidebar(FRAME)).toEqual({ collapsed: true });
+  });
+
+  it("sidebar.get：找不到「开启新对话」锚回 page-changed", async () => {
+    document.body.innerHTML = "<div>没有侧栏</div>";
+    expect(await thrownCode(() => readSidebar(FRAME))).toBe(ACTION_ERROR_PAGE_CHANGED);
+  });
+
+  it("收起：展开态点 2 颗里的第 2 颗，等稳定后回 collapsed:true，没点别的", async () => {
+    vi.useFakeTimers();
+    sidebar(false);
+    const clicks = wire({ afterMs: 200, to: true });
+
+    const pending = setSidebar(toggleFrame({ collapsed: true }));
+    await vi.advanceTimersByTimeAsync(400);
+
+    expect(await pending).toEqual({ collapsed: true });
+    expect([...clicks.entries()]).toEqual([[2, 1]]);
+  });
+
+  it("展开：收起态点 3 颗里的第 1 颗，没点搜索 / 新对话", async () => {
+    vi.useFakeTimers();
+    sidebar(true);
+    const clicks = wire({ afterMs: 150, to: false });
+
+    const pending = setSidebar(toggleFrame({ collapsed: false }));
+    await vi.advanceTimersByTimeAsync(400);
+
+    expect(await pending).toEqual({ collapsed: false });
+    expect([...clicks.entries()]).toEqual([[1, 1]]);
+  });
+
+  it("已在目标态：不点、不轮询，立即回（fake timers 不推进也不会挂）", async () => {
+    vi.useFakeTimers();
+    sidebar(false);
+    const clicks = wire();
+
+    expect(await setSidebar(toggleFrame({ collapsed: false }))).toEqual({ collapsed: false });
+    expect(clicks.size).toBe(0);
+  });
+
+  it("站点异步生效：点完那一刻还是旧态，上限内才变，不能提前回旧值（#81 同口径）", async () => {
+    vi.useFakeTimers();
+    sidebar(false);
+    wire({ afterMs: 300, to: true });
+
+    let settled: { collapsed: boolean } | undefined;
+    const pending = setSidebar(toggleFrame({ collapsed: true })).then((v) => (settled = v));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(settled).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(300);
+    await pending;
+
+    expect(settled).toEqual({ collapsed: true });
+  });
+
+  it("站点拒了这一点：等满上限，回未变的状态而不是目标态", async () => {
+    vi.useFakeTimers();
+    sidebar(false);
+    wire(); // 点了也不翻
+
+    const pending = setSidebar(toggleFrame({ collapsed: true }));
+    await vi.advanceTimersByTimeAsync(TOGGLE_SETTLE_MS + 100);
+
+    expect(await pending).toEqual({ collapsed: false });
+  });
+
+  it.each([
+    ["缺失", {}],
+    ["字符串", { collapsed: "yes" }],
+    ["数字", { collapsed: 1 }],
+  ])("collapsed %s：unknown-action，不点", async (_name, params) => {
+    sidebar(false);
+    const clicks = wire();
+
+    expect(await thrownCode(() => setSidebar(toggleFrame(params)))).toBe(ACTION_ERROR_UNKNOWN);
+    expect(clicks.size).toBe(0);
+  });
+
+  it("展开态顶栏多一颗图标键：page-changed，不点", async () => {
+    sidebar(false);
+    const group = document.querySelector('[role="button"].ds-button--icon')
+      ?.parentElement as Element;
+    const extra = group.children[0]?.cloneNode(true) as Element;
+    group.append(extra);
+    layout(extra, true);
+    const clicks = wire();
+
+    expect(await thrownCode(() => setSidebar(toggleFrame({ collapsed: true })))).toBe(
+      ACTION_ERROR_PAGE_CHANGED,
+    );
+    expect(clicks.size).toBe(0);
+  });
+
+  it("收起态顶栏少一颗：page-changed，不点", async () => {
+    sidebar(true);
+    const buttons = [...document.querySelectorAll('[role="button"].ds-button--icon')];
+    buttons[buttons.length - 1]?.remove();
+    const clicks = wire();
+
+    expect(await thrownCode(() => setSidebar(toggleFrame({ collapsed: false })))).toBe(
+      ACTION_ERROR_PAGE_CHANGED,
+    );
+    expect(clicks.size).toBe(0);
+  });
+
+  it("别处的图标键不参与：会话列表里分组标题的折叠小键（展开态真机就有一颗）不算顶栏", async () => {
+    vi.useFakeTimers();
+    sidebar(false);
+    // 真机展开态：最近祖先里还有一颗 22px 折叠小键，父元素不同、在会话列表里。
+    const stray = document.createElement("div");
+    stray.innerHTML =
+      '<div><div role="button" class="ds-button ds-button--icon"></div><span>7 天内</span></div>';
+    document.querySelector("#root")?.append(stray);
+    layout(stray.querySelector('[role="button"]') as Element, true);
+    const clicks = wire({ afterMs: 100, to: true });
+
+    const pending = setSidebar(toggleFrame({ collapsed: true }));
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(await pending).toEqual({ collapsed: true });
+    expect([...clicks.entries()]).toEqual([[2, 1]]);
+  });
+
+  it("会话条目里的「更多」按钮不算顶栏图标键", async () => {
+    vi.useFakeTimers();
+    sidebar(false);
+    const row = document.querySelector("a") as Element;
+    row.insertAdjacentHTML(
+      "beforeend",
+      '<div role="button" class="ds-button ds-button--icon"></div>',
+    );
+    layout(row.querySelector('[role="button"]') as Element, true);
+    const clicks = wire({ afterMs: 100, to: true });
+
+    const pending = setSidebar(toggleFrame({ collapsed: true }));
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(await pending).toEqual({ collapsed: true });
+    expect([...clicks.entries()]).toEqual([[2, 1]]);
   });
 });

@@ -584,6 +584,38 @@ describe("退避闸（账号在处罚区，写动作停发）", () => {
     expect(sent).toEqual([]);
   });
 
+  it("sidebar.set 在退避闸下（改页面状态），sidebar.get 不受影响", async () => {
+    const { send, sent } = recordingSendToTab(MUTED);
+    const ctx = context({ sendToTab: send });
+
+    expect(
+      await runAction(
+        frame({ action: "sidebar.set", params: { collapsed: true }, target: "42" }),
+        ctx,
+      ),
+    ).toEqual({ ok: false, error: "backing-off" });
+    expect(sent.map((f) => f.action)).toEqual(["page.state"]);
+    sent.length = 0;
+    expect(await runAction(frame({ action: "sidebar.get", target: "42" }), ctx)).toEqual({
+      ok: true,
+      result: {},
+    });
+    expect(sent.map((f) => f.action)).toEqual(["sidebar.get"]);
+  });
+
+  it("sidebar.set 只进退避闸、不进 speak 闸（不动写作框、不代你发言）", async () => {
+    const { send, sent } = recordingSendToTab({ kind: "ready" });
+    const ctx = context({ speak: false, sendToTab: send });
+
+    expect(
+      await runAction(
+        frame({ action: "sidebar.set", params: { collapsed: true }, target: "42" }),
+        ctx,
+      ),
+    ).toEqual({ ok: true, result: {} });
+    expect(sent.map((f) => f.action)).toEqual(["page.state", "sidebar.set"]);
+  });
+
   it("button.click 也在退避闸下（点圆键总是改页面状态）", async () => {
     const { send, sent } = recordingSendToTab(MUTED);
     const ctx = context({ sendToTab: send });
