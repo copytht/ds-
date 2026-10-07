@@ -23,7 +23,8 @@ OpenSpec，换回 Matt（mattpocock/skills）那套**。
 
 1. **技能流程换成 Matt 的**：从上游 `mattpocock/skills` 重建（不从本仓旧提交恢复），装在 `.agents/skills/`，
    `npx skills@latest add mattpocock/skills -a opencode -s '*' -y --copy` 装、`skills-lock.json` 记版本、
-   `npx skills update` 更新。日常流：想法不清 `/grill-with-docs` → 成型 `/to-spec`（发成 GitHub issue）→
+   `npx skills update` 更新。`.agents/skills/` **只留 Matt 的**（以 `skills-lock.json` 为准），非 Matt 的技能
+   （原有的 `architectural-decision-records`、`openspec-git-discipline`）一并删除。日常流：想法不清 `/grill-with-docs` → 成型 `/to-spec`（发成 GitHub issue）→
    `/to-tickets` → `/implement`（或 `/implement-spec`）；坏了 `/diagnosing-bugs`；过 issue 用 `/triage`。
 2. **OpenSpec 整个退役**：删 `openspec/`（含 6 篇 spec、归档 change、vendor 的 schema、`config.yaml`）、
    `.opencode/` 里生成的 `/opsx-*` 命令与技能、`openspec-git-discipline` 技能、CI 的 `spec` 工作流、
@@ -59,7 +60,5 @@ OpenSpec，换回 Matt（mattpocock/skills）那套**。
   代码注释里仍有若干「见 `site-dom` / `frontend` spec」的指引（`src/lib/page.ts`、`messages.ts` 等），现已指向历史。
 - Bad：**仓库现在没有任何 CI 检查**——原来唯一的工作流就是 OpenSpec 校验（`openspec validate`），它随 OpenSpec 一起删了；
   `pnpm quality`（eslint + tsc + vitest + prettier + ruff + pytest）只在本地跑。是否补一个跑 `pnpm quality` 的工作流，另议。
-- Bad：`architectural-decision-records`（`.agents/skills/` 里的非 Matt 技能）与上游 `domain-modeling` 的「记 ADR」触发描述重叠，
-  暂留着，哪天发现抢触发再删。
 - Bad：已接受的 ADR 里个别正文仍提到 `CONTEXT.md`（如 ADR-0002）、`adr/` 路径或 OpenSpec——**不改**（ADR 不可变），
   以本篇为准：`CONTEXT.md` 即现在的 `GLOSSARY.md`。
