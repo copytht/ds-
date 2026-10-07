@@ -18,6 +18,7 @@
   uv run scripts/page-action.py send button.get
   uv run scripts/page-action.py send composer.type --params '{"text": "你好"}'
   uv run scripts/page-action.py storage get --keys '["backoffUntil","toggle","speak"]'
+  uv run scripts/page-action.py toggles-off   # 测试环境：把深度思考、智能搜索都关掉
 
 环境：
   DSB_CDP_PORT   调试口端口，默认 9222
@@ -523,6 +524,59 @@ def unwrap(message: object) -> object:
     return result.get("result", {}).get("value")
 
 
+def parse_outcome(raw: object) -> dict:
+    """动作回包是一段 JSON 字符串（`{"ok":…,"result"|"error":…}`）；解不开就原样放进 `raw`。"""
+    if isinstance(raw, str):
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"raw": raw}
+        return value if isinstance(value, dict) else {"raw": value}
+    return raw if isinstance(raw, dict) else {"raw": raw}
+
+
+#: 测试环境要关着的两个写作框开关：动作前缀 → 页面上的名字。
+TEST_TOGGLES = (("think", "深度思考"), ("search", "智能搜索"))
+
+
+def toggles_off(args: argparse.Namespace) -> int:
+    """把深度思考与智能搜索都拨到关（测试环境的已知起点）。
+
+    幂等：先读，已关的不动；开着的才点，**点之前照常限速**，点完回读核实（站点可能拒）。
+    写作框不在（没登录 / 被禁言 / 页面没加载完）时报明原因并返回 1，不硬点。
+    """
+    state = poll_state(lambda one: bool(one.get("composer")), timeout=args.wait)
+    if not state.get("composer"):
+        print(
+            f"[toggles-off] 写作框不在（url={state.get('url')}，alert={state.get('alert')}）：没动"
+        )
+        return 1
+    code = 0
+    for action, label in TEST_TOGGLES:
+        got = parse_outcome(send_action(f"{action}.get", {}))
+        if not got.get("ok"):
+            print(f"[toggles-off] {label}：读不到 {json.dumps(got, ensure_ascii=False)}")
+            code = 1
+            continue
+        if got["result"].get("enabled") is False:
+            print(f"[toggles-off] {label}：已是关")
+            continue
+        pace(args.pace, no_pace=args.no_pace)
+        done = parse_outcome(send_action(f"{action}.set", {"enabled": False}))
+        # `.set` 点完立刻回读，站点是异步生效的，那一读常是旧值；这里等到真关上再认。
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            now = parse_outcome(send_action(f"{action}.get", {}))
+            if now.get("ok") and now["result"].get("enabled") is False:
+                print(f"[toggles-off] {label}：开→关")
+                break
+            time.sleep(0.5)
+        else:
+            print(f"[toggles-off] {label}：没关上 {json.dumps(done, ensure_ascii=False)}")
+            code = 1
+    return code
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="页面动作真机探针（开发用）")
     # 全局：动手前先随机等一下（默认开）。理由见 pace()。
@@ -552,6 +606,10 @@ def main() -> None:
     storage.add_argument("op", choices=["get", "set", "remove"], help="get 读 / set 写 / remove 删")
     storage.add_argument("--keys", default="[]", help="get / remove 的键数组（JSON）")
     storage.add_argument("--data", default="{}", help="set 的对象（JSON）")
+    off = sub.add_parser(
+        "toggles-off", help="测试环境：把「深度思考」「智能搜索」都关掉（幂等，开着的才点）"
+    )
+    off.add_argument("--wait", type=float, default=15.0, help="等写作框出现的秒数上限，默认 15")
     ax = sub.add_parser("ax", help="dump 无障碍树（role + 可访问名；只读，开发探针）")
     ax.add_argument("--grep", default="", help="只打印 role/name/value 命中该串的节点")
     ax.add_argument("--max", type=int, default=80, help="最多打印多少行，默认 80")
@@ -634,6 +692,9 @@ def main() -> None:
             json.dumps(send_action(args.action, params), ensure_ascii=False, indent=2),
         )
         return
+
+    if args.command == "toggles-off":
+        raise SystemExit(toggles_off(args))
 
     if args.command == "storage":
         print(
