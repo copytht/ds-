@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_UNKNOWN, PageError } from "./action";
 import { evidenceHtml } from "./evidence";
@@ -19,6 +19,8 @@ import {
   setSearch,
   setThink,
   switchChat,
+  TOGGLE_POLL_MS,
+  TOGGLE_SETTLE_MS,
   typeComposer,
 } from "./page";
 
@@ -301,7 +303,9 @@ describe("think.* / search.* 开关执行器（#30）", () => {
     expect(thrownCode(() => readThink(FRAME))).toBe(ACTION_ERROR_PAGE_CHANGED);
   });
 
-  it("set：目标态与当前不同 → 点一下，回达成态", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("set：目标态与当前不同 → 点一下，回达成态", async () => {
     document.body.innerHTML = THINK_OFF;
     const el = toggleEl();
     let clicked = 0;
@@ -310,34 +314,77 @@ describe("think.* / search.* 开关执行器（#30）", () => {
       el.setAttribute("aria-pressed", "true"); // 模拟站点拨到目标态
     });
 
-    expect(setThink(withParams({ enabled: true }))).toEqual({ enabled: true });
+    expect(await setThink(withParams({ enabled: true }))).toEqual({ enabled: true });
     expect(clicked).toBe(1);
   });
 
-  it("set：已在目标态 → 不点（幂等，点了反而拨反）", () => {
+  it("set：已在目标态 → 不点、不轮询（幂等，点了反而拨反；也不给幂等调用加延迟）", async () => {
+    vi.useFakeTimers(); // 一旦实现里等了定时器，下面这个 await 就永远不回
     document.body.innerHTML = THINK_ON;
     const el = toggleEl();
     let clicked = 0;
     el.addEventListener("click", () => (clicked += 1));
 
-    expect(setThink(withParams({ enabled: true }))).toEqual({ enabled: true });
+    expect(await setThink(withParams({ enabled: true }))).toEqual({ enabled: true });
     expect(clicked).toBe(0);
   });
 
-  it("set：回的是达成态，不是目标态（站点没拨过去就说没拨过去）", () => {
+  it("set：回的是达成态，不是目标态（站点一直没拨过去，等满上限后说没拨过去）", async () => {
+    vi.useFakeTimers();
     document.body.innerHTML = THINK_OFF;
     toggleEl().addEventListener("click", () => undefined); // 点了也不变
 
-    expect(setThink(withParams({ enabled: true }))).toEqual({ enabled: false });
+    const pending = setThink(withParams({ enabled: true }));
+    await vi.advanceTimersByTimeAsync(TOGGLE_SETTLE_MS + 100);
+
+    expect(await pending).toEqual({ enabled: false });
   });
 
-  it('set：enabled 非布尔 → unknown-action（别把 "true" 按真值收下）', () => {
+  it("set：站点异步生效（#81）——点完那一刻还是旧值，上限内才变，回的是变好之后的值", async () => {
+    vi.useFakeTimers();
     document.body.innerHTML = THINK_OFF;
-    expect(thrownCode(() => setThink(withParams({ enabled: "true" })))).toBe(ACTION_ERROR_UNKNOWN);
-    expect(thrownCode(() => setThink(withParams({})))).toBe(ACTION_ERROR_UNKNOWN);
+    const el = toggleEl();
+    el.addEventListener("click", () => {
+      setTimeout(() => el.setAttribute("aria-pressed", "true"), 300); // 站点异步生效
+    });
+
+    let settled: { enabled: boolean } | undefined;
+    const pending = setThink(withParams({ enabled: true })).then((value) => (settled = value));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(settled).toBeUndefined(); // 还没变，不能提前回旧值
+    await vi.advanceTimersByTimeAsync(300);
+    await pending;
+
+    expect(settled).toEqual({ enabled: true });
   });
 
-  it("search：认「智能搜索」那个开关，与 think 各认各的", () => {
+  it("set：到了目标态就立刻收，不等满上限", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = THINK_OFF;
+    const el = toggleEl();
+    el.addEventListener("click", () => {
+      setTimeout(() => el.setAttribute("aria-pressed", "true"), 120);
+    });
+
+    let done = false;
+    const pending = setThink(withParams({ enabled: true })).then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(120 + TOGGLE_POLL_MS);
+    await pending;
+
+    expect(done).toBe(true);
+    expect(TOGGLE_SETTLE_MS).toBeGreaterThan(120 + TOGGLE_POLL_MS); // 收的时候离上限还远
+  });
+
+  it('set：enabled 非布尔 → unknown-action（别把 "true" 按真值收下）', async () => {
+    document.body.innerHTML = THINK_OFF;
+    await expect(setThink(withParams({ enabled: "true" }))).rejects.toMatchObject({
+      code: ACTION_ERROR_UNKNOWN,
+    });
+    await expect(setThink(withParams({}))).rejects.toMatchObject({ code: ACTION_ERROR_UNKNOWN });
+  });
+
+  it("search：认「智能搜索」那个开关，与 think 各认各的", async () => {
+    vi.useFakeTimers();
     document.body.innerHTML =
       THINK_ON + '<div class="ds-toggle-button" aria-pressed="false">智能搜索</div>';
     const [think, search] = [...document.querySelectorAll<HTMLElement>("div.ds-toggle-button")] as [
@@ -351,7 +398,9 @@ describe("think.* / search.* 开关执行器（#30）", () => {
 
     expect(readSearch(FRAME)).toEqual({ enabled: false });
     // 点了但站点没变 → 回达成态（false），不是目标态（true）。
-    expect(setSearch(withParams({ enabled: true }))).toEqual({ enabled: false });
+    const pending = setSearch(withParams({ enabled: true }));
+    await vi.advanceTimersByTimeAsync(TOGGLE_SETTLE_MS + 100);
+    expect(await pending).toEqual({ enabled: false });
     expect(searchClicked).toBe(1);
     expect(thinkClicked).toBe(0); // 没误点深度思考
   });

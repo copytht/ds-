@@ -349,21 +349,34 @@ function readToggleOption(label: string): { enabled: boolean } {
   return { enabled: readToggleState(el) };
 }
 
+/** 点完等开关稳定的上限与轮询间隔（毫秒）。真机观察站点是几百毫秒内更新 `aria-pressed`（#81）。 */
+export const TOGGLE_SETTLE_MS = 1500;
+export const TOGGLE_POLL_MS = 50;
+
 /**
- * 把一个开关拨到目标态。**幂等**：已在目标态就不点（点了反而拨反）。点完再读一次回
- * **达成态**——站点可能拒它或异步生效，回目标态会说谎。
+ * 把一个开关拨到目标态。**幂等**：已在目标态就不点、不轮询（点了反而拨反）。
+ *
+ * 点完 **等它稳定**再回**达成态**：每 `TOGGLE_POLL_MS` 读一次 `aria-pressed`，到目标态立刻收，
+ * 超过 `TOGGLE_SETTLE_MS` 就按当时读到的收（上限内站点不拨就当被拒，回未变的值）。
+ * 站点可能拒它或**异步生效**——回目标态会说谎，**点完立刻读又会把「还没生效」误报成「被拒」**（#81）。
+ * 超时不抛：「站点拒」与「等不到」对开关而言下一步相同（再 `get` 一次看真值）。
  *
  * `enabled` 非布尔当认不出形状（与主开关 `toggle.set` 同一口径），别把 `"false"`
  * 这种字符串按真值收下。
  */
-function setToggleOption(label: string, frame: ActionFrame): { enabled: boolean } {
+async function setToggleOption(label: string, frame: ActionFrame): Promise<{ enabled: boolean }> {
   const enabled = frame.params["enabled"];
   if (typeof enabled !== "boolean") {
     throw new PageError(ACTION_ERROR_UNKNOWN, "enabled 必须是布尔");
   }
   const el = findToggle(label);
   if (el === null) throw new PageError(ACTION_ERROR_PAGE_CHANGED, `找不到「${label}」开关`);
-  if (readToggleState(el) !== enabled) el.click();
+  if (readToggleState(el) === enabled) return { enabled };
+  el.click();
+  for (let waited = 0; waited < TOGGLE_SETTLE_MS; waited += TOGGLE_POLL_MS) {
+    if (readToggleState(el) === enabled) return { enabled };
+    await new Promise((resolve) => setTimeout(resolve, TOGGLE_POLL_MS));
+  }
   return { enabled: readToggleState(el) };
 }
 
@@ -372,7 +385,7 @@ export function readThink(_frame: ActionFrame): { enabled: boolean } {
   return readToggleOption(THINK_LABEL);
 }
 
-export function setThink(frame: ActionFrame): { enabled: boolean } {
+export function setThink(frame: ActionFrame): Promise<{ enabled: boolean }> {
   return setToggleOption(THINK_LABEL, frame);
 }
 
@@ -381,6 +394,6 @@ export function readSearch(_frame: ActionFrame): { enabled: boolean } {
   return readToggleOption(SEARCH_LABEL);
 }
 
-export function setSearch(frame: ActionFrame): { enabled: boolean } {
+export function setSearch(frame: ActionFrame): Promise<{ enabled: boolean }> {
   return setToggleOption(SEARCH_LABEL, frame);
 }
