@@ -18,6 +18,8 @@
   uv run scripts/page-action.py send button.get
   uv run scripts/page-action.py send composer.type --params '{"text": "你好"}'
   uv run scripts/page-action.py storage get --keys '["backoffUntil","toggle","speak"]'
+  uv run scripts/page-action.py toggles-off   # 测试环境：把深度思考、智能搜索都关掉
+  uv run scripts/page-action.py evidence      # 存证对账：留档原件 vs 站点当前那一颗（ADR-0018）
 
 环境：
   DSB_CDP_PORT   调试口端口，默认 9222
@@ -53,6 +55,9 @@ ACTION_MESSAGE_TYPE = "ds-/action"
 #: 默认动手前的随机等待区间（秒）。用户 2026-10-04 拍板：「注意速率」——别把站点当
 #: 自己家机器连打，隔开一段、每次长度还不一样。
 PACE_DEFAULT = (8.0, 20.0)
+
+#: 页面控件存证（ADR-0018）：真机按钮原件。CI 对拍管「存证 ↔ 回归用例」，这里管「站点 ↔ 存证」。
+EVIDENCE_FILE = REPO / "protocol" / "evidence" / "controls.json"
 
 
 def pace(spec: str | None, *, no_pace: bool = False) -> None:
@@ -523,6 +528,119 @@ def unwrap(message: object) -> object:
     return result.get("result", {}).get("value")
 
 
+def parse_outcome(raw: object) -> dict:
+    """动作回包是一段 JSON 字符串（`{"ok":…,"result"|"error":…}`）；解不开就原样放进 `raw`。"""
+    if isinstance(raw, str):
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"raw": raw}
+        return value if isinstance(value, dict) else {"raw": value}
+    return raw if isinstance(raw, dict) else {"raw": raw}
+
+
+#: 测试环境要关着的两个写作框开关：动作前缀 → 页面上的名字。
+TEST_TOGGLES = (("think", "深度思考"), ("search", "智能搜索"))
+
+
+def toggles_off(args: argparse.Namespace) -> int:
+    """把深度思考与智能搜索都拨到关（测试环境的已知起点）。
+
+    幂等：先读，已关的不动；开着的才点，**点之前照常限速**，点完回读核实（站点可能拒）。
+    写作框不在（没登录 / 被禁言 / 页面没加载完）时报明原因并返回 1，不硬点。
+    """
+    state = poll_state(lambda one: bool(one.get("composer")), timeout=args.wait)
+    if not state.get("composer"):
+        print(
+            f"[toggles-off] 写作框不在（url={state.get('url')}，alert={state.get('alert')}）：没动"
+        )
+        return 1
+    code = 0
+    for action, label in TEST_TOGGLES:
+        got = parse_outcome(send_action(f"{action}.get", {}))
+        if not got.get("ok"):
+            print(f"[toggles-off] {label}：读不到 {json.dumps(got, ensure_ascii=False)}")
+            code = 1
+            continue
+        if got["result"].get("enabled") is False:
+            print(f"[toggles-off] {label}：已是关")
+            continue
+        pace(args.pace, no_pace=args.no_pace)
+        done = parse_outcome(send_action(f"{action}.set", {"enabled": False}))
+        # `.set` 点完立刻回读，站点是异步生效的，那一读常是旧值；这里等到真关上再认。
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            now = parse_outcome(send_action(f"{action}.get", {}))
+            if now.get("ok") and now["result"].get("enabled") is False:
+                print(f"[toggles-off] {label}：开→关")
+                break
+            time.sleep(0.5)
+        else:
+            print(f"[toggles-off] {label}：没关上 {json.dumps(done, ensure_ascii=False)}")
+            code = 1
+    return code
+
+
+def first_difference(saved: str, live: str, context: int = 60) -> str:
+    """两段 HTML 第一处不同的位置与前后片段（够人眼定位，不倾倒整段）。"""
+    at = next((i for i, (a, b) in enumerate(zip(saved, live, strict=False)) if a != b), None)
+    if at is None:
+        at = min(len(saved), len(live))
+    low = max(0, at - context)
+    return (
+        f"第 {at} 个字符起不同（存证长 {len(saved)}、站点长 {len(live)}）\n"
+        f"      存证：…{saved[low : at + context]}…\n"
+        f"      站点：…{live[low : at + context]}…"
+    )
+
+
+def reconcile_entry(entry: dict, live: object) -> tuple[str, str]:
+    """一条存证对一次站点读数的结论：(状态, 说明)。状态：一致 / 过时 / 未比。
+
+    `live` 条目不逐字相等就是「站点改版，存证过时」；`state-bound` 条目只在某个态出现，
+    不等只能说「当前态不符、未比」——不算过时，免得一个瞬态把整本账报红。
+    """
+    saved = entry["outerHTML"]
+    if live == saved:
+        return "一致", ""
+    bound = entry.get("reconcile") == "state-bound"
+    if not isinstance(live, str):
+        detail = "站点上当前找不到这一颗（probe 返回 null）"
+    else:
+        detail = first_difference(saved, live)
+    if bound:
+        return "未比", f"当前态不符、未比：{detail}"
+    return "过时", f"站点改版，存证过时：{detail}"
+
+
+def evidence(args: argparse.Namespace) -> int:
+    """真机对账：存证里每条的 probe 在页面上读一遍，与留档 `outerHTML` 逐字比。
+
+    只读渲染 DOM（`js` 同款），不 dispatch 事件、不点任何按钮。有「过时」退出码 1。
+    """
+    if not EVIDENCE_FILE.is_file():
+        print(f"[evidence] 存证文件缺失：{EVIDENCE_FILE.relative_to(REPO)}", file=sys.stderr)
+        return 2
+    entries = json.loads(EVIDENCE_FILE.read_text(encoding="utf-8"))["entries"]
+    if args.id:
+        entries = [entry for entry in entries if entry["id"] in args.id]
+        missing = set(args.id) - {entry["id"] for entry in entries}
+        if missing:
+            print(f"[evidence] 存证里没有：{', '.join(sorted(missing))}", file=sys.stderr)
+            return 2
+    tab = ensure_site_tab()
+    tally = {"一致": 0, "过时": 0, "未比": 0}
+    for entry in entries:
+        live = unwrap(run(tab["webSocketDebuggerUrl"], entry["probe"]))
+        verdict, detail = reconcile_entry(entry, live)
+        tally[verdict] += 1
+        print(f"[evidence] {entry['id']:<18} {verdict}（{entry['capturedOn']} 留档）")
+        if detail:
+            print(f"    {detail}")
+    print(f"[evidence] 一致 {tally['一致']} / 未比 {tally['未比']} / 过时 {tally['过时']}")
+    return 1 if tally["过时"] else 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="页面动作真机探针（开发用）")
     # 全局：动手前先随机等一下（默认开）。理由见 pace()。
@@ -552,6 +670,14 @@ def main() -> None:
     storage.add_argument("op", choices=["get", "set", "remove"], help="get 读 / set 写 / remove 删")
     storage.add_argument("--keys", default="[]", help="get / remove 的键数组（JSON）")
     storage.add_argument("--data", default="{}", help="set 的对象（JSON）")
+    off = sub.add_parser(
+        "toggles-off", help="测试环境：把「深度思考」「智能搜索」都关掉（幂等，开着的才点）"
+    )
+    off.add_argument("--wait", type=float, default=15.0, help="等写作框出现的秒数上限，默认 15")
+    ev = sub.add_parser(
+        "evidence", help="存证对账：留档按钮原件 vs 站点当前那一颗逐字比（只读，ADR-0018）"
+    )
+    ev.add_argument("--id", action="append", help="只比这一条（可重复）；默认全比")
     ax = sub.add_parser("ax", help="dump 无障碍树（role + 可访问名；只读，开发探针）")
     ax.add_argument("--grep", default="", help="只打印 role/name/value 命中该串的节点")
     ax.add_argument("--max", type=int, default=80, help="最多打印多少行，默认 80")
@@ -634,6 +760,12 @@ def main() -> None:
             json.dumps(send_action(args.action, params), ensure_ascii=False, indent=2),
         )
         return
+
+    if args.command == "evidence":
+        raise SystemExit(evidence(args))
+
+    if args.command == "toggles-off":
+        raise SystemExit(toggles_off(args))
 
     if args.command == "storage":
         print(

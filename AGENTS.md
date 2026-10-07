@@ -58,7 +58,9 @@
 
 页面动作没有外露调用面（ADR-0011），要真机验就走 `scripts/page-action.py`：
 `read`（页面状态）/ `send <动作> [--params json]` / `js <表达式>`（页面上下文里跑只读 JS）/
-`stop-test`（端到端）/ `storage get|set|remove` / `capture` / `ax`。
+`stop-test`（端到端）/ `storage get|set|remove` / `capture` / `ax` /
+`toggles-off`（测试环境关掉深度思考与智能搜索，`env-up.sh --debug` 会顺带跑）/
+`evidence`（存证对账：留档按钮原件 vs 站点当前，ADR-0018，只读，按需本地跑、不进 `pnpm quality`）。
 
 - **`target: null` 只有 `tabs.list` 与 `toggle.*` 答得出**。`page.state` / `composer.*` /
   `messages.*` / `chat.new` 要先 `tabs.list` 拿标签页 id 再带上，其余一律落

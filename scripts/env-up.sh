@@ -409,6 +409,19 @@ if [ "$DEBUG" = 1 ]; then
   say 判据3 "调试口 ${DEBUG_PORT}：探针 scripts/page-action.py read / send <动作> / stop-test"
 fi
 
+# 测试环境的已知起点：深度思考、智能搜索都关着（幂等；写作框不在——没登录 / 被禁言——
+# 就只报、不硬点，也不让 env-up 因此失败）。
+if [ "$DEBUG" = 1 ]; then
+  if command -v uv >/dev/null 2>&1; then
+    if toggles_out=$(uv run scripts/page-action.py toggles-off 2>&1); then
+      say 开关 "测试环境：深度思考、智能搜索已关"
+    else
+      say 开关 "没能确认两个开关都关着（登录后重跑，或手动 scripts/page-action.py toggles-off）"
+    fi
+    printf '%s\n' "$toggles_out" | sed 's/^/        /'
+  fi
+fi
+
 # 判据 4：扩展最后探活（信息项，不阻塞——总开关关着是常态）。
 age=$(last_probe_age)
 if [ "$age" = "-1" ]; then
