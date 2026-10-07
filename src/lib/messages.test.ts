@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { ACTION_ERROR_PAGE_CHANGED, ACTION_ERROR_READ_FAILED } from "./action";
 import type { ActionFrame } from "./action";
+import { evidenceHtml } from "./evidence";
 import { parseWaitSeconds } from "./wait-budget";
 import {
   conversationList,
@@ -139,19 +140,14 @@ describe("一行 → 一条消息", () => {
   });
 
   it("代码块外框：表头与复制/下载按钮是 `<pre>` 的兄弟，不算正文", () => {
-    // 结构照抄真机（2026-10-04）：`div.md-code-block` 里直接挂着表头、`<pre>`、图标。
+    // 代码块原件取自存证 `code.block`（真机 2026-10-07，ADR-0018）：表头、复制/下载按钮在
+    // `md-code-block-banner-wrap` 里，`<pre>` 与两个角 svg 是它的兄弟——一字不缩写。
     document.body.innerHTML = `
       <div class="ds-virtual-list">
         <div data-virtual-list-item-key="1">
           <div class="ds-message"><div class="ds-markdown ds-assistant-message-main-content">
             <p>先看这个：</p>
-            <div class="md-code-block md-code-block-light">
-              <div class="md-code-block-banner"><span>send</span></div>
-              <div role="button" class="ds-button"><span>复制</span></div>
-              <div role="button" class="ds-button"><span>下载</span></div>
-              <pre><span>{"tool": "ls", "arguments": {}}</span></pre>
-              <svg></svg>
-            </div>
+            ${evidenceHtml("code.block")}
             <p>跑完再来。</p>
           </div></div>
         </div>

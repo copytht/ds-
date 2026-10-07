@@ -14,10 +14,10 @@
 
 ## 3. 真机重抓代码块并回补
 
-- [ ] 3.1 `scripts/env-up.sh --debug` 起 ds-browser；找一条含代码块的会话（已登录、未禁言），只读抓 `code.block` / `code.copy` / `code.download` 的 `outerHTML` 与 `svg`
-- [ ] 3.2 三条入档 `controls.json`（`live`；`code.copy` / `code.download` 的 `row` 写明父容器、同排 2 颗、第几颗），日期写当天
-- [ ] 3.3 `messages.test.ts` 第 141 行起的缩写 fixture 改成 `evidenceHtml("code.block")` 的真实结构；断言「表头与复制/下载是 `<pre>` 的兄弟、不算正文」仍成立
-- [ ] 3.4 若 3.3 在真实结构下红：停下，把现象记进票（缺陷另开），不在本 change 里改 `readRow`
+- [x] 3.1 `scripts/env-up.sh --debug` 起 ds-browser；找一条含代码块的会话（已登录、未禁言），只读抓 `code.block` / `code.copy` / `code.download` 的 `outerHTML` 与 `svg`
+- [x] 3.2 三条入档 `controls.json`（`live`；`code.copy` / `code.download` 的 `row` 写明父容器、同排 2 颗、第几颗），日期写当天
+- [x] 3.3 `messages.test.ts` 第 141 行起的缩写 fixture 改成 `evidenceHtml("code.block")` 的真实结构；断言「表头与复制/下载是 `<pre>` 的兄弟、不算正文」仍成立
+- [x] 3.4 （未触发：3.3 在真实结构下仍绿，`readRow` 成立）若 3.3 在真实结构下红：停下，把现象记进票（缺陷另开），不在本 change 里改 `readRow`
 
 ## 4. 真机对账子命令
 
