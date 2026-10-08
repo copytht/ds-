@@ -41,7 +41,7 @@ export function protocolInstructions(tools: readonly ToolInfo[] | null): string 
   return `${INSTRUCTIONS_HEADER}需要查本机、跑工具或要第二双眼时，把要调的工具排成一个围栏块，然后停止回答、等待回灌：
 
 \`\`\`send
-{"tool": "工具名", "arguments": {…}}
+{"tool":"工具名","arguments":{…}}
 \`\`\`
 
 - 围栏里是一段 JSON：只有 \`tool\` 与 \`arguments\` 两个键；\`arguments\` 是该工具的入参对象（没有参数写 \`{}\`）。
