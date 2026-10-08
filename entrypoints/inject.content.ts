@@ -33,6 +33,7 @@ import {
   idleArmed,
   matchesMarker,
   pend as pendState,
+  planContinuation,
   type ArmedState,
 } from "../src/lib/armed";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
@@ -136,20 +137,27 @@ export default defineContentScript({
      * 续聊失败上报（#51）：落一笔失败痕，悬停时回看得到「断在哪一步」。
      *
      * 走 MAIN → 隔离 → background 那条既有通道（ask / stop 走的就是它）——MAIN 世界
-     * 写不了 `storage.local`。**同一个失败点只报一次**（`reportedFailures` 去重），
-     * 不给 20 条配额添乱。
+     * 写不了 `storage.local`。
+     *
+     * **一次失败只报一次**不另设去重表，靠调用点自身的结构：每个上报点都在「武装刚
+     * 离开某个态」或「这一次发送刚失败」的分支里，那个转移只发生一次；新一轮续聊挂上
+     * 武装（`armState` 盖掉 `pendState`）是**新**的一轮，那次该报。真正的重复风险在
+     * background 那侧——`rememberFailure` 的「同一次故障只记一笔」与 20 条配额照旧
+     * 照着续聊这条路生效（ADR-0004）。
      */
     function reportContinuationFailure(failure: ContinuationFailure): void {
       const id = nextMessageId("cont-fail");
-      window.postMessage(continuationFailMessage(id, describeContinuationFailure(failure)), "*");
-      console.log(`[ds-] 续聊失败：${describeContinuationFailure(failure)}（已留痕）`);
+      const cause = describeContinuationFailure(failure);
+      window.postMessage(continuationFailMessage(id, cause), "*");
+      console.log(`[ds-] 续聊失败：${cause}（已留痕）`);
     }
 
     /** `sendToPage` 抛错那一条：短句只带错误类型名（ADR-0004，不带 message）。 */
     function reportThrownFailure(error: unknown): void {
       const id = nextMessageId("cont-fail");
-      window.postMessage(continuationFailMessage(id, describeThrownFailure(error)), "*");
-      console.log(`[ds-] 续聊发送抛错：${describeThrownFailure(error)}（已留痕）`);
+      const cause = describeThrownFailure(error);
+      window.postMessage(continuationFailMessage(id, cause), "*");
+      console.log(`[ds-] 续聊发送抛错：${cause}（已留痕）`);
     }
 
     /**
@@ -276,14 +284,16 @@ export default defineContentScript({
         if (isContinuation && queuedContinuation !== null) {
           const continuation = queuedContinuation;
           queuedContinuation = null;
-          if (speak) {
-            // 闸开着：照旧自动发（armed 态，有 TTL）。
+          // 走向由纯函数判（armed.ts 的 planContinuation）：闸关着时那一支**没有
+          // 发送步骤**，接线层照着做就碰不到 Enter。
+          if (planContinuation(speak).action === "arm-and-send") {
             armed = armState(continuation, Date.now());
           } else {
-            // 闸关着（#52）：**只写进输入框，不按发送**。正文挂 pending 态等用户自己
-            // 按——没有期限（钥匙使时间不再是安全判据），单槽，新一轮顶掉旧的。
             armed = pendState(continuation);
             if (!stagePendingMarker()) armed = idleArmed();
+            // 这一趟的全部动作就是那一次写入，**到此为止**：再往下走 `sendToPage`
+            // 就会按 Enter / 点发送键——那等于闸关着照样自动发（#52 的 AC 首条）。
+            continue;
           }
         }
         void paceSend(
@@ -356,7 +366,7 @@ export default defineContentScript({
         rounds = resetRounds();
         if (armed.phase === "pending") {
           armed = idleArmed();
-          reportContinuationFailure("key-mismatch");
+          reportContinuationFailure("session-changed");
         }
       }
       const calls = detectToolCalls(raw);
@@ -503,12 +513,8 @@ export default defineContentScript({
         gate = newGate();
         // 续聊这两笔与轮数也一样作废：关着时挂着的正文不该在下一次开闸时冒出来。
         queuedContinuation = null;
-        if (armed.phase !== "idle") {
-          armed = idleArmed();
-          reportContinuationFailure("toggle-off");
-        } else {
-          armed = idleArmed();
-        }
+        if (armed.phase !== "idle") reportContinuationFailure("toggle-off");
+        armed = idleArmed();
         rounds = resetRounds();
         sessionKey = null;
       }

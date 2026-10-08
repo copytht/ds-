@@ -331,7 +331,14 @@ export default defineContentScript({
       return paced;
     }
 
-    /** 圆键此刻承载的意图：分不出「发送 / 停止 / 认不出」三种。 */
+    /**
+     * 圆键此刻承载的意图：分不出「发送 / 停止 / 认不出」三种。
+     *
+     * 读 `d` 的用法与 `inject.content.ts` 的 `triggerSend` **同款**（那是「同圆键的先例」）：
+     * 图标**不参与命中判据**——名册里仍是一个 `button.click` 对这一个元素，不按图标分家；
+     * 这里只是**动手前先读一下**，判出「停止」就别延迟、别记账。认不出（`unknown`）一律
+     * 当「不延迟、但记账」：宁可之后多等一次，也不延迟一次中断，也不漏记一次发送。
+     */
     function readCircleIntent(): SendIntent {
       const button = findButton();
       if (button === null) return "unknown";

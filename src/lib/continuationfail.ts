@@ -18,8 +18,6 @@ export type ContinuationFailure =
   | "composer-unwritable"
   /** 写进去了，Enter 与圆键都没能让站点把消息发出去。 */
   | "send-failed"
-  /** `sendToPage` 抛了错——只记错误类型名，不记 message（可能嵌着用户的话）。 */
-  | "send-threw"
   /** 认出的请求体形状不对，正文换不进去。 */
   | "shape-unknown"
   /** 钥匙不符：站点发出的正文不等于短标记，是用户自己发的话。这一轮续聊丢掉。 */
@@ -29,19 +27,21 @@ export type ContinuationFailure =
   /** 总开关被关掉，续聊整条作废。 */
   | "toggle-off"
   /** 「代你发言」闸关着、输入框里还有你的草稿——不覆盖，这一轮作废（#52）。 */
-  | "draft-in-composer";
+  | "draft-in-composer"
+  /** 换了页面会话：待发的那条是写给上一条会话的，作废（#52）。 */
+  | "session-changed";
 
 /** 一句能直接进悬停的话。同样不带任何正文。 */
 const CAUSES: Readonly<Record<ContinuationFailure, string>> = {
   "composer-absent": "没找到输入框",
   "composer-unwritable": "输入框写不进去",
   "send-failed": "Enter 与发送键都没发出去",
-  "send-threw": "发送过程抛了错",
   "shape-unknown": "请求体形状认不出，正文换不进去",
   "key-mismatch": "发出去的不是那条短标记（你发了别的话）",
   "armed-expired": "挂着的续聊过期作废",
   "toggle-off": "总开关关着，续聊作废",
   "draft-in-composer": "你正在打字，没覆盖你的草稿",
+  "session-changed": "换了会话，待发的那条作废",
 };
 
 /**

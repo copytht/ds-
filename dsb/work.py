@@ -26,7 +26,7 @@ from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
-from dsb.config import env_value, find_dotenv, repo_root
+from dsb.config import env_value, find_dotenv, repo_root, resolve_config_path
 from dsb.mcp import Tool
 from dsb.permissions import Operation, is_allowed
 
@@ -132,26 +132,30 @@ def root_relative(root: Path, resolved: Path) -> str | None:
 def _effective_sensitive(root: Path) -> tuple[Path, ...]:
     """dsb **真实生效**的那两个本机配置文件的绝对路径（可能不在 root 内，不做拦截）。
 
-    ``mcp.json`` 走 :data:`MCP_CONFIG_ENV_KEY`（未配置时是仓根那个，与
-    :func:`dsb.gateway` 同一口径），``.env`` 走 :func:`dsb.config.find_dotenv`
-    （先当前目录、再仓根）。两者被配置改到别处时，护栏跟过去：**保护的是那两个真文件，
-    不只是「叫这个名字的文件」**。
+    ``mcp.json`` 直接用 :func:`dsb.server.resolve_config_path`——那才是真正决定中继读哪
+    个文件的函数（含 cwd 兜底），另抄一份只会漂。``.env`` 用
+    :func:`dsb.config.find_dotenv`（先当前目录、再仓根）。
+
+    两者被配置改到别处时，护栏跟过去：**保护的是那两个真文件，不只是「叫这个名字的
+    文件」**。
     """
     root_real = root.resolve()
-    mcp_raw = os.environ.get(MCP_CONFIG_ENV_KEY)
-    if mcp_raw is None:
-        dotenv = find_dotenv()
-        if dotenv is not None:
-            try:
-                mcp_raw = env_value(dotenv.read_text(encoding="utf-8"), MCP_CONFIG_ENV_KEY)
-            except OSError:
-                mcp_raw = None
-    mcp_path = Path(mcp_raw).expanduser() if mcp_raw else root_real / "mcp.json"
-    sensitive = [mcp_path.resolve(), root_real / ENV_FILE_NAME]
+    sensitive = [resolve_config_path(_dotenv_text()).resolve(), root_real / ENV_FILE_NAME]
     dotenv = find_dotenv()
     if dotenv is not None:
         sensitive.append(dotenv.resolve())
     return tuple(dict.fromkeys(sensitive))
+
+
+def _dotenv_text() -> str:
+    """``.env`` 原文（``resolve_config_path`` 要它；读不到就当没有，与别处同口径）。"""
+    dotenv = find_dotenv()
+    if dotenv is None:
+        return ""
+    try:
+        return dotenv.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def is_protected(root: Path, resolved: Path, operation: Operation) -> bool:

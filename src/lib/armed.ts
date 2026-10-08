@@ -136,3 +136,26 @@ export function claimArmed(state: ArmedState, body: string | null, shapeOk: bool
 export function disarm(state: ArmedState): ArmedState {
   return state.phase === "idle" ? state : idleArmed();
 }
+
+/**
+ * 一趟续聊放行那一刻该做什么（#52）。
+ *
+ * 抽成纯函数是为了**让「闸关着时不发送」这条在类型上就成立**：
+ * `stage-pending` 那一支**没有发送步骤可走**，接线层照着做就不会碰到 Enter。
+ * 早先接线层把两条路写在一起（挂 pending 之后仍往下走 `sendToPage`），闸就形同
+ * 虚设——单测钉不住，因为判定藏在闭包里。
+ */
+export type ContinuationPlan =
+  /** 闸开着：挂 armed（有 TTL），照旧自动发。 */
+  | { readonly action: "arm-and-send" }
+  /** 闸关着：挂 pending（无 TTL），**只写进输入框，不按发送**。 */
+  | { readonly action: "stage-only" };
+
+/**
+ * 排这一趟的走向。
+ *
+ * @param speak 「代你发言」闸当前状态（跨世界从隔离世界广播来的）。
+ */
+export function planContinuation(speak: boolean): ContinuationPlan {
+  return speak ? { action: "arm-and-send" } : { action: "stage-only" };
+}

@@ -11,6 +11,7 @@ import {
   isPendingBody,
   matchesMarker,
   pend,
+  planContinuation,
 } from "./armed";
 import { CONTINUATION_MARKER } from "./continuation";
 
@@ -120,5 +121,33 @@ describe("claimArmed · 认领一条出站请求", () => {
     const second = claimArmed(first.state, CONTINUATION_MARKER, true);
     expect(second.claimed).toBe(false);
     expect(second.replacement).toBeNull();
+  });
+
+  it("待发的那条（pending）被消费后不重复替换（用户只按一次发送）", () => {
+    const outcome = claimArmed(pend(BODY), CONTINUATION_MARKER, true);
+    expect(outcome.replacement).toBe(BODY);
+    expect(claimArmed(outcome.state, CONTINUATION_MARKER, true).replacement).toBeNull();
+  });
+
+  it("待发挂着时用户改了内容再发：原样放行并撤销（他发的是自己的话）", () => {
+    const outcome = claimArmed(pend(BODY), "agent:\n继续\n再加一句", true);
+    expect(outcome.claimed).toBe(false);
+    expect(outcome.replacement).toBeNull();
+    expect(outcome.state).toEqual({ phase: "idle" });
+  });
+});
+
+describe("planContinuation · 一趟续聊的走向（#52 的 AC 首条）", () => {
+  it("闸开着：arm-and-send（照旧自动发）", () => {
+    expect(planContinuation(true)).toEqual({ action: "arm-and-send" });
+  });
+
+  it("闸关着：stage-only —— **没有发送步骤**，接线层因此碰不到 Enter", () => {
+    const plan = planContinuation(false);
+    expect(plan).toEqual({ action: "stage-only" });
+    // 这一支的结构里压根没有「发」这个动作：早先接线层挂完 pending 仍往下走
+    // sendToPage，闸就形同虚设（#52 的 AC「不按 Enter、不点发送键」失效）。
+    expect(Object.keys(plan)).toEqual(["action"]);
+    expect(plan.action).not.toContain("send");
   });
 });

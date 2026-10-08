@@ -40,18 +40,13 @@ export function buildContinuation(payload: OkPayload, max: number = MAX_RESULT_C
 }
 
 /**
- * 武装的有效期：出站窗口放行之后那条请求就在眼前，超过这么久还挂着的一律作废。
- * 兜的是「以为发出去了、其实没有」的那条缝。
+ * 这一刻武装还算不算数（期限由调用方给）。
  *
- * #49 之后**这个期限不再承担安全职责**：替换只看「这条出站请求的正文逐字等于短
- * 标记」那把钥匙（`armed.ts` 的 `matchesMarker`），用户手打的话永远不会等于标记，
- * 与等多久无关。期限收紧成 `armed.ts` 里的 `ARMED_TTL_MS`（10s），纯粹是为了别让
- * 悬挂态挂太久。期限的归属跟着状态机走。
+ * 期限本身归状态机所有（`armed.ts` 的 `ARMED_TTL_MS`）：#49 之后**它不再承担安全
+ * 职责**——替换只看「这条出站请求的正文逐字等于短标记」那把钥匙，用户手打的话永远
+ * 不会等于标记，与等多久无关。期限只是别让悬挂态挂太久。
  */
-export const ARMED_TTL_MS = 10_000;
-
-/** 这一刻武装还算不算数。期限由调用方给（状态机自带一个）。 */
-export function isArmedFresh(armedAt: number, now: number, ttlMs = ARMED_TTL_MS): boolean {
+export function isArmedFresh(armedAt: number, now: number, ttlMs: number): boolean {
   return now - armedAt <= ttlMs;
 }
 

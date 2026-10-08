@@ -23,6 +23,14 @@ describe("describeContinuationFailure · 原因短句", () => {
     expect(describeContinuationFailure("armed-expired")).toContain("过期");
     expect(describeContinuationFailure("toggle-off")).toContain("总开关");
     expect(describeContinuationFailure("draft-in-composer")).toContain("草稿");
+    expect(describeContinuationFailure("session-changed")).toContain("换了会话");
+  });
+
+  it("换会话说自己的话，不复用「你发了别的话」（那会把原因讲错）", () => {
+    expect(describeContinuationFailure("session-changed")).not.toBe(
+      describeContinuationFailure("key-mismatch"),
+    );
+    expect(describeContinuationFailure("session-changed")).not.toContain("你发了");
   });
 
   it("册子外的码照原样带上（跨版本残留 / 拼错），不丢成空白", () => {
@@ -46,6 +54,7 @@ describe("describeContinuationFailure · 原因短句", () => {
         "armed-expired",
         "toggle-off",
         "draft-in-composer",
+        "session-changed",
       ] satisfies ContinuationFailure[]) {
         expect(describeContinuationFailure(code)).not.toContain(secret);
       }

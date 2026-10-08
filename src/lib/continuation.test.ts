@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { ARMED_TTL_MS } from "./armed";
 import {
-  ARMED_TTL_MS,
   buildContinuation,
   CONTINUATION_MARKER,
   describeStop,
@@ -69,10 +69,10 @@ describe("buildContinuation", () => {
 });
 
 describe("isArmedFresh · 武装的有效期", () => {
-  it("刚武装的算数，过期的作废", () => {
-    expect(isArmedFresh(1000, 1000)).toBe(true);
-    expect(isArmedFresh(1000, 1000 + ARMED_TTL_MS)).toBe(true);
-    expect(isArmedFresh(1000, 1001 + ARMED_TTL_MS)).toBe(false);
+  it("刚武装的算数，过期的作废（期限由调用方给）", () => {
+    expect(isArmedFresh(1000, 1000, ARMED_TTL_MS)).toBe(true);
+    expect(isArmedFresh(1000, 1000 + ARMED_TTL_MS, ARMED_TTL_MS)).toBe(true);
+    expect(isArmedFresh(1000, 1001 + ARMED_TTL_MS, ARMED_TTL_MS)).toBe(false);
   });
 });
 
