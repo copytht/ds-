@@ -207,12 +207,32 @@ def test_read_marks_an_overlong_line_instead_of_silently_shortening_it(
     assert read_text(tmp_path, "f.txt") == "1: abcde…（本行超 5 字）\n（文件读完：共 1 行）"
 
 
-def test_read_keeps_a_trailing_blank_line_because_it_is_a_fact_about_the_file(
+def test_read_does_not_count_an_extra_line_when_the_file_ends_with_a_newline(
     tmp_path: Path,
 ) -> None:
-    """末尾有没有换行是文件的事实，不该由读的人替你抹掉。"""
+    """以换行结尾的文件**不多算一行**。
+
+    真机踩到：624 行的文件被报成 625 行（``"a\\nb\\n"`` 切出 3 段而文件只有 2 行），
+    而模型会照抄脚注里那个总数——**总数错就是模型眼里的文件错**。
+    """
     (tmp_path / "f.txt").write_text("a\nb\n", encoding="utf-8")
-    assert read_text(tmp_path, "f.txt") == "1: a\n2: b\n3: \n（文件读完：共 3 行）"
+    assert read_text(tmp_path, "f.txt") == "1: a\n2: b\n（文件读完：共 2 行）"
+
+
+def test_read_does_not_count_an_extra_line_when_it_does_not_end_with_one(tmp_path: Path) -> None:
+    (tmp_path / "f.txt").write_text("a\nb", encoding="utf-8")
+    assert read_text(tmp_path, "f.txt") == "1: a\n2: b\n（文件读完：共 2 行）"
+
+
+def test_read_still_counts_blank_lines_in_the_middle(tmp_path: Path) -> None:
+    """中间的空行是行，不该被 join 掉。"""
+    (tmp_path / "f.txt").write_text("a\n\nb", encoding="utf-8")
+    assert read_text(tmp_path, "f.txt") == "1: a\n2: \n3: b\n（文件读完：共 3 行）"
+
+
+def test_read_on_an_empty_file_says_zero_lines(tmp_path: Path) -> None:
+    (tmp_path / "empty.txt").write_text("", encoding="utf-8")
+    assert read_text(tmp_path, "empty.txt") == "（空：offset=1 超出文件总行数 0）"
 
 
 def test_read_always_yields_a_page_even_when_the_budget_is_tiny(

@@ -238,8 +238,14 @@ def list_dir(root: Path, raw: str = ".") -> str:
 
 
 def splitlines(content: str) -> list[str]:
-    """正文 → 行（**不丢末尾空行**：末尾有没有换行是文件的事实，不该由读的人替你抹掉）。"""
-    return content.split("\n")
+    """正文 → 行。
+
+    **不以换行结尾的文件不多算一行**：``"a\\nb\\n"`` 是两行（第二行是空的、但以换行结束
+    就没有第三行），而 ``"a\\nb"`` 也是两行。所以去掉结尾那个换行再切——否则脚注里那个
+    总行数会比文件真实的行数多 1，而模型会照抄那个数（真机：它把 624 行的文件报成 625 行）。
+    中间的空行照旧是行（``"a\\n\\nb"`` 是三行）。
+    """
+    return content.removesuffix("\n").split("\n") if content else []
 
 
 def render_page(lines: list[str], offset: int, limit: int) -> str:
