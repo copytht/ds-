@@ -10,6 +10,10 @@
 默认把子 agent 当成**小模型 / 能力弱**的模型：给它的指令要小、要具体、要能验证，别把开放式的大
 目标整包丢过去。
 
+**判断题在 `CODING_STANDARDS.md`**（判定放纯模块、「修订型 ADR」的写法）。本文件是房规与导航，
+那一份是任何护栏替代不了的跨文件一致性——**review 阶段**（`/code-review` 的 Standards 轴、
+`/implement` 的收尾）去读它，写代码时不必。
+
 与用户会话的 agent 只做两件事：**把目标和验收标准交给网页、把链子回来的结果原样喂回去**。
 怎么拆、怎么排围栏、错了怎么修，让**网页**自己想——不替它读文档、不替它诊断、不逐步指派。
 
@@ -18,6 +22,9 @@
 2026-10-07 起用 **Matt 的技能**（上游 `mattpocock/skills`，换掉 OpenSpec，见 ADR-0019）。技能在
 `.agents/skills/`，`skills-lock.json` 记版本；装 / 更新：`npx skills@latest add mattpocock/skills -a opencode -s '*' -y --copy`
 / `npx skills update`。别手改技能文件（升级会冲掉）；想调整就在 `AGENTS.md` 里写覆盖规则。
+**装了别的技能库同理**（archify 等也是这么装的）：`npm 装技能` 要走代理 7897，且装完先**审内容**再
+用（技能以完整 agent 权限运行）。`.agents/` 已在 `eslint.config.js` 与 `.prettierignore` 里排除——
+新增别的 vendored 目录时要一并加，否则 `pnpm quality` 会冒出上百条与本仓无关的错。
 
 日常流：想法还不清 → `/grill-with-docs`（边问边补 `GLOSSARY.md` 与 ADR）；成型 → `/to-spec`（发成 GitHub issue）
 → `/to-tickets`（拆成 tracer-bullet 票）→ `/implement`（或 `/implement-spec`）；坏了 → `/diagnosing-bugs`；
