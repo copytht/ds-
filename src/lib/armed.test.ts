@@ -12,6 +12,7 @@ import {
   matchesMarker,
   pend,
   planContinuation,
+  settleArmedAfterSend,
 } from "./armed";
 import { CONTINUATION_MARKER } from "./continuation";
 
@@ -149,5 +150,28 @@ describe("planContinuation · 一趟续聊的走向（#52 的 AC 首条）", () 
     // sendToPage，闸就形同虚设（#52 的 AC「不按 Enter、不点发送键」失效）。
     expect(Object.keys(plan)).toEqual(["action"]);
     expect(plan.action).not.toContain("send");
+  });
+});
+
+describe("settleArmedAfterSend · 发送回来后武装怎么落（#49 的 AC）", () => {
+  it("发出去：武装留着，等站点的出站请求拿钥匙来认领", () => {
+    const state = arm(BODY, 1000);
+    expect(settleArmedAfterSend(state, true)).toBe(state);
+  });
+
+  it("sendToPage 返回 false：立刻撤（下一个出站就是用户自己发的消息）", () => {
+    expect(settleArmedAfterSend(arm(BODY, 1000), false)).toEqual({ phase: "idle" });
+  });
+
+  it("sendToPage 抛错：同样立刻撤（接线层把 catch 也走这条）", () => {
+    expect(settleArmedAfterSend(arm(BODY, 1000), false)).toEqual({ phase: "idle" });
+    // pending 态也一样：等用户按发送那条发不出去时不能留着
+    expect(settleArmedAfterSend(pend(BODY), false)).toEqual({ phase: "idle" });
+  });
+
+  it("本来就是 idle：原样返回（不制造新对象）", () => {
+    const idle = idleArmed();
+    expect(settleArmedAfterSend(idle, true)).toBe(idle);
+    expect(settleArmedAfterSend(idle, false)).toBe(idle);
   });
 });

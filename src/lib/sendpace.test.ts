@@ -6,8 +6,10 @@ import {
   mergeSendPace,
   newSendPace,
   noteSend,
+  runPaced,
   sendWaitMs,
   SEND_PRIMITIVES,
+  type SendIntent,
   type SendPace,
 } from "./sendpace";
 import { WINDOW_MAX_MS, WINDOW_MIN_MS } from "./outbound";
@@ -127,6 +129,139 @@ describe("mergeSendPace · 跨世界并时刻", () => {
     const mine = noteSend(newSendPace(), 1000, random1);
     const merged = mergeSendPace(mine, 2000);
     expect(merged.intervalMs).toBe(mine.intervalMs);
+  });
+});
+
+describe("runPaced · 过检查点的完整时序（#61 的 AC）", () => {
+  /**
+   * 假时钟：`sleep` 推进时间，累计真实经过的毫秒。
+   * 于是「两次发送实际相隔 ≥3 秒」能被**断言**，而不只是「判定算对了」。
+   */
+  function fakeClock(start = 0) {
+    let at = start;
+    let slept = 0;
+    return {
+      now: () => at,
+      sleep: async (ms: number) => {
+        at += ms;
+        slept += ms;
+      },
+      advance: (ms: number) => {
+        at += ms;
+      },
+      get slept() {
+        return slept;
+      },
+    };
+  }
+
+  const run = (clock: ReturnType<typeof fakeClock>, pace: SendPace) =>
+    runPaced({
+      pace,
+      readIntent: () => "send",
+      execute: () => undefined,
+      shouldRecord: () => true,
+      now: clock.now,
+      random: random0,
+      sleep: clock.sleep,
+    });
+
+  it("没发过时不等：第一次发送立刻执行", async () => {
+    const clock = fakeClock();
+    const first = await run(clock, newSendPace());
+    expect(first.waitedMs).toBe(0);
+    expect(clock.slept).toBe(0);
+    expect(first.pace.lastSentAt).toBe(0);
+  });
+
+  it("连续两次发送：第二次要等够整个间隔，两次**实际相隔 ≥3 秒**（AC）", async () => {
+    const clock = fakeClock();
+    const first = await run(clock, newSendPace());
+    // 隔 1 秒就发第二次——不够，得等剩下的
+    clock.advance(1000);
+    const second = await run(clock, first.pace);
+    expect(second.waitedMs).toBe(WINDOW_MIN_MS - 1000);
+    // 两次发送动作之间真实流逝：1 秒（外部）+ 2 秒（等出来的）= 3 秒整
+    expect(clock.slept).toBe(WINDOW_MIN_MS - 1000);
+    expect(1000 + clock.slept).toBeGreaterThanOrEqual(WINDOW_MIN_MS);
+  });
+
+  it("连发三次：每一趟都只等「距上一次还差的那一点」，总时长符合窗口", async () => {
+    const clock = fakeClock();
+    let pace = newSendPace();
+    const gaps: number[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      if (i > 0) clock.advance(500); // 每次只隔 0.5 秒
+      const step = await run(clock, pace);
+      if (i > 0) gaps.push(step.waitedMs);
+      pace = step.pace;
+    }
+    // 每次都补足到 WINDOW_MIN_MS：等 2.5 秒（3s - 0.5s）
+    expect(gaps).toEqual([WINDOW_MIN_MS - 500, WINDOW_MIN_MS - 500]);
+    expect(clock.slept).toBe(2 * (WINDOW_MIN_MS - 500));
+  });
+
+  it("间隔够时不等（不无谓地拖慢人）", async () => {
+    const clock = fakeClock();
+    const first = await run(clock, newSendPace());
+    clock.advance(WINDOW_MIN_MS + 10);
+    const second = await run(clock, first.pace);
+    expect(second.waitedMs).toBe(0);
+    expect(clock.slept).toBe(0);
+  });
+
+  it("「停止」永不延迟：等 0、不记账（delay 一趟都不等）", async () => {
+    const clock = fakeClock();
+    const pace = noteSend(newSendPace(), 1000, random0);
+    const result = await runPaced({
+      pace,
+      readIntent: () => "stop",
+      execute: () => undefined,
+      shouldRecord: () => false,
+      now: clock.now,
+      random: random0,
+      sleep: clock.sleep,
+    });
+    expect(result.waitedMs).toBe(0);
+    expect(clock.slept).toBe(0);
+  });
+
+  it("圆键：动手前是「发送」、等完变成「停止」→ 记一笔但那趟不等（口径的两头）", async () => {
+    const clock = fakeClock();
+    let intent: SendIntent = "send";
+    const pace = noteSend(newSendPace(), clock.now(), random0);
+    clock.advance(10);
+    const result = await runPaced({
+      pace,
+      readIntent: () => intent,
+      execute: () => {
+        intent = "stop"; // 等的时候站点进生成期，圆键变成停止
+        return undefined;
+      },
+      shouldRecord: () => intent !== "stop",
+      now: clock.now,
+      random: random0,
+      sleep: clock.sleep,
+    });
+    expect(result.waitedMs).toBeGreaterThan(0); // 动手前读到的是发送，照限速等
+    expect(result.pace).toBe(pace); // 发完重读是停止 → 不记账
+  });
+
+  it("没真发出去的不记账（页面世界那条：sendToPage 返回 false）", async () => {
+    const clock = fakeClock();
+    const before = newSendPace();
+    const result = await runPaced({
+      pace: before,
+      readIntent: () => "send",
+      execute: () => ({ sent: false }),
+      shouldRecord: (outcome) => outcome.sent,
+      now: clock.now,
+      random: random0,
+      sleep: clock.sleep,
+    });
+    // 没记 → 同一个引用原样回来，lastSentAt 仍是 null（下次发送不受这次影响）
+    expect(result.pace).toBe(before);
+    expect(result.pace.lastSentAt).toBeNull();
   });
 });
 

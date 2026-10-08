@@ -138,13 +138,19 @@ export function disarm(state: ArmedState): ArmedState {
 }
 
 /**
- * 一趟续聊放行那一刻该做什么（#52）。
+ * 发送回来之后，武装怎么落（#49 的验收点）。
  *
- * 抽成纯函数是为了**让「闸关着时不发送」这条在类型上就成立**：
- * `stage-pending` 那一支**没有发送步骤可走**，接线层照着做就不会碰到 Enter。
- * 早先接线层把两条路写在一起（挂 pending 之后仍往下走 `sendToPage`），闸就形同
- * 虚设——单测钉不住，因为判定藏在闭包里。
+ * - **发出去** → 留着：站点的出站请求马上会拿钥匙来认领，认领那一步才作废它。
+ * - **没发出去**（返回 false / 抛错）→ 立刻撤：留着它，下一个出站就是用户自己发的
+ *   消息，正文会被工具结果顶掉（把人说的话吃了，比少一轮严重得多）。
+ *
+ * 抽出来是因为这原本藏在 `flush()` 的 `.then` / `.catch` 闭包里——闭包里的判定单测
+ * 钉不住（`CODING_STANDARDS.md` 第 1 条）。
  */
+export function settleArmedAfterSend(state: ArmedState, sent: boolean): ArmedState {
+  return sent ? state : disarm(state);
+}
+
 export type ContinuationPlan =
   /** 闸开着：挂 armed（有 TTL），照旧自动发。 */
   | { readonly action: "arm-and-send" }

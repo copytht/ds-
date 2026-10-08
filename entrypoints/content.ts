@@ -54,11 +54,10 @@ import {
 import { CONTROL_ACTIONS } from "../src/lib/controls";
 import type { ActionFrame } from "../src/lib/action";
 import {
-  checkSendIntent,
   mergeSendPace,
   newSendPace,
-  noteSend,
   realSleep,
+  runPaced,
   SEND_PRIMITIVES,
   type SendIntent,
   type SendPace,
@@ -310,22 +309,26 @@ export default defineContentScript({
       for (const action of SEND_PRIMITIVES) {
         const run = roster[action];
         if (run === undefined) continue;
+        // 圆键那一下的意图要**动手前**与**发完后**各读一次：等的时候它可能变成了「停止」。
+        const readIntent = (): SendIntent =>
+          action === "button.click" ? readCircleIntent() : "send";
         paced[action] = async (frame: ActionFrame) => {
-          const intent: SendIntent = action === "button.click" ? readCircleIntent() : "send";
-          const verdict = checkSendIntent(sendPace, Date.now(), intent);
-          if (verdict.waitMs > 0) {
-            console.log(`[ds-] 发送限速：上一条刚发过，等 ${verdict.waitMs}ms 再发`);
-            await realSleep(verdict.waitMs);
-          }
-          const result = run(frame);
-          // 意图**重读一次**（等的时候圆键可能已变成「停止」），再决定记不记。
-          const after =
-            action === "button.click" ? readCircleIntent() : verdict.record ? "send" : "stop";
-          if (verdict.record && after !== "stop") {
-            sendPace = noteSend(sendPace, Date.now(), Math.random);
+          const before = sendPace;
+          const result = await runPaced({
+            pace: before,
+            readIntent,
+            execute: () => run(frame),
+            // 圆键重读一次，判出「停止」就不记账；另两种原语恒是发送。
+            shouldRecord: () => readIntent() !== "stop",
+            now: () => Date.now(),
+            random: () => Math.random(),
+            sleep: realSleep,
+          });
+          if (result.pace !== before) {
+            sendPace = result.pace;
             window.postMessage(sendNoteMessage("isolated", sendPace.lastSentAt ?? 0), "*");
           }
-          return result;
+          return result.result;
         };
       }
       return paced;

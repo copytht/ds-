@@ -28,21 +28,20 @@ import {
   arm as armState,
   armedBody,
   claimArmed,
-  disarm,
   expireIfStale,
   idleArmed,
   matchesMarker,
   pend as pendState,
   planContinuation,
+  settleArmedAfterSend,
   type ArmedState,
 } from "../src/lib/armed";
 import { enqueue, newGate, nextOpenAt, release, type Gate } from "../src/lib/gate";
 import {
-  checkSendIntent,
   mergeSendPace,
   newSendPace,
-  noteSend,
   realSleep,
+  runPaced,
   type SendPace,
 } from "../src/lib/sendpace";
 import {
@@ -161,26 +160,31 @@ export default defineContentScript({
     }
 
     /**
-     * 发送限速检查点（#61）：自动续聊这一下发送前先问一次，间隔不够就**等**够
-     * （等，不拒、不增失败码——agent 侧看不出差别）。真发出去才记一笔，并通报隔离世界。
+     * 发送限速检查点（#61）：与隔离世界**共用 `sendpace.runPaced` 这一份时序**
+     * （此前两个世界各写一遍，同一条规则两份实现）。这一侧恒是发送（续聊只按短标记
+     * 那一键），所以意图固定 `send`；记账看这次有没有真发出去。
      *
-     * 与隔离世界那边（`content.ts` 的 `paceRoster`）是**同一个模块的同一个检查点**：
-     * 两边各记各的「最近一次发送时刻」，靠 `send-note` 通报并起来，成一条线。
-     *
-     * @param sent 这次到底有没有真发出去（没发出去不记账——没发出去就不是一次发送）。
+     * 等够再发，不拒绝、不新增失败码——agent 侧看不出差别。发出去后向隔离世界通报
+     * 时刻，两边的节奏合成一条线。
      */
     async function paceSend<T>(send: () => Promise<T>, sent: (result: T) => boolean): Promise<T> {
-      const verdict = checkSendIntent(sendPace, Date.now(), "send");
-      if (verdict.waitMs > 0) {
-        console.log(`[ds-] 发送限速：上一条刚发过，等 ${verdict.waitMs}ms 再发`);
-        await realSleep(verdict.waitMs);
+      const run = await runPaced({
+        pace: sendPace,
+        readIntent: () => "send",
+        execute: send,
+        shouldRecord: sent,
+        now: () => Date.now(),
+        random: () => Math.random(),
+        sleep: realSleep,
+      });
+      if (run.waitedMs > 0) {
+        console.log(`[ds-] 发送限速：上一条刚发过，等 ${run.waitedMs}ms 再发`);
       }
-      const result = await send();
-      if (sent(result)) {
-        sendPace = noteSend(sendPace, Date.now(), Math.random);
+      if (run.pace !== sendPace) {
+        sendPace = run.pace;
         window.postMessage(sendNoteMessage("main", sendPace.lastSentAt ?? 0), "*");
       }
-      return result;
+      return run.result;
     }
 
     /**
@@ -301,21 +305,23 @@ export default defineContentScript({
           (outcome) => outcome.sent,
         )
           .then((outcome) => {
-            // 没发出去就把武装撤掉（发出去的已经被认领那一步消费掉了）：
-            // 留着它，下一个出站就是用户自己发的消息，正文会被工具结果顶掉。
-            if (outcome.sent && isContinuation) {
-              console.log("[ds-] 续聊已作为一条短标记发出");
-              return;
-            }
+            // 武装怎么落由 armed.ts 的 settleArmedAfterSend 判（#49 的验收点）：
+            // 发出去了留着等钥匙认领，没发出去立刻撤。
             if (isContinuation) {
-              armed = disarm(armed);
-              if (outcome.failure !== null) reportContinuationFailure(outcome.failure);
+              armed = settleArmedAfterSend(armed, outcome.sent);
+              if (!outcome.sent && outcome.failure !== null) {
+                reportContinuationFailure(outcome.failure);
+              }
             }
-            console.log("[ds-] 续聊没有发出去，页面里没有新消息");
+            console.log(
+              outcome.sent
+                ? "[ds-] 续聊已作为一条短标记发出"
+                : "[ds-] 续聊没有发出去，页面里没有新消息",
+            );
           })
           .catch((error) => {
             if (isContinuation) {
-              armed = disarm(armed);
+              armed = settleArmedAfterSend(armed, false);
               reportThrownFailure(error);
             }
             console.log("[ds-] 续聊发送出岔，页面里没有新消息", error);
