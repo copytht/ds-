@@ -26,11 +26,21 @@ describe("describeContinuationFailure · 原因短句", () => {
     expect(describeContinuationFailure("session-changed")).toContain("换了会话");
   });
 
-  it("换会话说自己的话，不复用「你发了别的话」（那会把原因讲错）", () => {
+  it("换会话与钥匙不符各说各的，不复用同一句", () => {
     expect(describeContinuationFailure("session-changed")).not.toBe(
       describeContinuationFailure("key-mismatch"),
     );
     expect(describeContinuationFailure("session-changed")).not.toContain("你发了");
+  });
+
+  // #92：短标记写进输入框后，用户随后打的字会把它顶掉，于是「无视标记发了自己那条」
+  // 与「标记先被盖掉、用户再发自己那条」在出站那一刻**分不出来**。措辞必须对两者都
+  // 成立，且不能把原因指向用户——那会把排查方向整个带偏。
+  it("钥匙不符不指责用户，并把「可能被打字盖掉」点出来（#92）", () => {
+    const cause = describeContinuationFailure("key-mismatch");
+    expect(cause).not.toContain("你发了");
+    expect(cause).toContain("短标记");
+    expect(cause).toContain("打字");
   });
 
   it("册子外的码照原样带上（跨版本残留 / 拼错），不丢成空白", () => {
