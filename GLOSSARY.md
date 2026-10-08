@@ -45,6 +45,13 @@ dsb 内建的五件文件工具 `ls` / `read` / `grep` / `write` / `edit`，全�
 写/改只拒 `.git/`；不含任何命令执行。
 _Avoid_: 文件工具、内置工具、work tools
 
+**结构化结果**：
+MCP 协议里被**标记**为数据的结果——走结果的 `structuredContent` 字段，工具可用
+`outputSchema` 声明形状（ADR-0025）。**只认这个标记，不从正文嗅**：正文能解析成 JSON
+不等于它是数据（那可能是一个 `.json` 文件的内容，模型要逐字看它好照着改）。今天自家
+五件工具都不产出它，**通路也没建**；dsb 现在读到 `structuredContent` 会丢掉。
+_Avoid_: 紧凑结果、TOON 结果、JSON 结果
+
 **本地工具**：
 扩展自带、名字在 `src/lib/localtools.ts` 名册里、**执行不经过 dsb** 的围栏工具；网页模型排到
 它时扩展就地执行。v1 只有组合 `send.page`（发问题 → 等围栏 → 等回灌 → 取答复），内部各步走
