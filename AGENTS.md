@@ -76,7 +76,10 @@
 - **DeepSeek 标签页必须留在前台**：后台标签页被浏览器节流，虚拟列表不挂行、历史不加载，
   `messages.*` 与按位置点控件会读成空（2026-10-07 踩过，当时前台被探针开的选项页占了）。
   探针开扩展入口页走后台（`open_tab(..., background=True)`）；若看到「对话区 0 行」先查
-  `document.visibilityState`，别先怀疑动作。
+  `document.visibilityState`，别先怀疑动作。**开了新会话后要读列表，先
+  `scripts/page-action.py --no-pace focus`**（`Page.bringToFront`，2026-10-08 补的
+  动作）——新会话在后台时虚拟列表压根不挂行，`messages.*` 恒空，而**开着旧会话读得动**
+  极具迷惑性。
 - **`--no-pace` / `--pace` 是全局 flag，必须放在子命令前**（`… --no-pace read`，不是
   `… read --no-pace`）。碰站点默认等 8–20 秒随机；**抓瞬态**（生成中、思考期那种几秒的窗口）
   必须 `--no-pace` 连读，否则限速下根本抓不到。`list` 只读本地目标清单，不等。

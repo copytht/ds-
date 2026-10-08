@@ -670,6 +670,7 @@ def main() -> None:
     parser.add_argument("--no-pace", action="store_true", help="别等，立刻动手（默认是等的）")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="列 CDP 目标")
+    sub.add_parser("focus", help="把 DeepSeek 标签页置到前台（读页面列表前必须先来一下）")
     sub.add_parser("read", help="读 DeepSeek 页面状态")
     js = sub.add_parser("js", help="在 DeepSeek 页面上下文里跑一段只读 JS，打印结果")
     js.add_argument("expression", help="要 evaluate 的 JS 表达式（建议用 IIFE 返回字符串）")
@@ -717,6 +718,16 @@ def main() -> None:
     if args.command == "list":
         for target in targets():
             print(f"{target.get('type'):<16} {target.get('url', '')[:100]}")
+        return
+
+    if args.command == "focus":
+        # DeepSeek 标签页必须留在**前台**：后台标签页被浏览器节流，虚拟列表不挂行，
+        # `messages.*` 与按位置点控件会读成空（AGENTS.md 记着 2026-10-07 踩过）。
+        # 探针自己开别的目标（选项页等）就会把它挤到后台，所以这是个**动作**而不是
+        # 一次性脚本——任何要读页面列表的探针动作前都得先来一下。
+        tab = ensure_site_tab()
+        asyncio.run(call_cdp(tab["webSocketDebuggerUrl"], "Page.bringToFront"))
+        print(json.dumps({"ok": True, "focused": tab.get("url", "")}, ensure_ascii=False))
         return
 
     if args.command == "read":
