@@ -83,7 +83,7 @@ class Test写侧:
 
     def test_普通文件照常读写(self, root: Path) -> None:
         assert write_text(root, "notes.md", "hello") == 5
-        assert read_text(root, "notes.md") == "hello"
+        assert read_text(root, "notes.md") == "1: hello\n（文件读完：共 1 行）"
 
 
 class Test大小写与绕过:

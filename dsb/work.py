@@ -33,8 +33,16 @@ from dsb.permissions import Operation, is_allowed
 #: 工作文件夹 root 的配置键：进程环境变量优先，其次 ``.env``，最后本仓根。
 WORK_ROOT_ENV_KEY = "DSB_WORK_ROOT"
 
-#: 上限（保护对话与前程）：read 截断、ls 列数、grep 命中数、单行长度、参与 grep 的文件大小。
-WORK_READ_LIMIT = 16_000
+#: 上限（保护对话与前程）：read 的翻页与单次预算、ls 列数、grep 命中数、单行长度、
+#: 参与 grep 的文件大小。
+#:
+#: ``read`` 从「超长就砍一刀」改成**按行翻页**（ADR-0026）：原来一次 ``read`` 交出 16000 字，
+#: 而扩展侧一轮只放 2000 字进对话，模型看到 12%、**且没有任何办法看到其余部分**——再读一遍
+#: 拿到的还是开头那几个字。翻页之后上限分成四个各管一件事的数，而不是一个总数。
+WORK_READ_PAGE_LINES = 200
+WORK_READ_MAX_LINES = 2_000
+WORK_READ_LINE_LIMIT = 500
+WORK_READ_BYTES = 16_000
 WORK_LIST_LIMIT = 500
 WORK_GREP_LIMIT = 200
 WORK_LINE_LIMIT = 500
@@ -46,6 +54,7 @@ WORK_BINARY_PROBE = 8_192
 ERROR_OUT_OF_ROOT = "out-of-root"
 ERROR_BAD_PATH = "bad-path"
 ERROR_PROTECTED = "protected-path"
+ERROR_BAD_RANGE = "bad-range"
 ERROR_NOT_FOUND = "not-found"
 ERROR_NOT_A_FILE = "not-a-file"
 ERROR_NOT_A_DIRECTORY = "not-a-directory"
@@ -228,11 +237,72 @@ def list_dir(root: Path, raw: str = ".") -> str:
     return "\n".join(lines) if lines else "（空）"
 
 
-def read_text(root: Path, raw: str) -> str:
-    """``read``：读 root 内一个文件；超 :data:`WORK_READ_LIMIT` 截断并标注。
+def splitlines(content: str) -> list[str]:
+    """正文 → 行（**不丢末尾空行**：末尾有没有换行是文件的事实，不该由读的人替你抹掉）。"""
+    return content.split("\n")
+
+
+def render_page(lines: list[str], offset: int, limit: int) -> str:
+    """一页行 → 带行号的正文 + 一句脚注（纯函数，判定全在这里，ADR-0026）。
+
+    三种脚注各自说清「读到哪」与「接着怎么读」，而**只有一种真的有下一读**：
+
+    - 文件读完了 → 说总行数，不编下一步；
+    - 页按行数到头、文件还有 → 给 ``offset=``；
+    - 页被单次字节预算砍在半路 → 先说被砍（模型要知道这一页本身不完整），
+      再说 ``offset=``。
+
+    单行超长另标一行（``…（本行超 N 字）``）：静默截断会让模型以为那就是整行。
+    """
+    total = len(lines)
+    if offset > total:
+        return f"（空：offset={offset} 超出文件总行数 {total}）"
+    start = offset
+    window = lines[start - 1 : start - 1 + limit]
+    out: list[str] = []
+    used = 0
+    capped = False
+    for step, text in enumerate(window):
+        number = start + step
+        row = text if len(text) <= WORK_READ_LINE_LIMIT else text[:WORK_READ_LINE_LIMIT]
+        marked = len(row) != len(text)
+        cost = (
+            len(row)
+            + len(str(number))
+            + 2
+            + (len(suffix_text := f"…（本行超 {WORK_READ_LINE_LIMIT} 字）") if marked else 0)
+        )
+        # 一行都放不下时**放它进去**（哪怕超预算）并说明被砍——空页对模型最没用，
+        # 它拿不到任何内容、连翻到哪都不知道。
+        if out and used + cost > WORK_READ_BYTES:
+            capped = True
+            break
+        used += cost
+        out.append(f"{number}: {row}{suffix_text if marked else ''}")
+    end = start + len(out) - 1
+    out.append(_page_footer(start, end, total, capped))
+    return "\n".join(out)
+
+
+def _page_footer(start: int, end: int, total: int, capped: bool) -> str:
+    """这一页的脚注：三态各自说清读到哪，**只有真有下一读的那种才给 ``offset=``**。"""
+    if end >= total and not capped:
+        return f"（文件读完：共 {total} 行）"
+    where = f"第 {start}-{end} 行 / 共 {total} 行"
+    if capped:
+        return f"（字节预算截断，{where}，接着读：offset={end + 1}）"
+    return f"（{where}，接着读：offset={end + 1}）"
+
+
+def read_text(root: Path, raw: str, offset: int = 1, limit: int | None = None) -> str:
+    """``read``：读 root 内一个文件的一页（带行号），脚注写明读到哪、接着怎么读。
 
     受 ``read`` 那份规则表管（#89）：``mcp.json`` 与 ``.env`` 系文件读不出来——读出来的
     内容会**随回灌进对话，也就是发给站点**。
+
+    翻页与三个上限见 :data:`WORK_READ_PAGE_LINES` 那组（ADR-0026）。**逐行给、带行号**：
+    模型拿到的是「第 121-200 行 / 共 843 行，接着读：offset=201」，而不是一句「已截断」
+    ——后者它拿着什么都做不了，只能重读再被截一次。
     """
     _require_root(root)
     path = resolve_in_root(root, raw)
@@ -242,16 +312,20 @@ def read_text(root: Path, raw: str) -> str:
         raise WorkError(ERROR_NOT_FOUND, detail=f"路径 {raw}")
     if not path.is_file():
         raise WorkError(ERROR_NOT_A_FILE, detail=f"路径 {raw}")
+    if offset < 1:
+        raise WorkError(ERROR_BAD_RANGE, detail=f"offset={offset}（行号从 1 起）")
+    page = WORK_READ_PAGE_LINES if limit is None else limit
+    if page < 1:
+        raise WorkError(ERROR_BAD_RANGE, detail=f"limit={page}（至少 1 行）")
+    if page > WORK_READ_MAX_LINES:
+        page = WORK_READ_MAX_LINES
     try:
         content = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         raise WorkError(ERROR_IO_FAILED, detail=f"路径 {raw}（不是文本）") from exc
     except OSError as exc:
         raise WorkError(ERROR_IO_FAILED, detail=f"路径 {raw}") from exc
-    if len(content) > WORK_READ_LIMIT:
-        extra = len(content) - WORK_READ_LIMIT
-        content = content[:WORK_READ_LIMIT] + f"\n…（已截断，超出 {extra} 字符）"
-    return content
+    return render_page(splitlines(content), offset, page)
 
 
 def write_text(root: Path, raw: str, content: str) -> int:
@@ -394,7 +468,13 @@ def work_tools(root: Path) -> list[Tool]:
         raw = arguments.get("path")
         if not isinstance(raw, str) or not raw.strip():
             return _bad_path("缺少 path")
-        return _wrap(lambda: read_text(root, raw))
+        offset = arguments.get("offset", 1)
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            return _bad_path("offset 必须是整数")
+        page = arguments.get("limit")
+        if page is not None and (not isinstance(page, int) or isinstance(page, bool)):
+            return _bad_path("limit 必须是整数")
+        return _wrap(lambda: read_text(root, raw, offset, page))
 
     def grep_handler(arguments: Mapping[str, Any]) -> tuple[Payload, bool]:
         pattern = arguments.get("pattern")
@@ -436,10 +516,26 @@ def work_tools(root: Path) -> list[Tool]:
         ),
         Tool(
             name="read",
-            description="[工作目录] 读工作目录内一个文件；超长截断并标注。",
+            description=(
+                "[工作目录] 读工作目录内一个文件的一页，逐行带行号。"
+                "offset 是起始行号（从 1 起，默认 1），limit 是读多少行（默认 200）。"
+                "正文末尾有脚注写明读到哪、接着读用什么 offset——文件长就翻页，别改 offset 重读。"
+            ),
             input_schema={
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
+                "properties": {
+                    "path": {"type": "string", "description": "工作目录内的文件路径。"},
+                    "offset": {
+                        "type": "integer",
+                        "description": "起始行号，从 1 起；默认 1（按脚注给的 offset 接着读）。",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": (
+                            f"读多少行；默认 {WORK_READ_PAGE_LINES}，最多 {WORK_READ_MAX_LINES}。"
+                        ),
+                    },
+                },
                 "required": ["path"],
             },
             handler=read_handler,
@@ -489,6 +585,7 @@ def work_tools(root: Path) -> list[Tool]:
 
 __all__ = [
     "ERROR_BAD_PATH",
+    "ERROR_BAD_RANGE",
     "ERROR_BAD_REGEX",
     "ERROR_EDIT_NO_MATCH",
     "ERROR_EDIT_NOT_UNIQUE",
@@ -507,7 +604,10 @@ __all__ = [
     "WORK_GREP_LIMIT",
     "WORK_LINE_LIMIT",
     "WORK_LIST_LIMIT",
-    "WORK_READ_LIMIT",
+    "WORK_READ_BYTES",
+    "WORK_READ_LINE_LIMIT",
+    "WORK_READ_MAX_LINES",
+    "WORK_READ_PAGE_LINES",
     "WORK_ROOT_ENV_KEY",
     "WorkError",
     "edit_text",
@@ -515,7 +615,9 @@ __all__ = [
     "list_dir",
     "protected_git",
     "read_text",
+    "render_page",
     "resolve_in_root",
+    "splitlines",
     "resolve_work_root",
     "work_tools",
     "write_text",

@@ -22,8 +22,21 @@ import { buildReply, type OkPayload } from "./reply";
  */
 export const CONTINUATION_MARKER = "agent:\n继续";
 
-/** 给模型的工具结果正文上限（字符）。参考项目是 `detail.slice(0, 2000)`。 */
-export const MAX_RESULT_CHARS = 2000;
+/**
+ * 给模型的**一轮**工具结果正文上限（字符）。
+ *
+ * 2000 字时 `read` 一个大文件交出 16000、这里只放 2000 进去，模型看到 12.5% 且
+ * **没有任何办法看到其余部分**——ADR-0026 给 `read` 加了翻页之后这个数就放开了：
+ * 一页 `read` 自己就有 16000 字的预算（`dsb/work.py` 的 `WORK_READ_BYTES`），这里
+ * 与它对齐，于是**一页 `read` 的结果能原样进对话，不再被腰斩**。
+ *
+ * 一轮最多 8 块围栏（ADR-0015），所以一轮最坏是 8 × 16000；真要那么多字得每块都
+ * 读满一页文件，而那种轮次模型自己也不会连着排。
+ *
+ * 注意这里**不是**网关那道传输与内存的闸（`dsb/gateway.py` 的 64K，ADR-0016）：
+ * 两道各管一段，别混（ADR-0016 原话）。
+ */
+export const MAX_RESULT_CHARS = 16_000;
 
 /**
  * 截断一段工具结果正文。超了在尾巴上留一句「已截断」，并写明原长——

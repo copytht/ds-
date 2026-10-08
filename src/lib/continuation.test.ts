@@ -44,6 +44,13 @@ describe("truncateResult", () => {
     expect(truncateResult("abcdef", 3)).toContain("已截断");
     expect(truncateResult("abc", 3)).toBe("abc");
   });
+
+  it("与 dsb 那一页 read 的预算对齐，于是**一页 read 不会被腰斩**（ADR-0026）", () => {
+    // 12% 那个窟窿的形状：dsb 交出 16000、这里只放 2000 进去。
+    // 两边现在同数，一页 read 的结果能原样进对话——这个不等式别悄悄回去。
+    expect(MAX_RESULT_CHARS).toBe(16_000);
+    expect(truncateResult("x".repeat(16_000))).toBe("x".repeat(16_000));
+  });
 });
 
 describe("buildContinuation", () => {
