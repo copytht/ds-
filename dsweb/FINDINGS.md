@@ -128,9 +128,40 @@ nn = (e) =>
   e.status === MessageStatus.CONTEXT_LENGTH_EXCEEDED ? 1 / 0 : e.accumulated_token_usage || 0;
 ```
 
-每条消息带 `accumulated_token_usage`，另有显式状态
-`CONTEXT_LENGTH_EXCEEDED`。**这是校准分词器的钩子**：发一条已知文本，拿服务端
-自报的 token 数跟自己用的分词器对账，就知道分词器选对没有。
+- **`status` 是独立枚举**（`FINISHED` / `WIP` / `INCOMPLETE` /
+  `CONTENT_FILTER` / `CONTEXT_LENGTH_EXCEEDED` / `TIMEOUT`）——服务端把
+  「超上下文」表达成**状态码**，不必读页面文字。
+- **`accumulated_token_usage`**：曾想用它校准分词器，**没成功**。
+
+### 校准尝试与失败（2026-10-09）
+
+抓 XHR 流式响应的每一帧（站点走 XHR，`fetch`/`EventSource` 抓不到）。
+一次 3,436 帧的完整流里：
+
+- **`accumulated_token_usage` 全程为 0**（`nonZeroUsage = 0`）。
+- 中途曾读到一次 `6,412`，**那是污染样本**——`__frames` 被后一轮覆盖前
+  读到的旧数组。**ADR-0028 那轮踩过的「判据自污染」坑又复发了一次**。
+- 另一轮（输入 10,112 字、回复「收到」）读到 `39`；再用小输入（18 字）
+  触发长回复读到 `0`。**39 / 6412 / 0 三个值互不自洽**，与输入、输出长度
+  都对不上。
+
+**结论**：这个字段**不能当 token 口径的判据**。真要校准分词器，得换路子
+（找一个真返回分词结果的端点，或弄清站点用的是哪个 tokenizer 版本）。
+
+### 附：消息帧字段全集（实测）
+
+`v.response` 的字段：
+
+```
+message_id, parent_id, model, role, thinking_enabled, ban_edit,
+ban_regenerate, status, incomplete_message, accumulated_token_usage,
+feedback, inserted_at, search_enabled, fragments, conversation_mode,
+has_pending_fragment, auto_continue, search_triggered,
+extra_search_providers
+```
+
+**没有 `prompt_tokens` / `completion_tokens` 分项**——只有一个合并的
+`accumulated_token_usage`。
 
 ---
 
@@ -165,3 +196,8 @@ nn = (e) =>
 - **891,880 / 890,880 与实测 ~98 万的关系**没搞清（见上）。
 - `normal_history_and_file_token_limit` 是否也作用于**纯文本**对话，未验——
   代码里文本那条路没引用它。
+- **`accumulated_token_usage` 统计什么**：见 §6。三次读数（39 / 6412 / 0）
+  互不自洽，**连它是不是 token 数都没确认**，更谈不上拿它校准分词器。
+- **页面上的「达到对话长度上限」对应哪个 status**：没对上过。已知服务端有
+  `CONTEXT_LENGTH_EXCEEDED`，但没抓到过该状态实际下发的帧，所以
+  「文字出现」与「status 置位」的对应关系未验证。
