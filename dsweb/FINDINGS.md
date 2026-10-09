@@ -128,10 +128,41 @@ nn = (e) =>
   e.status === MessageStatus.CONTEXT_LENGTH_EXCEEDED ? 1 / 0 : e.accumulated_token_usage || 0;
 ```
 
-- **`status` 是独立枚举**（`FINISHED` / `WIP` / `INCOMPLETE` /
-  `CONTENT_FILTER` / `CONTEXT_LENGTH_EXCEEDED` / `TIMEOUT`）——服务端把
-  「超上下文」表达成**状态码**，不必读页面文字。
+- **`status` 是消息完成后的枚举**（`FINISHED` / `WIP` / `INCOMPLETE` /
+  `CONTENT_FILTER` / `CONTEXT_LENGTH_EXCEEDED` / `TIMEOUT`）。
 - **`accumulated_token_usage`**：曾想用它校准分词器，**没成功**。
+
+## 6.2 拒收的真正判据：`finish_reason: "context_length_exceeded"`
+
+**这是目前最硬的判据**，比读页面文字可靠得多（实测抓到，2026-10-09）。
+
+超上下文时服务端下发的是**独立的 error 帧**，**不走** `v.response`：
+
+```json
+{
+  "type": "error",
+  "content": "达到对话长度上限，请开启新对话",
+  "clear_response": true,
+  "finish_reason": "context_length_exceeded"
+}
+```
+
+- `type` ∈ `warning` / `error`；`clear_response: true` 表示清掉已有的
+  部分回复；`finish_reason` 才是判据。
+- **注意**：这条路径下 `v.response.status` **压根不下发**——实测一整轮
+  21 帧里 `status` 全为空。所以「读 status」和「读 finish_reason」是两条
+  不同的路，**拒收走的是后者**。
+- 前端协议 schema（位置 ~836455）证实 `finish_reason` 是正式字段：
+
+  ```js
+  x1 = { type: "warning" | "error", content, clear_response, finish_reason };
+  ```
+
+- **`context_length_exceeded` 在前端 bundle 里 grep 不到**：因为它是
+  **服务端下发的协议值**，前端只把它当不透明字符串透传
+  （`finish_reason: xY.lqM(xY.mee(...))` = optional string）。所以
+  「前端枚举里没有它」是对的，但**不能据此以为服务端不用它**——恰恰
+  服务端就是用它表达的。
 
 ### 校准尝试与失败（2026-10-09）
 
@@ -198,6 +229,8 @@ extra_search_providers
   代码里文本那条路没引用它。
 - **`accumulated_token_usage` 统计什么**：见 §6。三次读数（39 / 6412 / 0）
   互不自洽，**连它是不是 token 数都没确认**，更谈不上拿它校准分词器。
-- **页面上的「达到对话长度上限」对应哪个 status**：没对上过。已知服务端有
-  `CONTEXT_LENGTH_EXCEEDED`，但没抓到过该状态实际下发的帧，所以
-  「文字出现」与「status 置位」的对应关系未验证。
+- **页面上的「达到对话长度上限」↔ `finish_reason: context_length_exceeded`
+  的对应关系已验**（见 §6.2，实测同帧同时出现）。
+- **别的 `finish_reason` 取值有哪些**：只抓到过 `context_length_exceeded`
+  一个；`warning` 类（如内容风控）会不会也带 `finish_reason`、值是什么，
+  未抓过。
