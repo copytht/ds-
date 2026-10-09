@@ -161,6 +161,41 @@ def find_target(kind: str, needle: str, timeout: float = 0.0) -> dict | None:
         time.sleep(0.3)
 
 
+async def watch_network(ws_url: str, seconds: float) -> list[dict]:
+    """开着 `Network` 域录一段，返回期间所有请求的 url / 状态码 / 请求体字节数。
+
+    **测「送进去多少、收回来什么」时用它，而不是看页面文字**：全文搜某个词这种判据
+    会自相矛盾（前一轮的残留渲染也能命中），而状态码与字节数不会——服务端回了
+    413 就是 413，跟页面上写什么无关。
+    """
+    seen: list[dict] = []
+    async with websockets.connect(ws_url, max_size=None) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Network.enable"}))
+        await ws.send(json.dumps({"id": 2, "method": "Page.enable"}))
+        while True:
+            try:
+                message = json.loads(await asyncio.wait_for(ws.recv(), timeout=seconds))
+            except TimeoutError:
+                return seen
+            method = message.get("method")
+            params = message.get("params") or {}
+            if method == "Network.requestWillBeSent":
+                seen.append(
+                    {
+                        "event": "send",
+                        "id": params.get("requestId"),
+                        "url": str(params.get("request", {}).get("url", ""))[:90],
+                        "postBytes": len(str(params.get("request", {}).get("postData") or "")),
+                        "status": None,
+                    }
+                )
+            elif method == "Network.responseReceived":
+                for row in seen:
+                    if row["id"] == params.get("requestId") and row["status"] is None:
+                        row["status"] = params.get("response", {}).get("status")
+                        row["respBytes"] = params.get("response", {}).get("encodedDataLength")
+
+
 async def evaluate(ws_url: str, expression: str, timeout: float = 60.0) -> object:
     """在目标上下文里跑表达式取回值。
 
@@ -671,6 +706,11 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="列 CDP 目标")
     sub.add_parser("focus", help="把 DeepSeek 标签页置到前台（读页面列表前必须先来一下）")
+    net = sub.add_parser(
+        "net",
+        help="录一段网络：每条请求的 url / 发送字节 / 服务端状态码（测「送进去多少、收回来什么」）",
+    )
+    net.add_argument("--seconds", type=float, default=30.0, help="录多少秒（默认 30）")
     sub.add_parser("read", help="读 DeepSeek 页面状态")
     js = sub.add_parser("js", help="在 DeepSeek 页面上下文里跑一段只读 JS，打印结果")
     js.add_argument("expression", help="要 evaluate 的 JS 表达式（建议用 IIFE 返回字符串）")
@@ -728,6 +768,13 @@ def main() -> None:
         tab = ensure_site_tab()
         asyncio.run(call_cdp(tab["webSocketDebuggerUrl"], "Page.bringToFront"))
         print(json.dumps({"ok": True, "focused": tab.get("url", "")}, ensure_ascii=False))
+        return
+
+    if args.command == "net":
+        tab = ensure_site_tab()
+        rows = asyncio.run(watch_network(tab["webSocketDebuggerUrl"], args.seconds))
+        chat = [row for row in rows if "chat" in row["url"] or "completion" in row["url"]]
+        print(json.dumps(chat or rows, ensure_ascii=False, indent=2))
         return
 
     if args.command == "read":
