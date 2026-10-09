@@ -7,6 +7,7 @@ import {
   describeStop,
   isArmedFresh,
   MAX_RESULT_CHARS,
+  MAX_SAFE_INPUT_TOKENS,
   STOP_CONTINUATION_LIMIT,
   truncateResult,
 } from "./continuation";
@@ -50,6 +51,15 @@ describe("truncateResult", () => {
     // 两边现在同数，一页 read 的结果能原样进对话——这个不等式别悄悄回去。
     expect(MAX_RESULT_CHARS).toBe(16_000);
     expect(truncateResult("x".repeat(16_000))).toBe("x".repeat(16_000));
+  });
+
+  it("MAX_SAFE_INPUT_TOKENS 留在 90 万，**不是**实测的 ~98.2 万（ADR-0028）", () => {
+    // 实测分界在 [982000, 982700)；这里刻意留 ~8% 余量，因为服务端那个数
+    // 是下发的配置、且有过上下文压缩的先例。改成实测值就是去掉余量——
+    // 要改先读 ADR-0028「结论先摆」那一段，别只因为「实测更准」。
+    expect(MAX_SAFE_INPUT_TOKENS).toBe(900_000);
+    // 余量真的存在：8 轮刹车下的最坏 128,000 字远在它之下，这条闸当前不咬。
+    expect(8 * MAX_RESULT_CHARS).toBeLessThan(MAX_SAFE_INPUT_TOKENS / 2);
   });
 });
 
