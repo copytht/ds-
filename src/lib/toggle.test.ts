@@ -10,7 +10,7 @@ import {
 } from "./toggle";
 
 describe("readToggle", () => {
-  it("缺键即关：总开关默认关，装完不写任何默认值", () => {
+  it("缺键即关:总开关默认关,装完不写任何默认值", () => {
     expect(readToggle(undefined)).toBe(false);
     expect(readToggle(null)).toBe(false);
   });
@@ -19,7 +19,7 @@ describe("readToggle", () => {
     expect(readToggle(true)).toBe(true);
   });
 
-  it("认不出的值一律按关，不猜", () => {
+  it("认不出的值一律按关,不猜", () => {
     expect(readToggle("true")).toBe(false);
     expect(readToggle(1)).toBe(false);
     expect(readToggle(false)).toBe(false);
@@ -38,11 +38,11 @@ describe("消息信封", () => {
       source: TOGGLE_MESSAGE_SOURCE,
       kind: "state",
       enabled: true,
-      speak: false, // 缺省按关（#52）
+      speak: false, // 缺省按关(#52)
     });
   });
 
-  it("「代你发言」闸跟着状态消息一起跨世界（#52）", () => {
+  it('"代你发言"闸跟着状态消息一起跨世界(#52)', () => {
     const withSpeak = (message: ReturnType<typeof stateMessage>) =>
       message.kind === "state" ? message.speak : undefined;
     expect(withSpeak(stateMessage(true, true))).toBe(true);
@@ -57,7 +57,7 @@ describe("parseToggleMessage", () => {
     expect(parseToggleMessage(stateMessage(true))).toEqual(stateMessage(true));
   });
 
-  it("speak 缺字段 / 不是布尔一律当关（#52：那条路宁可等用户按）", () => {
+  it("speak 缺字段 / 不是布尔一律当关(#52:那条路宁可等用户按)", () => {
     const base = { source: TOGGLE_MESSAGE_SOURCE, kind: "state", enabled: true };
     const speakOf = (raw: unknown): boolean | undefined => {
       const parsed = parseToggleMessage(raw);

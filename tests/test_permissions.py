@@ -1,4 +1,4 @@
-"""权限规则层的判定（#89）：通配语义、last-match-wins、大小写不敏感。"""
+"""权限规则层的判定(#89):通配语义,last-match-wins,大小写不敏感."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ class Test通配语义:
         assert match_rule((Rule("a*z", "deny"),), "abcz") is not None
 
     def test_其余字符按字面(self) -> None:
-        # 正则元字符不该有「表达式」待遇：模式是数据。
+        # 正则元字符不该有"表达式"待遇:模式是数据.
         assert match_rule((Rule("a.c", "deny"),), "a.c") is not None
         assert match_rule((Rule("a.c", "deny"),), "abc") is None
         assert match_rule((Rule("a+b", "deny"),), "a+b") is not None
@@ -65,7 +65,7 @@ class Test最后命中的赢:
 
 
 class Test大小写不敏感:
-    """macOS 文件系统默认大小写不敏感而 ``resolve()`` 不规范化大小写——不敏感匹配是刚需。"""
+    """macOS 文件系统默认大小写不敏感而 ``resolve()`` 不规范化大小写--不敏感匹配是刚需."""
 
     @pytest.mark.parametrize(
         "path",
@@ -99,16 +99,16 @@ class Test默认规则表:
         assert is_allowed("edit", ".git/hooks/pre-commit") is False
 
     def test_子目录里的_env_也拒(self) -> None:
-        # `*` 跨 `/`，所以任意深度的 .env 系都拒。
+        # `*` 跨 `/`,所以任意深度的 .env 系都拒.
         assert is_allowed("edit", "a/b/.env") is False
         assert is_allowed("edit", "deep/nested/dir/.env.local") is False
 
     def test_嵌套的_mcp_json_不拒(self) -> None:
-        """子目录里那个 ``mcp.json`` 是**死的**——dsb 只读被配置指到的那一个。
+        """子目录里那个 ``mcp.json`` 是**死的**--dsb 只读被配置指到的那一个.
 
-        「真实生效的那一个」由 :func:`dsb.work.is_protected` 第二层按实际路径拦
-        （无论它被 ``DSB_MCP_CONFIG`` 指到哪儿），规则表里不必按名字铺开——铺开就是
-        ADR-0012 反对的那种「越做越像沙箱」的名单位置。
+        '真实生效的那一个'由 :func:`dsb.work.is_protected` 第二层按实际路径拦
+        (无论它被 ``DSB_MCP_CONFIG`` 指到哪儿),规则表里不必按名字铺开--铺开就是
+        ADR-0012 反对的那种'越做越像沙箱'的名单位置.
         """
         assert is_allowed("edit", "deep/nested/dir/mcp.json") is True
 

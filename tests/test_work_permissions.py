@@ -1,7 +1,7 @@
-"""五件工作工具的权限规则（#89）：读写两侧对 ``mcp.json`` / ``.env`` 系一律拒绝。
+"""五件工作工具的权限规则(#89):读写两侧对 ``mcp.json`` / ``.env`` 系一律拒绝.
 
-判定逻辑本身在 :mod:`dsb.permissions`（那里测通配语义），这里是**接线**的对拍：每个
-失败点都走真实文件、真实 ``resolve()``。
+判定逻辑本身在 :mod:`dsb.permissions`(那里测通配语义),这里是**接线**的对拍:每个
+失败点都走真实文件,真实 ``resolve()``.
 """
 
 from __future__ import annotations
@@ -20,13 +20,13 @@ from dsb.work import (
     write_text,
 )
 
-#: 读出来就会**随回灌进对话**（也就是发给站点）的标记串。
+#: 读出来就会**随回灌进对话**(也就是发给站点)的标记串.
 SECRET = "SECRET-API-KEY-abc123"
 
 
 @pytest.fixture
 def root(tmp_path: Path) -> Path:
-    """一个工作 root：真有一份 ``mcp.json``（含标记串）与几档 ``.env``。"""
+    """一个工作 root:真有一份 ``mcp.json``(含标记串)与几档 ``.env``."""
     (tmp_path / "mcp.json").write_text(
         '{"dsb-gateway": {"command": "npx", "env": {"TOKEN": "' + SECRET + '"}}}',
         encoding="utf-8",
@@ -38,12 +38,12 @@ def root(tmp_path: Path) -> Path:
     sub = tmp_path / "sub" / "dir"
     sub.mkdir(parents=True)
     (sub / ".env").write_text(f"TOKEN={SECRET}\n", encoding="utf-8")
-    (tmp_path / "README.md").write_text("普通文件，看得见。\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("普通文件,看得见.\n", encoding="utf-8")
     return tmp_path
 
 
 def code_of(action: object) -> str:
-    """跑一个动作，回它的失败码（不失败就回空串）。"""
+    """跑一个动作,回它的失败码(不失败就回空串)."""
     try:
         action()  # type: ignore[operator]
     except WorkError as error:
@@ -83,11 +83,11 @@ class Test写侧:
 
     def test_普通文件照常读写(self, root: Path) -> None:
         assert write_text(root, "notes.md", "hello") == 5
-        assert read_text(root, "notes.md") == "1: hello\n（文件读完：共 1 行）"
+        assert read_text(root, "notes.md") == "1: hello\n(文件读完:共 1 行)"
 
 
 class Test大小写与绕过:
-    """macOS 大小写不敏感：``MCP.JSON`` 打开的是真文件，规则也得拦。"""
+    """macOS 大小写不敏感:``MCP.JSON`` 打开的是真文件,规则也得拦."""
 
     @pytest.mark.parametrize("path", ["MCP.JSON", "Mcp.Json", ".ENV", ".Env"])
     def test_大写写法照样拒(self, root: Path, path: str) -> None:
@@ -110,7 +110,7 @@ class Test绝对路径:
 
 
 class Test真实生效的那一个:
-    """名字或位置与默认不同、只要落在 root 内，同样读写都拒（#89 第二层）。"""
+    """名字或位置与默认不同,只要落在 root 内,同样读写都拒(#89 第二层)."""
 
     def test_配到_root_内别处的_mcp_config_也拒(
         self, root: Path, monkeypatch: pytest.MonkeyPatch
