@@ -53,10 +53,10 @@ describe("truncateResult", () => {
     expect(truncateResult("x".repeat(16_000))).toBe("x".repeat(16_000));
   });
 
-  it("MAX_SAFE_INPUT_TOKENS 留在 90 万，**不是**实测的 ~98.2 万（ADR-0028）", () => {
-    // 实测分界在 [982000, 982700)；这里刻意留 ~8% 余量，因为服务端那个数
-    // 是下发的配置、且有过上下文压缩的先例。改成实测值就是去掉余量——
-    // 要改先读 ADR-0028「结论先摆」那一段，别只因为「实测更准」。
+  it("MAX_SAFE_INPUT_TOKENS 就是本仓的上下文预算 90 万，不是实测硬墙（ADR-0028）", () => {
+    // 实测硬墙在 [982000, 982700)。预算取 90 万，差额 ~82,000 token **是余量**——
+    // 用来吸收量不到的部分（站点系统提示词、服务端下发的浮动、上下文压缩）。
+    // 改成实测值 = 把余量删掉，不是把精度调准；要改先读 ADR-0028。
     expect(MAX_SAFE_INPUT_TOKENS).toBe(900_000);
     // 余量真的存在：8 轮刹车下的最坏 128,000 字远在它之下，这条闸当前不咬。
     expect(8 * MAX_RESULT_CHARS).toBeLessThan(MAX_SAFE_INPUT_TOKENS / 2);
