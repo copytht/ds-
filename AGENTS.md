@@ -66,9 +66,20 @@
 
 页面动作没有外露调用面（ADR-0011），要真机验就走 `scripts/page-action.py`：
 `read`（页面状态）/ `send <动作> [--params json]` / `js <表达式>`（页面上下文里跑只读 JS）/
-`stop-test`（端到端）/ `storage get|set|remove` / `capture` / `ax` /
+`sse`（录一轮 SSE 并按 `finish_reason` 判拒收）/ `stop-test`（端到端）/
+`storage get|set|remove` / `capture` / `ax` /
 `toggles-off`（测试环境关掉深度思考与智能搜索，`env-up.sh --debug` 会顺带跑）/
 `evidence`（存证对账：留档按钮原件 vs 站点当前，ADR-0018，只读，按需本地跑、不进 `pnpm quality`）。
+
+- **站点自己的上限、配置、请求体长什么样，逆向结论在 [`dsweb/FINDINGS.md`](dsweb/FINDINGS.md)**：
+  测「服务端收没收」先看它 §6.2 的硬判据，别自己搜页面文字。要站点下发的配置
+  （`input_character_limit` 之类）在 `localStorage` 的
+  `__ds_remote_feature_store_model` / `__ds_remote_feature_store_provider` /
+  `__ds_remote_feature_store` 三个键里——**先读配置再猜**，今天的教训是
+  猜「非线性的启发式」写进 ADR，而真值一次 `localStorage` 就到手。
+  要数一段文本几个 token 走 `scripts/count-tokens.py`（分词器取法在
+  [`dsweb/README.md`](dsweb/README.md)；**站点服务端用哪个分词器仍未证实**，
+  别把本机口径当定论）。
 
 - **`target: null` 只有 `tabs.list` 与 `toggle.*` 答得出**。`page.state` / `composer.*` /
   `messages.*` / `chat.new` 要先 `tabs.list` 拿标签页 id 再带上，其余一律落
@@ -97,6 +108,13 @@
   属预期，不是故障。
 - **真机结果只有一半可信时，别硬下结论**：能用探针交叉验证（`messages.list` 读角色+正文）
   就验，拿不到就在票里写明「间接证据」与「未验证项」。
+- **判据要抗自污染**（2026-10-09 栽过两次，两次形态不同）：
+  - **别拿「读页面/读全局数组」当判据**——全文搜某词会被上一轮的残留渲染命中；
+    `window.__foo` 会被后一轮覆盖，读到旧值时它**看起来是个合法数字**。装观测、填、
+    发、读**闭在同一次调用里**（`sse` 就是照这条做的），或者读之前先清空。
+  - **同一件事两个观测点只有一个有值时，那是观测漏了，不是事实**。今天先把 `net`
+    的 `[]` 当成「前端拒发」，推出了互相矛盾的结论——CDP `Network` 域漏抓、页内 XHR
+    钩子同时抓几千帧。**「0 帧 / 空」不能推出「没发生」**。
 
 ## 页面动作
 
