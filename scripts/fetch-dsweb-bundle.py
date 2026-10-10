@@ -54,19 +54,32 @@ def _fetch(url: str, proxy: str, timeout: float, attempts: int = 4) -> bytes:
                 return resp.read()
         except urllib.error.HTTPError as err:
             last = err
-            if err.code not in RETRY_STATUS or attempt == attempts:
-                raise
+            if err.code not in RETRY_STATUS:
+                raise SystemExit(
+                    f"{TAG} {url} → HTTP {err.code}（不该重试）：{err.reason}"
+                ) from err
+            if attempt == attempts:
+                break
             wait = 2**attempt  # 2s, 4s, 8s
             print(f"{TAG} {url} → HTTP {err.code}，{wait}s 后重试（{attempt}/{attempts - 1}）")
             time.sleep(wait)
         except (urllib.error.URLError, TimeoutError) as err:
             last = err
             if attempt == attempts:
-                raise
+                break
             wait = 2**attempt
             print(f"{TAG} {url} → {err}，{wait}s 后重试（{attempt}/{attempts - 1}）")
             time.sleep(wait)
-    raise SystemExit(f"{TAG} {url} 取不到：{last}")
+    # 走到这儿是「该重试的都试完了还是不行」。只说观察到的，不断言是谁在限流：
+    # 2026-10-10 实测**经代理与直连都是 429**，所以不是代理出口 IP 的问题，
+    # 换线路这条已经试过、没用，不该再当建议抛出来。等限流解除才是唯一的路。
+    got = getattr(last, "code", None)
+    hint = (
+        "被限流（HTTP 429）：经代理与直连都试过，都被拒；等限流解除再跑"
+        if got == 429
+        else "网络不通"
+    )
+    raise SystemExit(f"{TAG} {url} 取不到（试了 {attempts} 次，最后一次：{last}）。{hint}。")
 
 
 def discover(page_url: str, proxy: str) -> list[str]:
