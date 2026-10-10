@@ -81,9 +81,9 @@
   [`dsweb/README.md`](dsweb/README.md);**站点服务端用哪个分词器仍未证实**,
   别把本机口径当定论).
 
-- **`target: null` 只有 `tabs.list` 与 `toggle.*` 答得出**.`page.state` / `composer.*` /
-  `messages.*` / `chat.new` 要先 `tabs.list` 拿标签页 id 再带上,其余一律落
-  `ACTION_ERROR_UNKNOWN`--**那是探针错了,不是链子坏了**,别照着它去修扩展.
+- **`target: null` 只有 `tabs.list` 与 `toggle.*` 答得出**;本地工具(`send.page` 等)
+  不在名册里,只能注入 chain 信封触发.两条都写在 `scripts/page-action.py` 的文件头,
+  用之前先读那里.
 - **DeepSeek 标签页必须留在前台**:后台标签页被浏览器节流,虚拟列表不挂行,历史不加载,
   `messages.*` 与按位置点控件会读成空(2026-10-07 踩过,当时前台被探针开的选项页占了).
   探针开扩展入口页走后台(`open_tab(..., background=True)`);若看到"对话区 0 行"先查
@@ -91,19 +91,9 @@
   `scripts/page-action.py --no-pace focus`**(`Page.bringToFront`,2026-10-08 补的
   动作)--新会话在后台时虚拟列表压根不挂行,`messages.*` 恒空,而**开着旧会话读得动**
   极具迷惑性.
-- **`--no-pace` / `--pace` 是全局 flag,必须放在子命令前**(`... --no-pace read`,不是
-  `... read --no-pace`).碰站点默认等 8–20 秒随机;**抓瞬态**(生成中,思考期那种几秒的窗口)
-  必须 `--no-pace` 连读,否则限速下根本抓不到.`list` 只读本地目标清单,不等.
-- **本地工具(`send.page` 等)不在 `ACTION_ROSTER` 里**,`send` 调不到.唯一触发办法是用
-  `js` 往页面里注入一条 chain 信封,让它走 `content.ts` → background 那条路:
-
-  ```sh
-  uv run scripts/page-action.py js 'window.postMessage({source:"ds-/chain",kind:"call",
-    id:"probe-1",calls:[JSON.stringify({tool:"send.page",arguments:{question:"..."}})]},"*")'
-  ```
-
-  要页面模型**自己**排围栏的路径(如本地工具)只能这么验;不要为了验一个动作去诱导模型排围栏.
-
+- **`--no-pace` / `--pace` 抓瞬态时用**(生成中,思考期那种几秒的窗口),必须连读,
+  否则限速下根本抓不到.放错位置时 argparse 会拒绝,报错自己会说该放哪.`list`
+  只读本地目标清单,不等.
 - 登录 DeepSeek 与勾"替人开口"是人做的两件,脚本只打印不代劳;没勾闸则写动作回 `disabled`
   属预期,不是故障.
 - **真机结果只有一半可信时,别硬下结论**:能用探针交叉验证(`messages.list` 读角色+正文)

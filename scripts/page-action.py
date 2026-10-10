@@ -21,6 +21,22 @@
   uv run scripts/page-action.py toggles-off   # 测试环境:把深度思考,智能搜索都关掉
   uv run scripts/page-action.py evidence      # 存证对账:留档原件 vs 站点当前那一颗(ADR-0018)
 
+两件只有探针知道的事(原先记在 AGENTS.md, 搬进来自带):
+
+1. `target: null` 只有 `tabs.list` 与 `toggle.*` 答得出. `page.state` /
+   `composer.*` / `messages.*` / `chat.new` 要先 `tabs.list` 拿标签页 id 再带上,
+   其余一律落 `ACTION_ERROR_UNKNOWN` -- **那是探针错了, 不是链子坏了**,
+   别照着它去修扩展.
+
+2. **本地工具**(`send.page` 等)不在 `ACTION_ROSTER` 里, `send` 调不到. 唯一触发
+   办法是用 `js` 往页面里注入一条 chain 信封, 让它走 `content.ts` → background:
+
+     uv run scripts/page-action.py js 'window.postMessage({source:"ds-/chain",kind:"call",
+       id:"probe-1",calls:[JSON.stringify({tool:"send.page",arguments:{question:"..."}})]},"*")'
+
+   要页面模型**自己**排围栏的路径(如本地工具)只能这么验; 不要为了验一个动作去
+   诱导模型排围栏.
+
 环境:
   DSB_CDP_PORT   调试口端口,默认 9222
   DSB_EXT_DIR    扩展构建目录,默认 <repo>/.output/chrome-mv3(扩展 id 由它推出)
@@ -750,8 +766,32 @@ def evidence(args: argparse.Namespace) -> int:
     return 1 if tally["过时"] else 0
 
 
+class _Parser(argparse.ArgumentParser):
+    """让"全局 flag 放错位置"的报错自己说明该放哪.
+
+    原来这条规矩写在 AGENTS.md 里. 但 argparse 本来就会拒绝放错的写法
+    (`read --no-pace` -> `unrecognized arguments`), 所以那条指令防不住任何
+    错误用法, 只是教人怎么读报错. 与其在 steering 文件里占三行, 不如让报错
+    自己说 -- steering 文件该留给导航指针.
+    """
+
+    def error(self, message: str) -> None:
+        bad = {"--no-pace", "--pace"}
+        if "unrecognized arguments" in message and bad & set(message.split()):
+            self.print_usage(sys.stderr)
+            print(
+                f"\npage-action.py: error: {message}\n"
+                "--pace / --no-pace 是**全局** flag, 要放在子命令**前面**:\n"
+                "  page-action.py --no-pace read     对\n"
+                "  page-action.py read --no-pace     错",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        super().error(message)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="页面动作真机探针(开发用)")
+    parser = _Parser(description="页面动作真机探针(开发用)")
     # 全局:动手前先随机等一下(默认开).理由见 pace().
     parser.add_argument(
         "--pace",
